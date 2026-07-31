@@ -35,6 +35,7 @@ export default function Overview() {
   const totalRedemption = sumBy(redemptionRows, 'RedemptionAmount')
   const totalActivationCount = sumBy(activationRows, 'ActivationCount')
   const totalRedemptionCount = sumBy(redemptionRows, 'RedemptionCount')
+  const totalUptake = sumBy(redemptionRows, 'Uptake')
   const overallRedemptionPct = totalActivation > 0 ? (totalRedemption / totalActivation) * 100 : NaN
 
   const activationDeltas = useMemo(
@@ -112,7 +113,7 @@ export default function Overview() {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Kpi
-          label="Total Activation"
+          label="Revenue"
           value={fmtLacs(totalActivation)}
           sub={`${fmtNumber(totalActivationCount)} cards`}
           accent="gold"
@@ -125,7 +126,7 @@ export default function Overview() {
         <Kpi
           label="Total Redemption (net)"
           value={fmtLacs(totalRedemption)}
-          sub={`${fmtNumber(totalRedemptionCount)} redemptions · cancellations netted`}
+          sub={`${fmtNumber(totalRedemptionCount)} redemptions · ${fmtPct(overallRedemptionPct, 0)} of total activation`}
           accent="teal"
           deltas={[
             { label: 'MoM', pct: redemptionDeltas.mom },
@@ -133,7 +134,7 @@ export default function Overview() {
             { label: 'YoY', pct: redemptionDeltas.yoy }
           ]}
         />
-        <Kpi label="Overall Redemption %" value={fmtPct(overallRedemptionPct)} accent="navy" />
+        <Kpi label="Uptake" value={fmtLacs(totalUptake)} sub={`${fmtNumber(totalRedemptionCount)} redemptions`} accent="navy" />
         <Kpi
           label="Cancellations"
           value={cancellationRow ? fmtLacs(Math.abs(cancellationRow.RedemptionAmount)) : '₹0.00 L'}

@@ -376,6 +376,43 @@ file; zero console errors across all interactions; production build
 unaffected (705KB → 708KB JS, no new warnings beyond the pre-existing
 500KB chunk-size notice).
 
+## 2026-07-31 — Overview KPI grid redefinition
+
+Display/calculation-only change to the Overview page's 4-card KPI grid, no
+data changes:
+
+- **Revenue** replaces "Total Activation" as the first card's label —
+  same value (`ActivationAmount`), same count/deltas. The request framed
+  this as "not redemption + uptake as previously defined — correction,"
+  which doesn't match anything actually in this codebase (there was never
+  a redemption+uptake "Revenue" card here) — read as a forward-looking
+  correction to apply going in, not a bug in prior code. Confirmed with
+  `git status`/`git diff` that nothing was uncommitted before starting, so
+  this is a plain rename+reformula, not a merge of some other version.
+- **"Overall Redemption %" card removed**, replaced in the same grid slot
+  by **Uptake** — `sum(Uptake)` over the filtered redemption cube, paired
+  with `RedemptionCount` per the existing count-alongside-amount
+  convention. `Uptake` is rupee-scale like `RedemptionAmount` (checked:
+  total ₹28.3Cr against total redemption ₹49.9Cr), so it's formatted with
+  the same `fmtLacs` as every other Amount KPI, not as a raw number.
+- **Total Redemption**'s sub-label now reads "`{count} redemptions · {pct}%
+  of total activation"` — the redemption-% figure the removed card used to
+  show, folded in here instead of standing alone. `cancellations netted`
+  wording was dropped from this sub-line (redundant — the Process Flow
+  diagram's callout box below already explains the netting explicitly).
+
+No icons/emoji exist on any KPI card in this codebase — the request's
+"keep the icon/emoji per KPI card as already implemented" doesn't apply to
+anything currently built, so nothing was added or changed on that front.
+
+Verified: `git status` clean before/after confirms no drift from a parallel
+edit; Revenue = ₹6,127.62L unchanged from every prior verification pass;
+Uptake = ₹2,830.05L matches `sum(Uptake)/100000` exactly; Total Redemption
+sub-label reads "81% of total activation" matching the prior
+`overallRedemptionPct` value; re-checked under Mode=Online filter (Revenue
+₹96.98L, Uptake scales down proportionally, sub-label recomputes to 82%);
+zero console errors; clean production build.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
