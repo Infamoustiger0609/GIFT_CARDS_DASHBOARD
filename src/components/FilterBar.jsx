@@ -33,19 +33,15 @@ function chipLabel(key, value) {
 }
 
 export default function FilterBar() {
-  const { filters, setFilter, resetFilters, options } = useFilters()
+  // resetFilters is still provided by FilterContext (functionality intact) —
+  // just not wired to a visible control right now, per request.
+  const { filters, setFilter, options } = useFilters()
   const activeChips = Object.entries(filters).filter(([, v]) => v !== 'All')
   const denomOptions = orderBy(options.denominations, DENOM_ORDER)
 
   return (
     <div className="bg-card border border-warmgray-border rounded-lg px-4 pt-3 pb-3 relative">
-      <button
-        onClick={resetFilters}
-        className="absolute top-2.5 right-3 text-[11px] font-semibold text-coral hover:text-coral-dark hover:underline whitespace-nowrap"
-      >
-        Reset filters
-      </button>
-      <div className="flex flex-wrap gap-3 items-end pr-20">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 items-end">
         <Select label="Financial Year" value={filters.fy} options={options.fys} onChange={(v) => setFilter('fy', v)} />
         <Select label="Region" value={filters.region} options={options.regions} onChange={(v) => setFilter('region', v)} />
         <Select label="Mode" value={filters.mode} options={options.modes} onChange={(v) => setFilter('mode', v)} />

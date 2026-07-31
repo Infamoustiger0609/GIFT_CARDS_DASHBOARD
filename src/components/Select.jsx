@@ -28,7 +28,7 @@ export default function Select({ label, value, options, onChange, allLabel = 'Al
   const rsOptions = [{ value: 'All', label: allLabel }, ...options.map((o) => ({ value: o.value ?? o, label: o.label ?? o }))]
   const selected = rsOptions.find((o) => o.value === value) || rsOptions[0]
   return (
-    <div className="flex flex-col gap-1 min-w-[150px]">
+    <div className="flex flex-col gap-1 w-full min-w-0">
       <label className="text-[11px] font-semibold uppercase tracking-wide text-warmgray-muted">{label}</label>
       <RSelect
         classNamePrefix="rs"
