@@ -12,9 +12,11 @@ Trends, all driven by a shared global filter bar.
 - React Router for the 5 page routes
 - react-select for the filter dropdowns
 
-All filtering happens client-side via `useMemo` over the two bundled JSON
-cubes (`src/data/activationCube.json`, `src/data/redemptionCube.json`) — no
-backend, no API calls.
+All filtering happens client-side via `useMemo` over the two data cubes
+(`public/data/activationCube.json`, `public/data/redemptionCube.json`) — no
+backend, no API calls. The cubes are ~26MB combined, so they're fetched at
+runtime (`fetch()` + native `JSON.parse`) rather than statically imported —
+see "Performance" below for why.
 
 ## Getting started
 
@@ -31,17 +33,42 @@ npm run preview    # preview the production build locally
 ## Project structure
 
 ```
-src/
+public/
   data/                  activationCube.json, redemptionCube.json, heroProducts.json
+                          (fetched at runtime, not bundled into the JS build)
+src/
   lib/
-    FilterContext.jsx     global filter state + filtered row selectors
+    FilterContext.jsx     fetches the cubes on mount + global filter state / selectors
     aggregate.js           groupSum / pivot / topNWithOther helpers
-    constants.js            region/mode/weekday orders, FY split logic
+    constants.js            region/mode/weekday/denom orders, FY split logic
     format.js                 ₹ Lacs / % / number formatters
     theme.js                    validated color roles (see below)
   components/            Layout, FilterBar, Card, Kpi, FlowBox, ChartTooltip, Select
   pages/                  Overview, Activation, RedemptionBoxOffice, RedemptionFnb, Trends
 ```
+
+## Performance
+
+The redemption cube is 81K rows (~25MB); the activation cube is 6.4K rows
+(~1.2MB). Statically `import`-ing them (the original approach) inlined them
+into the JS bundle: **22MB minified, 1.24MB gzipped**, taking ~90s to build
+and forcing the browser to parse/compile 22MB of JS before the app could
+paint anything. Moving them to `public/data/` and loading them with
+`fetch()` on mount instead:
+
+- drops the JS bundle to **~700KB (203KB gzipped)** and the build to ~10s;
+- lets the shell (header, nav, filter bar skeleton) paint immediately while
+  the data loads, with a loading state (`Layout.jsx`) shown in the interim;
+- uses the browser's native `JSON.parse` on the fetched text, which is
+  faster than V8 parsing the same data as an embedded JS object literal;
+- lets the two cubes cache as independent network resources, so an app-code
+  deploy doesn't force re-downloading 26MB of unchanged data.
+
+Vercel's edge network gzips/brotlis text responses (including
+`public/`-served JSON) automatically — no extra compression config needed.
+If the cubes grow enough that even a compressed fetch feels slow, the next
+lever is server-side pre-aggregation (e.g. precomputed monthly/regional
+rollups) rather than shipping raw rows to the browser at all.
 
 ## Data assumptions (see CLAUDE.md for the full log)
 
@@ -57,6 +84,11 @@ src/
   bucket).
 - **Ticket / F&B filter**: "Ticket" = `Head` in (Online, Box Office,
   Cancellation); "F&B" = `Head === 'F&B'`.
+- **Denomination filter** (`Denom` field, present on both cubes): ₹300 /
+  ₹500 / ₹1000 / ₹1500 / ₹2000 / ₹2500 / ₹5000 / "Other / Custom". `N/A`
+  rows (cancellations) are excluded from the dropdown's options — you can't
+  filter *for* "not applicable" — but still flow through untouched when the
+  filter is left on "All".
 - All monetary figures are divided by 100,000 for display and labeled "₹
   Lacs" (`fmtLacs` / `fmtLacsAxis` in `src/lib/format.js`).
 
@@ -70,10 +102,6 @@ src/
    etc.) resolve correctly on refresh/deep-link.
 
 ```bash
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
 git remote add origin <your-github-repo-url>
-git push -u origin main
+git push -u origin master
 ```

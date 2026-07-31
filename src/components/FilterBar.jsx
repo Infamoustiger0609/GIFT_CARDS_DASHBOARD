@@ -2,6 +2,7 @@ import React from 'react'
 import Select from './Select'
 import { useFilters, DEFAULT_FILTERS } from '../lib/FilterContext'
 import { monthLabel } from '../lib/format'
+import { orderBy, DENOM_ORDER } from '../lib/constants'
 
 const WEEK_OPTIONS = [
   { value: 'Weekday', label: 'Weekday' },
@@ -24,7 +25,8 @@ function chipLabel(key, value) {
     month: 'Month',
     week: 'Week',
     source: 'Source',
-    ticketFnb: 'Type'
+    ticketFnb: 'Type',
+    denomination: 'Denom'
   }
   const val = key === 'month' ? monthLabel(value) : value
   return `${labels[key]}: ${val}`
@@ -33,6 +35,7 @@ function chipLabel(key, value) {
 export default function FilterBar() {
   const { filters, setFilter, resetFilters, options } = useFilters()
   const activeChips = Object.entries(filters).filter(([, v]) => v !== 'All')
+  const denomOptions = orderBy(options.denominations, DENOM_ORDER)
 
   return (
     <div className="bg-card border border-warmgray-border rounded-lg px-4 py-3 mb-6">
@@ -49,6 +52,7 @@ export default function FilterBar() {
         <Select label="Week" value={filters.week} options={WEEK_OPTIONS} onChange={(v) => setFilter('week', v)} />
         <Select label="Source" value={filters.source} options={SOURCE_OPTIONS} onChange={(v) => setFilter('source', v)} />
         <Select label="Ticket / F&B" value={filters.ticketFnb} options={TICKET_FNB_OPTIONS} onChange={(v) => setFilter('ticketFnb', v)} />
+        <Select label="Denomination" value={filters.denomination} options={denomOptions} onChange={(v) => setFilter('denomination', v)} />
         <button
           onClick={resetFilters}
           className="ml-auto h-[38px] px-4 rounded-md border border-coral text-coral text-sm font-semibold hover:bg-coral hover:text-white transition-colors whitespace-nowrap"

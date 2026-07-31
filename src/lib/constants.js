@@ -5,6 +5,7 @@ export const MODE_ORDER = ['Physical', 'Aggregator', 'Corporate', 'Online']
 export const WEEKDAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 export const WEEKEND_DAYS = new Set(['Saturday', 'Sunday'])
 export const HEAD_ORDER = ['Online', 'Box Office', 'F&B', 'Cancellation']
+export const DENOM_ORDER = ['₹300', '₹500', '₹1000', '₹1500', '₹2000', '₹2500', '₹5000', 'Other / Custom']
 
 export const FY_SPLIT = '2025-04'
 

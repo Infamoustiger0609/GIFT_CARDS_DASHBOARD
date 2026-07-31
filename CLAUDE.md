@@ -8,9 +8,11 @@ as the project evolves.
 
 A Vite + React + Tailwind + Recharts BI dashboard for PVR INOX gift card
 activation/redemption data, built from three pre-generated JSON cubes
-(`src/data/*.json`, not to be regenerated — see original spec). Five pages:
-Overview, Activation, Redemption · Box Office, Redemption · F&B, Trends,
-sharing one global filter bar (`src/lib/FilterContext.jsx`).
+(`public/data/*.json`, fetched at runtime — not to be regenerated, see
+"Performance" in README.md for why they live in `public/` rather than
+`src/data/`). Five pages: Overview, Activation, Redemption · Box Office,
+Redemption · F&B, Trends, sharing one global filter bar
+(`src/lib/FilterContext.jsx`).
 
 ## Data reality vs. the original spec
 
@@ -128,16 +130,80 @@ original request — "skip writing tests").
 
 ## Known limitations / things to revisit
 
-- `redemptionCube.json` (~41K rows, ~12MB) is bundled directly and filtered
-  in-browser via `useMemo`. Fine at this size; if the cube grows
-  materially, revisit (e.g. pre-aggregating by month/region at build time,
-  or moving to a real backend).
+- `redemptionCube.json` (81K rows, ~25MB as of the 2026-07-31 refresh) is
+  fetched at runtime and filtered in-browser via `useMemo` — see the
+  2026-07-31 entry below for why it's no longer a static import. Fine at
+  this size; if the cube grows materially past this, revisit again (e.g.
+  pre-aggregating by month/region at build time, or a real backend).
 - `Format` and `Category` string values are used as-is (see above) — a
   proper data-cleaning pass (typo/case normalization) would tighten the
   "by Format" / "by Category" charts but was out of scope here.
 - Hero products (`heroProducts.json`) are explicitly whole-dataset/static
   per the spec — the F&B page says so in a subtitle so it doesn't read as a
   bug when filters don't move that list.
+
+## 2026-07-31 — Refinement: Denomination filter + data refresh
+
+Data files were swapped for updated versions adding a `Denom` field to both
+cubes (redemption cube grew from 41K/12MB to 81K/25MB rows in the process).
+Scope: wire up a new global filter, keep filter coverage complete across
+all 5 pages, and address the resulting file-size/load-time concern the
+request flagged.
+
+**Denom field, actual values vs. what was described**: the request said
+redemption-cube `Denom` includes an `"Unknown (pre-existing)"` bucket for
+cards activated before Apr 2024. The actual data doesn't have that value —
+all 3,241 rows with `ActivationMode = "Pre-existing (activated before Apr
+2024)"` carry `Denom = "Other / Custom"` instead. Since filter options are
+always data-derived (never hardcoded), this needed no special-casing — the
+dropdown just reflects what's actually in the data. Noted here so it's not
+mistaken for a bug later. `N/A` (cancellation rows) is deliberately excluded
+from the dropdown's option list — filtering *for* "not applicable" isn't a
+meaningful user action — but `N/A` rows still pass through untouched
+whenever the filter is left on "All".
+
+**Filter implementation**: `Denom` exists on both cubes with the same
+meaning, so it was added to `passesCommon()` in `FilterContext.jsx`
+alongside FY/Region/Month/Week rather than needing per-cube branching like
+Source or Ticket/F&B. Because every page reads exclusively through
+`useFilters()` (verified with a repo-wide grep for direct cube imports —
+none found outside `FilterContext.jsx`), this one change gave all 5 pages
+correct Denomination filtering for free. Confirmed via Playwright:
+Denom=₹500 took Total Activation from ₹6,127.62L → ₹1,688.14L on Overview
+and propagated identically to Activation, Redemption·Box Office, and
+Redemption·F&B (F&B Redemption → ₹487.69L at Denom=₹1000), with the filter
+chip persisting across tab navigation and zero console errors throughout.
+
+**Performance — why the data moved to `public/`**: building with the new
+81K-row cube as a static `import` (the original architecture) produced a
+**22MB minified JS bundle** (1.24MB gzipped) and a 90-second build — the
+browser has to parse/compile all 22MB of JS before it can paint anything,
+regardless of gzip transfer size. Moved both cubes (and `heroProducts.json`,
+for consistency) to `public/data/` and load them via `fetch()` in
+`FilterContext.jsx` on mount instead:
+
+- JS bundle: 22MB → **700KB minified (203KB gzipped)**; build: 90s → ~10s.
+- `Layout.jsx` now renders a loading state while the fetch is in flight
+  (confirmed catchable — briefly visible on a cold load) and an error state
+  if it fails, instead of pages rendering against `undefined` data.
+- Vercel gzips/brotlis `public/`-served static assets automatically, so the
+  request's "gzip compression on the Vercel side" suggestion is already
+  covered with no extra config. Deliberately did **not** add custom
+  `Cache-Control` headers for the JSON files in `vercel.json` — `public/`
+  filenames aren't content-hashed, so an aggressive cache policy risks
+  serving stale data after a future data refresh (like this one) without a
+  matching filename change. Left on Vercel's default static-asset caching.
+- This was the right lever over "lazy-loading per page": nearly every page
+  needs both cubes, so deferring the fetch to route-change wouldn't avoid
+  the download, just delay it and add jank. The actual cost was the
+  bundle-embedding, not the fetch timing.
+
+**Header logo**: found an untracked `public/PVR INOX LOGO.jpeg` (renamed to
+`public/pvr-inox-logo.jpeg`) — the real brand mark, gold-on-charcoal, close
+enough to the header's navy (`#1b2430`) that it reads as one continuous bar.
+Swapped it in for the placeholder gold "G" box in `Layout.jsx`, keeping a
+small "Gift Card / Analytics" label beside it since the logo itself doesn't
+say what the app does.
 
 ## Deployment
 
