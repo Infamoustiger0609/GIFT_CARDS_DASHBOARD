@@ -113,7 +113,7 @@ export default function Overview() {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Kpi
-          label="Revenue"
+          label="Revenue/Activation Amount"
           value={fmtLacs(totalActivation)}
           sub={`${fmtNumber(totalActivationCount)} cards`}
           accent="gold"

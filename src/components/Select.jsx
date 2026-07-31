@@ -7,8 +7,8 @@ const styles = {
     borderRadius: 6,
     borderColor: state.isFocused ? '#c8952e' : '#e2ddd3',
     boxShadow: state.isFocused ? '0 0 0 1px #c8952e' : 'none',
-    minHeight: 38,
-    fontSize: 13,
+    minHeight: 32,
+    fontSize: 12,
     backgroundColor: '#ffffff',
     '&:hover': { borderColor: '#c8952e' }
   }),
@@ -22,11 +22,11 @@ const styles = {
     color: '#1b2430',
     cursor: 'pointer'
   }),
-  valueContainer: (base) => ({ ...base, flexWrap: 'nowrap', overflow: 'hidden' }),
+  valueContainer: (base) => ({ ...base, flexWrap: 'nowrap', overflow: 'hidden', padding: '0 6px' }),
   singleValue: (base) => ({ ...base, color: '#1b2430' }),
-  dropdownIndicator: (base) => ({ ...base, padding: 6 }),
+  dropdownIndicator: (base) => ({ ...base, padding: 4 }),
   indicatorSeparator: () => ({ display: 'none' }),
-  clearIndicator: (base) => ({ ...base, padding: 6 })
+  clearIndicator: (base) => ({ ...base, padding: 4 })
 }
 
 // Selected values render as a compact summary ("All" / one label / "N
@@ -41,7 +41,7 @@ function ValueContainer({ children, ...props }) {
   const input = Array.isArray(children) ? children[1] : children
   return (
     <components.ValueContainer {...props}>
-      <span className="text-[13px] text-navy truncate pr-1">{label}</span>
+      <span className="text-[12px] text-navy truncate pr-1">{label}</span>
       {input}
     </components.ValueContainer>
   )
@@ -60,8 +60,8 @@ export default function Select({ label, value, options, onChange }) {
   const rsOptions = options.map((o) => ({ value: o.value ?? o, label: o.label ?? o }))
   const selected = rsOptions.filter((o) => value.includes(o.value))
   return (
-    <div className="flex flex-col gap-1 w-full min-w-0">
-      <label className="text-[11px] font-semibold uppercase tracking-wide text-warmgray-muted">{label}</label>
+    <div className="flex flex-col gap-0.5 w-full min-w-0">
+      <label className="text-[10px] leading-tight font-semibold uppercase tracking-wide text-warmgray-muted">{label}</label>
       <RSelect
         classNamePrefix="rs"
         isMulti

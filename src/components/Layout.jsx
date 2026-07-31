@@ -66,7 +66,7 @@ export default function Layout() {
         </header>
 
         {!isLoading && !error && (
-          <div className="bg-cream border-b border-warmgray-border shadow-sm px-4 md:px-6 pt-3 pb-3">
+          <div className="bg-cream border-b border-warmgray-border shadow-sm px-4 md:px-6 py-2">
             <div className="max-w-[1400px] mx-auto">
               <FilterBar />
             </div>
