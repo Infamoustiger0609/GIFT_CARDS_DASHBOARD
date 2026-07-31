@@ -38,8 +38,14 @@ export default function FilterBar() {
   const denomOptions = orderBy(options.denominations, DENOM_ORDER)
 
   return (
-    <div className="bg-card border border-warmgray-border rounded-lg px-4 py-3 mb-6">
-      <div className="flex flex-wrap gap-3 items-end">
+    <div className="bg-card border border-warmgray-border rounded-lg px-4 pt-3 pb-3 relative">
+      <button
+        onClick={resetFilters}
+        className="absolute top-2.5 right-3 text-[11px] font-semibold text-coral hover:text-coral-dark hover:underline whitespace-nowrap"
+      >
+        Reset filters
+      </button>
+      <div className="flex flex-wrap gap-3 items-end pr-20">
         <Select label="Financial Year" value={filters.fy} options={options.fys} onChange={(v) => setFilter('fy', v)} />
         <Select label="Region" value={filters.region} options={options.regions} onChange={(v) => setFilter('region', v)} />
         <Select label="Mode" value={filters.mode} options={options.modes} onChange={(v) => setFilter('mode', v)} />
@@ -53,12 +59,6 @@ export default function FilterBar() {
         <Select label="Source" value={filters.source} options={SOURCE_OPTIONS} onChange={(v) => setFilter('source', v)} />
         <Select label="Ticket / F&B" value={filters.ticketFnb} options={TICKET_FNB_OPTIONS} onChange={(v) => setFilter('ticketFnb', v)} />
         <Select label="Denomination" value={filters.denomination} options={denomOptions} onChange={(v) => setFilter('denomination', v)} />
-        <button
-          onClick={resetFilters}
-          className="ml-auto h-[38px] px-4 rounded-md border border-coral text-coral text-sm font-semibold hover:bg-coral hover:text-white transition-colors whitespace-nowrap"
-        >
-          Reset filters
-        </button>
       </div>
 
       {activeChips.length > 0 && (

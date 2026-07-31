@@ -205,6 +205,82 @@ Swapped it in for the placeholder gold "G" box in `Layout.jsx`, keeping a
 small "Gift Card / Analytics" label beside it since the logo itself doesn't
 say what the app does.
 
+## 2026-07-31 — UI/UX pass: sticky filters, counts everywhere, on-chart labels
+
+Five requested fixes; the Denomination filter and header logo were already
+done earlier the same day (see the two entries above) and just needed
+re-verifying, not re-building.
+
+**Sticky filter bar**: tried making the header and filter bar sticky
+*separately* first (`top-0` on the header, `top-[header-height]` on the
+filter bar) and rejected it — the header's height isn't constant (the nav
+wraps to a second row below ~1024px and again on mobile), so a hardcoded
+offset would drift and gap/overlap at those breakpoints. Instead both are
+wrapped in one `sticky top-0` container (`Layout.jsx`) so they stick and
+scroll as a single unit — no height bookkeeping needed, correct at every
+breakpoint by construction.
+
+**Reset filters button**: moved out of the filter row entirely (was
+`ml-auto` inside the same `flex flex-wrap` as the selects, which is why it
+got pushed onto its own full-width row once 8 filters stopped fitting one
+line — exactly the "too much vertical space" complaint). Now `absolute
+top-2.5 right-3` on the filter bar's own `relative` container, styled as
+small secondary text (not a bordered button), with `pr-20` on the select
+row so it never overlaps the last select on wide screens.
+
+**Counts alongside amounts**: every `Amount` field in both cubes has a
+sibling `Count` field (`ActivationAmount`/`ActivationCount`,
+`RedemptionAmount`/`RedemptionCount`) — the work was mostly plumbing that
+pairing through to every display surface rather than a design question:
+  - `groupSum()` calls across all 5 pages now request both fields, not just
+    the amount, so the count rides along on the same aggregated row.
+  - `Kpi` and `FlowBox` call sites pass the paired count as `sub`/`count`.
+  - `ChartTooltip` gained a `countField` prop (a sibling field name, or a
+    `(payload) => fieldName` function for multi-series charts where the
+    count field differs per series, e.g. the Activation-vs-Redemption trend
+    or the per-mode pivoted lines) plus a matching `countUnit` (string or
+    function) so mixed units render correctly ("34,709 cards" next to
+    "55,582 redemptions" in the same tooltip, not one generic unit forced
+    onto both). Verified by hovering the Pan-India trend line — see
+    `15-tooltip-hover.png` in this session's scratch dir for the reference
+    render.
+  - `lib/aggregate.js#pivot()` gained an optional `countField` param that
+    writes `${series}__count` sibling keys (e.g. `Physical__count`) into
+    the wide pivoted rows, so the 4-line Activation-by-mode trend can look
+    up the right count per line.
+  - `topNWithOther()` was widened to fold *every* numeric field into the
+    "Other" bucket (not just the sort field) — needed so the paired count
+    survives collapsing the F&B Category / Box Office Format long tails,
+    otherwise "Other" would show an amount with no matching count.
+  - **Exception, documented in the UI**: `heroProducts.json` only has
+    `{name, amount}` — no count field exists in the source data to pair
+    with. Rather than inventing one, the Hero Products card states this
+    directly ("No unit-count field ships with this list…") so it reads as
+    a known data limitation, not a missed requirement.
+
+**On-chart labels** (`components/ChartLabels.jsx`, shared across all 4
+pages that chart amounts): `AmountLabel`/`PctLabel` via `<LabelList
+content={...} />` on single-series bar charts, direct segment labels via a
+custom `label` renderer on donut charts. Segments under 3% share suppress
+their label (collision avoidance per the dataviz skill) — visible on the
+Region Contribution donut, where CENTRAL's ~0.01% share stays label-free
+while NORTH/SOUTH/WEST/NO_SITE all show. Deliberately did **not** add
+permanent labels to line charts (Month-wise trend, Pan-India trend) — with
+24 monthly points per line and up to 4 lines on one chart, always-on labels
+would collide and violate the "recessive, readable" bar the dataviz skill
+sets; those keep tooltip-only disclosure, which is standard practice for
+dense line charts and is what real BI tools do.
+
+**Verification quirk worth recording**: a `fullPage: true` Playwright
+screenshot of the (very tall, ~4000px) mobile Overview page showed the
+footer text bleeding into the sticky filter bar, reproduced twice in a row.
+A plain viewport screenshot (no `fullPage`) at the same scroll position, and
+a screenshot after a real `mouse.wheel` scroll, both came back clean — this
+is a Chromium/Playwright tiling artifact specific to `fullPage` capture +
+`position: sticky` on tall pages, not a real rendering bug. Don't chase this
+one again if it resurfaces in a `fullPage` shot; confirm with a normal
+viewport screenshot first.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

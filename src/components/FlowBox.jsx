@@ -1,7 +1,7 @@
 import React from 'react'
-import { fmtLacs, fmtPct } from '../lib/format'
+import { fmtLacs, fmtPct, fmtNumber } from '../lib/format'
 
-export function FlowBox({ label, amount, pct, color = '#1b2430', size = 'md' }) {
+export function FlowBox({ label, amount, count, countUnit = 'cards', pct, color = '#1b2430', size = 'md' }) {
   const big = size === 'lg'
   return (
     <div
@@ -12,6 +12,11 @@ export function FlowBox({ label, amount, pct, color = '#1b2430', size = 'md' }) 
       <div className={`font-serif font-bold ${big ? 'text-xl' : 'text-base'}`} style={{ color }}>
         {fmtLacs(amount, big ? 2 : 2)}
       </div>
+      {count !== undefined && (
+        <div className="text-[11px] text-warmgray-muted">
+          {fmtNumber(count)} {countUnit}
+        </div>
+      )}
       {pct !== undefined && <div className="text-[11px] text-warmgray-muted mt-0.5">{fmtPct(pct)} of total</div>}
     </div>
   )

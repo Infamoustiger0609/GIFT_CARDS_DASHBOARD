@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react'
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell } from 'recharts'
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, LabelList } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum, topNWithOther } from '../lib/aggregate'
 import { orderBy, MODE_ORDER, REGION_ORDER } from '../lib/constants'
@@ -9,6 +9,7 @@ import Card from '../components/Card'
 import Kpi from '../components/Kpi'
 import EmptyState from '../components/EmptyState'
 import ChartTooltip from '../components/ChartTooltip'
+import { AmountLabel } from '../components/ChartLabels'
 
 export default function RedemptionFnb() {
   const { redemptionRows, heroProducts } = useFilters()
@@ -16,15 +17,18 @@ export default function RedemptionFnb() {
   const fnbRows = useMemo(() => redemptionRows.filter((r) => r.Head === 'F&B'), [redemptionRows])
   const total = sumBy(fnbRows, 'RedemptionAmount')
   const totalCount = sumBy(fnbRows, 'RedemptionCount')
-  const sourceAmt = sumBy(fnbRows.filter((r) => r.SourceFlag === 'Source'), 'RedemptionAmount')
+  const sourceRows = fnbRows.filter((r) => r.SourceFlag === 'Source')
+  const sourceAmt = sumBy(sourceRows, 'RedemptionAmount')
+  const sourceCount = sumBy(sourceRows, 'RedemptionCount')
+  const nonSourceCount = totalCount - sourceCount
 
   const byRegion = useMemo(() => {
-    const g = groupSum(fnbRows, 'Region_Clean', ['RedemptionAmount'])
+    const g = groupSum(fnbRows, 'Region_Clean', ['RedemptionAmount', 'RedemptionCount'])
     return orderBy(g.map((r) => r.key), REGION_ORDER).map((k) => g.find((r) => r.key === k))
   }, [fnbRows])
 
   const byMode = useMemo(() => {
-    const g = groupSum(fnbRows, 'ActivationMode', ['RedemptionAmount'])
+    const g = groupSum(fnbRows, 'ActivationMode', ['RedemptionAmount', 'RedemptionCount'])
     return orderBy(g.map((r) => r.key), MODE_ORDER).map((k) => g.find((r) => r.key === k))
   }, [fnbRows])
 
@@ -32,7 +36,7 @@ export default function RedemptionFnb() {
     const g = groupSum(
       fnbRows.filter((r) => r.Category && r.Category !== 'N/A'),
       'Category',
-      ['RedemptionAmount']
+      ['RedemptionAmount', 'RedemptionCount']
     )
     return topNWithOther(g, 10, 'key', 'RedemptionAmount')
   }, [fnbRows])
@@ -46,8 +50,18 @@ export default function RedemptionFnb() {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Kpi label="F&B Redemption" value={fmtLacs(total)} sub={`${fmtNumber(totalCount)} redemptions`} accent="teal" />
-        <Kpi label="Source Redemption" value={fmtLacs(sourceAmt)} sub={fmtPct(total ? (sourceAmt / total) * 100 : 0)} accent="teal" />
-        <Kpi label="Non-Source Redemption" value={fmtLacs(total - sourceAmt)} sub={fmtPct(total ? ((total - sourceAmt) / total) * 100 : 0)} accent="coral" />
+        <Kpi
+          label="Source Redemption"
+          value={fmtLacs(sourceAmt)}
+          sub={`${fmtNumber(sourceCount)} redemptions · ${fmtPct(total ? (sourceAmt / total) * 100 : 0)}`}
+          accent="teal"
+        />
+        <Kpi
+          label="Non-Source Redemption"
+          value={fmtLacs(total - sourceAmt)}
+          sub={`${fmtNumber(nonSourceCount)} redemptions · ${fmtPct(total ? ((total - sourceAmt) / total) * 100 : 0)}`}
+          accent="coral"
+        />
         <Kpi label="Avg per Redemption" value={totalCount ? fmtLacs(total / totalCount, 4) : '—'} accent="navy" />
       </div>
 
@@ -57,12 +71,13 @@ export default function RedemptionFnb() {
             <EmptyState />
           ) : (
             <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={byRegion} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <BarChart data={byRegion} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
                 <XAxis dataKey="key" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
-                <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+                <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
                 <Bar dataKey="RedemptionAmount" name="Redemption" radius={[4, 4, 0, 0]} maxBarSize={56}>
+                  <LabelList dataKey="RedemptionAmount" content={AmountLabel} />
                   {byRegion.map((r) => (
                     <Cell key={r.key} fill={REGION_COLORS[r.key] || COLORS.teal} />
                   ))}
@@ -77,12 +92,13 @@ export default function RedemptionFnb() {
             <EmptyState />
           ) : (
             <ResponsiveContainer width="100%" height={260}>
-              <BarChart data={byMode} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <BarChart data={byMode} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
                 <XAxis dataKey="key" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} interval={0} angle={-15} textAnchor="end" height={50} />
                 <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
-                <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+                <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
                 <Bar dataKey="RedemptionAmount" name="Redemption" radius={[4, 4, 0, 0]} maxBarSize={56}>
+                  <LabelList dataKey="RedemptionAmount" content={AmountLabel} />
                   {byMode.map((r) => (
                     <Cell key={r.key} fill={MODE_COLORS[r.key] || COLORS.teal} />
                   ))}
@@ -98,18 +114,20 @@ export default function RedemptionFnb() {
           <EmptyState />
         ) : (
           <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={byCategory} layout="vertical" margin={{ top: 8, right: 24, left: 8, bottom: 0 }}>
+            <BarChart data={byCategory} layout="vertical" margin={{ top: 8, right: 40, left: 8, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} horizontal={false} />
               <XAxis type="number" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} tickFormatter={fmtLacsAxis} />
               <YAxis dataKey="key" type="category" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={110} />
-              <Tooltip content={<ChartTooltip />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
-              <Bar dataKey="RedemptionAmount" name="Redemption" fill={COLORS.teal} radius={[0, 4, 4, 0]} maxBarSize={22} />
+              <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+              <Bar dataKey="RedemptionAmount" name="Redemption" fill={COLORS.teal} radius={[0, 4, 4, 0]} maxBarSize={22}>
+                <LabelList dataKey="RedemptionAmount" position="right" formatter={fmtLacsAxis} style={{ fontSize: 11, fill: COLORS.inkMuted }} />
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         )}
       </Card>
 
-      <Card title="Hero Products" subtitle="Top 15 F&B items, whole-dataset (not affected by filters)">
+      <Card title="Hero Products" subtitle="Top 15 F&B items by amount, whole-dataset (not affected by filters)">
         <div className="flex flex-col gap-2">
           {heroSorted.map((p, i) => (
             <div key={p.name} className="flex items-center gap-3">
@@ -124,7 +142,10 @@ export default function RedemptionFnb() {
             </div>
           ))}
         </div>
-        {!hasData && <p className="text-xs text-warmgray-muted mt-3 italic">Note: hero products list is static and always shown regardless of filters.</p>}
+        <p className="text-[11px] text-warmgray-muted mt-3 italic">
+          No unit-count field ships with this list (source data has amount only) — bar length reflects amount, not units sold.
+        </p>
+        {!hasData && <p className="text-xs text-warmgray-muted mt-1 italic">Static list, not affected by filters.</p>}
       </Card>
     </div>
   )
