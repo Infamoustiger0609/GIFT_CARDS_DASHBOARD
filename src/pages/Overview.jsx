@@ -1,0 +1,240 @@
+import React, { useMemo } from 'react'
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar
+} from 'recharts'
+import { useFilters } from '../lib/FilterContext'
+import { sumBy, groupSum } from '../lib/aggregate'
+import { orderBy, MODE_ORDER, REGION_ORDER } from '../lib/constants'
+import { COLORS, MODE_COLORS, REGION_COLORS, HEAD_COLORS } from '../lib/theme'
+import { fmtLacs, fmtPct, fmtNumber, fmtLacsAxis, monthLabel } from '../lib/format'
+import Card from '../components/Card'
+import Kpi from '../components/Kpi'
+import EmptyState from '../components/EmptyState'
+import ChartTooltip from '../components/ChartTooltip'
+import { FlowBox, FlowBranch } from '../components/FlowBox'
+
+export default function Overview() {
+  const { activationRows, redemptionRows } = useFilters()
+
+  const totalActivation = sumBy(activationRows, 'ActivationAmount')
+  const totalRedemption = sumBy(redemptionRows, 'RedemptionAmount')
+  const totalActivationCount = sumBy(activationRows, 'ActivationCount')
+  const overallRedemptionPct = totalActivation > 0 ? (totalRedemption / totalActivation) * 100 : NaN
+
+  // ---- Activation flow: Physical vs Non-Physical, then sub-splits ----
+  const physicalRows = activationRows.filter((r) => r.ActivationModeFinal === 'Physical')
+  const nonPhysicalRows = activationRows.filter((r) => r.ActivationModeFinal !== 'Physical')
+  const physicalTotal = sumBy(physicalRows, 'ActivationAmount')
+  const nonPhysicalTotal = sumBy(nonPhysicalRows, 'ActivationAmount')
+
+  const physicalByRegion = useMemo(() => {
+    const g = groupSum(physicalRows, 'Region_Clean', ['ActivationAmount'])
+    return orderBy(g.map((r) => r.key), REGION_ORDER).map((k) => g.find((r) => r.key === k))
+  }, [physicalRows])
+
+  const nonPhysicalByMode = useMemo(() => {
+    const g = groupSum(nonPhysicalRows, 'ActivationModeFinal', ['ActivationAmount'])
+    return orderBy(g.map((r) => r.key), MODE_ORDER).map((k) => g.find((r) => r.key === k))
+  }, [nonPhysicalRows])
+
+  // ---- Redemption flow: by Head ----
+  const byHead = useMemo(() => {
+    const g = groupSum(redemptionRows, 'Head', ['RedemptionAmount'])
+    return orderBy(g.map((r) => r.key), ['Online', 'Box Office', 'F&B', 'Cancellation']).map((k) => g.find((r) => r.key === k))
+  }, [redemptionRows])
+  const cancellationRow = byHead.find((h) => h.key === 'Cancellation')
+  const positiveHeads = byHead.filter((h) => h.key !== 'Cancellation')
+
+  // ---- Redemption % per mode (join ActivationModeFinal <-> ActivationMode) ----
+  const redemptionPctByMode = useMemo(() => {
+    const actByMode = groupSum(activationRows, 'ActivationModeFinal', ['ActivationAmount'])
+    const redByMode = groupSum(redemptionRows, 'ActivationMode', ['RedemptionAmount'])
+    return MODE_ORDER.map((mode) => {
+      const act = actByMode.find((r) => r.key === mode)?.ActivationAmount || 0
+      const red = redByMode.find((r) => r.key === mode)?.RedemptionAmount || 0
+      return { mode, pct: act > 0 ? (red / act) * 100 : 0, act, red }
+    })
+  }, [activationRows, redemptionRows])
+
+  // ---- Overall region contribution (activation amount) ----
+  const regionContribution = useMemo(() => {
+    const g = groupSum(activationRows, 'Region_Clean', ['ActivationAmount'])
+    return orderBy(g.map((r) => r.key), REGION_ORDER)
+      .map((k) => g.find((r) => r.key === k))
+      .filter((r) => r.ActivationAmount !== 0)
+  }, [activationRows])
+
+  // ---- Pan-India month-wise trend ----
+  const monthTrend = useMemo(() => {
+    const act = groupSum(activationRows, 'YearMonth', ['ActivationAmount'])
+    const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionAmount'])
+    const months = [...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])].sort()
+    return months.map((m) => ({
+      month: m,
+      label: monthLabel(m),
+      Activation: act.find((r) => r.key === m)?.ActivationAmount || 0,
+      Redemption: red.find((r) => r.key === m)?.RedemptionAmount || 0
+    }))
+  }, [activationRows, redemptionRows])
+
+  const hasData = activationRows.length > 0 || redemptionRows.length > 0
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <Kpi label="Total Activation" value={fmtLacs(totalActivation)} sub={`${fmtNumber(totalActivationCount)} cards`} accent="gold" />
+        <Kpi label="Total Redemption (net)" value={fmtLacs(totalRedemption)} sub="incl. cancellations netted" accent="teal" />
+        <Kpi label="Overall Redemption %" value={fmtPct(overallRedemptionPct)} accent="navy" />
+        <Kpi
+          label="Cancellations"
+          value={cancellationRow ? fmtLacs(Math.abs(cancellationRow.RedemptionAmount)) : '₹0.00 L'}
+          sub="netted into redemption total"
+          accent="coral"
+        />
+      </div>
+
+      <Card title="Gift Card Process Flow" subtitle="Activation channels and redemption heads, current filter selection">
+        {!hasData ? (
+          <EmptyState />
+        ) : (
+          <div className="grid md:grid-cols-2 gap-8 md:gap-4 overflow-x-auto pb-2">
+            {/* Activation flow */}
+            <div className="flex flex-col items-center min-w-[380px]">
+              <div className="text-xs font-semibold uppercase tracking-wide text-gold mb-2">Activation</div>
+              <FlowBox label="Total Activation" amount={totalActivation} color={COLORS.activation} size="lg" />
+              <FlowBranch>
+                <FlowBox
+                  label="Physical"
+                  amount={physicalTotal}
+                  pct={totalActivation ? (physicalTotal / totalActivation) * 100 : 0}
+                  color={MODE_COLORS.Physical}
+                />
+                <FlowBox
+                  label="Non-Physical"
+                  amount={nonPhysicalTotal}
+                  pct={totalActivation ? (nonPhysicalTotal / totalActivation) * 100 : 0}
+                  color={COLORS.redemption}
+                />
+              </FlowBranch>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full mt-6">
+                <div className="flex flex-col items-center gap-2 sm:border-r border-warmgray-border sm:pr-2">
+                  <div className="text-[10px] font-semibold uppercase text-warmgray-muted">by Region</div>
+                  {physicalByRegion.map((r) => (
+                    <FlowBox key={r.key} label={r.key} amount={r.ActivationAmount} color={REGION_COLORS[r.key] || COLORS.inkMuted} />
+                  ))}
+                </div>
+                <div className="flex flex-col items-center gap-2 sm:pl-2">
+                  <div className="text-[10px] font-semibold uppercase text-warmgray-muted">by Channel</div>
+                  {nonPhysicalByMode.map((r) => (
+                    <FlowBox key={r.key} label={r.key} amount={r.ActivationAmount} color={MODE_COLORS[r.key] || COLORS.inkMuted} />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Redemption flow */}
+            <div className="flex flex-col items-center min-w-[380px]">
+              <div className="text-xs font-semibold uppercase tracking-wide text-teal mb-2">Redemption</div>
+              <FlowBox label="Total Redemption (net)" amount={totalRedemption} color={COLORS.redemption} size="lg" />
+              <FlowBranch>
+                {positiveHeads.map((h) => (
+                  <FlowBox
+                    key={h.key}
+                    label={h.key}
+                    amount={h.RedemptionAmount}
+                    pct={totalRedemption ? (h.RedemptionAmount / totalRedemption) * 100 : 0}
+                    color={HEAD_COLORS[h.key] || COLORS.inkMuted}
+                  />
+                ))}
+              </FlowBranch>
+              {cancellationRow && (
+                <div className="mt-6 text-xs text-coral bg-coral-light rounded-md px-3 py-2">
+                  Cancellations: {fmtLacs(cancellationRow.RedemptionAmount, 2)} netted into the total above (not excluded)
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        <Card title="Redemption % by Mode" subtitle="Redemption amount ÷ Activation amount, per origin channel">
+          {redemptionPctByMode.every((r) => r.pct === 0) ? (
+            <EmptyState />
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <BarChart data={redemptionPctByMode} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                <XAxis dataKey="mode" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+                <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} unit="%" width={40} />
+                <Tooltip content={<ChartTooltip formatter={(v) => fmtPct(v)} />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+                <Bar dataKey="pct" name="Redemption %" fill={COLORS.redemption} radius={[4, 4, 0, 0]} maxBarSize={56} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+
+        <Card title="Region Contribution" subtitle="Share of total activation amount by region">
+          {regionContribution.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie
+                  data={regionContribution}
+                  dataKey="ActivationAmount"
+                  nameKey="key"
+                  innerRadius={55}
+                  outerRadius={90}
+                  paddingAngle={2}
+                  strokeWidth={2}
+                  stroke="#ffffff"
+                >
+                  {regionContribution.map((r) => (
+                    <Cell key={r.key} fill={REGION_COLORS[r.key] || COLORS.inkMuted} />
+                  ))}
+                </Pie>
+                <Tooltip content={<ChartTooltip />} />
+                <Legend
+                  verticalAlign="bottom"
+                  height={36}
+                  formatter={(value) => <span className="text-xs text-navy">{value}</span>}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+      </div>
+
+      <Card title="Pan-India Monthly Trend" subtitle="Activation vs. Redemption, ₹ Lacs">
+        {monthTrend.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={monthTrend} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
+              <Tooltip content={<ChartTooltip />} />
+              <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
+              <Line type="monotone" dataKey="Activation" stroke={COLORS.activation} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+              <Line type="monotone" dataKey="Redemption" stroke={COLORS.redemption} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
+    </div>
+  )
+}

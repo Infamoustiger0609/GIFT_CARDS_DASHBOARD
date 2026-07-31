@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background-color: #faf8f4;
+  color: #1b2430;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, .font-serif {
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+}
+
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: #d8d2c4;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* react-select minimal theming to match card/border system */
+.rs__control {
+  border-color: #e2ddd3 !important;
+  min-height: 38px !important;
+  box-shadow: none !important;
+}
+.rs__control--is-focused {
+  border-color: #c8952e !important;
+  box-shadow: 0 0 0 1px #c8952e !important;
+}

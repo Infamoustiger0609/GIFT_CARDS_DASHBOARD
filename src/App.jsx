@@ -1,0 +1,25 @@
+import React from 'react'
+import { Routes, Route } from 'react-router-dom'
+import Layout from './components/Layout'
+import { FilterProvider } from './lib/FilterContext'
+import Overview from './pages/Overview'
+import Activation from './pages/Activation'
+import RedemptionBoxOffice from './pages/RedemptionBoxOffice'
+import RedemptionFnb from './pages/RedemptionFnb'
+import Trends from './pages/Trends'
+
+export default function App() {
+  return (
+    <FilterProvider>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/" element={<Overview />} />
+          <Route path="/activation" element={<Activation />} />
+          <Route path="/redemption/box-office" element={<RedemptionBoxOffice />} />
+          <Route path="/redemption/fnb" element={<RedemptionFnb />} />
+          <Route path="/trends" element={<Trends />} />
+        </Route>
+      </Routes>
+    </FilterProvider>
+  )
+}
