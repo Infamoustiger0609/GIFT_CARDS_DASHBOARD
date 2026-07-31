@@ -5,11 +5,11 @@ export function FlowBox({ label, amount, count, countUnit = 'cards', pct, color 
   const big = size === 'lg'
   return (
     <div
-      className={`bg-card border-2 rounded-lg text-center shadow-sm ${big ? 'px-6 py-4 min-w-[180px]' : 'px-4 py-2.5 min-w-[130px]'}`}
+      className={`bg-card border-[3px] rounded-lg text-center shadow-sm ${big ? 'px-6 py-4 min-w-[180px]' : 'px-4 py-2.5 min-w-[130px]'}`}
       style={{ borderColor: color }}
     >
-      <div className={`font-semibold text-navy ${big ? 'text-sm' : 'text-xs'}`}>{label}</div>
-      <div className={`font-serif font-bold ${big ? 'text-xl' : 'text-base'}`} style={{ color }}>
+      <div className={`font-bold text-navy ${big ? 'text-sm' : 'text-xs'}`}>{label}</div>
+      <div className={`font-serif font-extrabold ${big ? 'text-2xl' : 'text-lg'}`} style={{ color }}>
         {fmtLacs(amount, big ? 2 : 2)}
       </div>
       {count !== undefined && (

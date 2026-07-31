@@ -15,6 +15,7 @@ import {
 } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum, pivot } from '../lib/aggregate'
+import { computeComparisons } from '../lib/comparisons'
 import { orderBy, MODE_ORDER, REGION_ORDER, WEEKDAY_ORDER } from '../lib/constants'
 import { COLORS, MODE_COLORS, REGION_COLORS } from '../lib/theme'
 import { fmtLacs, fmtNumber, fmtPct, fmtLacsAxis, monthLabel } from '../lib/format'
@@ -25,10 +26,14 @@ import ChartTooltip from '../components/ChartTooltip'
 import { AmountLabel } from '../components/ChartLabels'
 
 export default function Activation() {
-  const { activationRows } = useFilters()
+  const { activationRows, activationRowsAllMonths, comparisonMonths } = useFilters()
 
   const total = sumBy(activationRows, 'ActivationAmount')
   const totalCount = sumBy(activationRows, 'ActivationCount')
+  const deltas = useMemo(
+    () => computeComparisons(activationRowsAllMonths, 'ActivationAmount', comparisonMonths),
+    [activationRowsAllMonths, comparisonMonths]
+  )
   const physicalRows = useMemo(() => activationRows.filter((r) => r.ActivationModeFinal === 'Physical'), [activationRows])
   const physicalTotal = sumBy(physicalRows, 'ActivationAmount')
   const physicalCount = sumBy(physicalRows, 'ActivationCount')
@@ -63,7 +68,17 @@ export default function Activation() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Kpi label="Total Activation" value={fmtLacs(total)} sub={`${fmtNumber(totalCount)} cards`} accent="gold" />
+        <Kpi
+          label="Total Activation"
+          value={fmtLacs(total)}
+          sub={`${fmtNumber(totalCount)} cards`}
+          accent="gold"
+          deltas={[
+            { label: 'MoM', pct: deltas.mom },
+            { label: 'QoQ', pct: deltas.qoq },
+            { label: 'YoY', pct: deltas.yoy }
+          ]}
+        />
         <Kpi
           label="Physical"
           value={fmtLacs(physicalTotal)}
@@ -141,9 +156,9 @@ export default function Activation() {
                   dataKey={mode}
                   name={mode}
                   stroke={MODE_COLORS[mode]}
-                  strokeWidth={2}
-                  dot={{ r: 2.5 }}
-                  activeDot={{ r: 5 }}
+                  strokeWidth={3}
+                  dot={{ r: 3 }}
+                  activeDot={{ r: 6 }}
                   connectNulls
                 />
               ))}
@@ -162,10 +177,10 @@ export default function Activation() {
               <XAxis dataKey="key" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
               <Tooltip content={<ChartTooltip countField="ActivationCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
-              <Bar dataKey="ActivationAmount" name="Activation" fill={COLORS.activation} radius={[4, 4, 0, 0]} maxBarSize={56}>
+              <Bar dataKey="ActivationAmount" name="Activation" fill={COLORS.activationDark} radius={[4, 4, 0, 0]} maxBarSize={56}>
                 <LabelList dataKey="ActivationAmount" content={AmountLabel} />
                 {weekdayTrend.map((r) => (
-                  <Cell key={r.key} fill={r.key === 'Saturday' || r.key === 'Sunday' ? COLORS.redemption : COLORS.activation} />
+                  <Cell key={r.key} fill={r.key === 'Saturday' || r.key === 'Sunday' ? COLORS.redemption : COLORS.activationDark} />
                 ))}
               </Bar>
             </BarChart>

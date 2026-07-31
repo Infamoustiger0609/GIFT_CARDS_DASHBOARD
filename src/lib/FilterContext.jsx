@@ -3,34 +3,74 @@ import { fyOf, WEEKEND_DAYS } from './constants'
 
 const FilterContext = createContext(null)
 
+// Every filter is now a multi-select: an array of allowed values. An empty
+// array means "no restriction on this dimension" (the old 'All'). Within one
+// dimension, multiple selected values combine with OR (row matches if its
+// value is in the set); different dimensions still combine with AND.
 export const DEFAULT_FILTERS = {
-  fy: 'All', // 'All' | 'FY2024-25' | 'FY2025-26'
-  region: 'All', // Region_Clean value | 'All'
-  mode: 'All', // Physical | Aggregator | Corporate | Online | 'All'
-  month: 'All', // YearMonth | 'All'
-  week: 'All', // 'All' | 'Weekday' | 'Weekend'
-  source: 'All', // 'All' | 'Source' | 'Non-Source'
-  ticketFnb: 'All', // 'All' | 'Ticket' | 'F&B'
-  denomination: 'All' // Denom value | 'All'
+  fy: [],
+  region: [],
+  mode: [],
+  month: [],
+  week: [],
+  source: [],
+  ticketFnb: [],
+  denomination: []
 }
 
 function isWeekend(weekday) {
   return WEEKEND_DAYS.has(weekday)
 }
 
+// selected.length === 0 => no restriction (matches everything).
+function matches(selected, value) {
+  return selected.length === 0 || selected.includes(value)
+}
+
+function ticketFnbBucket(head) {
+  if (head === 'F&B') return 'F&B'
+  if (head === 'Online' || head === 'Box Office' || head === 'Cancellation') return 'Ticket'
+  return null
+}
+
 // Fields present with the same meaning on both cubes — checked once for
-// whichever cube is being filtered.
-function passesCommon(row, filters) {
-  if (filters.fy !== 'All' && fyOf(row.YearMonth) !== filters.fy) return false
-  if (filters.region !== 'All' && row.Region_Clean !== filters.region) return false
-  if (filters.month !== 'All' && row.YearMonth !== filters.month) return false
-  if (filters.denomination !== 'All' && row.Denom !== filters.denomination) return false
-  if (filters.week !== 'All') {
-    const wknd = isWeekend(row.Weekday)
-    if (filters.week === 'Weekend' && !wknd) return false
-    if (filters.week === 'Weekday' && wknd) return false
+// whichever cube is being filtered. `skipMonth` is used to build the
+// "all months" row pools that the MoM/QoQ/YoY comparisons sum over — every
+// other filter (including FY) still applies, only the Month restriction is
+// lifted so the comparison can reach adjacent months.
+function passesCommon(row, filters, { skipMonth = false } = {}) {
+  if (!matches(filters.fy, fyOf(row.YearMonth))) return false
+  if (!matches(filters.region, row.Region_Clean)) return false
+  if (!skipMonth && !matches(filters.month, row.YearMonth)) return false
+  if (!matches(filters.denomination, row.Denom)) return false
+  if (filters.week.length > 0) {
+    const slot = isWeekend(row.Weekday) ? 'Weekend' : 'Weekday'
+    if (!filters.week.includes(slot)) return false
   }
   return true
+}
+
+function filterActivation(cube, filters, opts) {
+  return cube.filter((row) => {
+    if (!passesCommon(row, filters, opts)) return false
+    if (!matches(filters.mode, row.ActivationModeFinal)) return false
+    // Source and Ticket/F&B filters don't apply to the activation cube
+    // (no such fields exist there) — they only narrow redemption rows.
+    return true
+  })
+}
+
+function filterRedemption(cube, filters, opts) {
+  return cube.filter((row) => {
+    if (!passesCommon(row, filters, opts)) return false
+    if (!matches(filters.mode, row.ActivationMode)) return false
+    if (!matches(filters.source, row.SourceFlag)) return false
+    if (filters.ticketFnb.length > 0) {
+      const bucket = ticketFnbBucket(row.Head)
+      if (!bucket || !filters.ticketFnb.includes(bucket)) return false
+    }
+    return true
+  })
 }
 
 // The cubes are ~26MB combined — bundling them as JS imports would inline
@@ -67,34 +107,36 @@ export function FilterProvider({ children }) {
     }
   }, [])
 
+  // value is always an array here (react-select isMulti onChange).
   const setFilter = useCallback((key, value) => {
-    setFilters((prev) => ({ ...prev, [key]: value }))
+    setFilters((prev) => ({ ...prev, [key]: value || [] }))
   }, [])
 
   const resetFilters = useCallback(() => setFilters(DEFAULT_FILTERS), [])
 
-  const filteredActivation = useMemo(() => {
-    if (!data) return []
-    return data.activationCube.filter((row) => {
-      if (!passesCommon(row, filters)) return false
-      if (filters.mode !== 'All' && row.ActivationModeFinal !== filters.mode) return false
-      // Source and Ticket/F&B filters don't apply to the activation cube
-      // (no such fields exist there) — they only narrow redemption rows.
-      return true
-    })
-  }, [data, filters])
+  const filteredActivation = useMemo(() => (data ? filterActivation(data.activationCube, filters) : []), [data, filters])
+  const filteredRedemption = useMemo(() => (data ? filterRedemption(data.redemptionCube, filters) : []), [data, filters])
 
-  const filteredRedemption = useMemo(() => {
-    if (!data) return []
-    return data.redemptionCube.filter((row) => {
-      if (!passesCommon(row, filters)) return false
-      if (filters.mode !== 'All' && row.ActivationMode !== filters.mode) return false
-      if (filters.source !== 'All' && row.SourceFlag !== filters.source) return false
-      if (filters.ticketFnb === 'Ticket' && !['Online', 'Box Office', 'Cancellation'].includes(row.Head)) return false
-      if (filters.ticketFnb === 'F&B' && row.Head !== 'F&B') return false
-      return true
-    })
-  }, [data, filters])
+  // "All months" pools for the MoM/QoQ/YoY comparison badges — same filters,
+  // Month restriction lifted (see passesCommon's skipMonth doc above).
+  const activationRowsAllMonths = useMemo(
+    () => (data ? filterActivation(data.activationCube, filters, { skipMonth: true }) : []),
+    [data, filters]
+  )
+  const redemptionRowsAllMonths = useMemo(
+    () => (data ? filterRedemption(data.redemptionCube, filters, { skipMonth: true }) : []),
+    [data, filters]
+  )
+
+  // The month(s) comparisons treat as "current". Explicit Month selection
+  // wins; otherwise default to the latest month present under the rest of
+  // the active filters (so e.g. an FY filter still picks a sensible anchor).
+  const comparisonMonths = useMemo(() => {
+    if (filters.month.length > 0) return [...filters.month].sort()
+    const allMonths = [...new Set([...activationRowsAllMonths.map((r) => r.YearMonth), ...redemptionRowsAllMonths.map((r) => r.YearMonth)])].sort()
+    const latest = allMonths[allMonths.length - 1]
+    return latest ? [latest] : []
+  }, [filters.month, activationRowsAllMonths, redemptionRowsAllMonths])
 
   // Options are derived from the full, unfiltered cubes so the dropdowns
   // never shrink based on other active filters.
@@ -122,6 +164,9 @@ export function FilterProvider({ children }) {
     resetFilters,
     activationRows: filteredActivation,
     redemptionRows: filteredRedemption,
+    activationRowsAllMonths,
+    redemptionRowsAllMonths,
+    comparisonMonths,
     heroProducts: data?.heroProducts || [],
     options,
     isLoading: !data && !error,

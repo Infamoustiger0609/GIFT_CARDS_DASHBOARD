@@ -2,12 +2,16 @@
 
 A client-side BI dashboard for PVR INOX gift card activation and redemption
 data: Overview, Activation, Redemption (Box Office), Redemption (F&B), and
-Trends, all driven by a shared, sticky global filter bar (8 filters: FY,
-Region, Mode, Month, Week, Source, Ticket/F&B, Denomination). Every
-monetary figure — KPI tiles, chart tooltips, bar/donut labels — is shown
-paired with its underlying card/redemption count wherever the source data
-has both fields (see `CLAUDE.md` for the one exception: hero products only
-carry an amount).
+Trends, all driven by a shared, sticky global filter bar (8 multi-select
+filters: FY, Region, Mode, Month, Week, Source, Ticket/F&B, Denomination —
+pick several values in one dimension and they combine with OR; different
+dimensions still combine with AND). Every monetary figure — KPI tiles,
+chart tooltips, bar/donut labels — is shown paired with its underlying
+card/redemption count wherever the source data has both fields (see
+`CLAUDE.md` for the one exception: hero products only carry an amount).
+The primary Amount KPI on each page also shows MoM / QoQ / YoY
+period-over-period delta badges, which disappear (rather than showing a
+broken percentage) whenever the comparison period has no data.
 
 ## Stack
 

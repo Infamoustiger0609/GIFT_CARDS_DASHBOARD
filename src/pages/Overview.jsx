@@ -17,6 +17,7 @@ import {
 } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum } from '../lib/aggregate'
+import { computeComparisons } from '../lib/comparisons'
 import { orderBy, MODE_ORDER, REGION_ORDER } from '../lib/constants'
 import { COLORS, MODE_COLORS, REGION_COLORS, HEAD_COLORS } from '../lib/theme'
 import { fmtLacs, fmtPct, fmtNumber, fmtLacsAxis, monthLabel } from '../lib/format'
@@ -28,13 +29,22 @@ import { FlowBox, FlowBranch } from '../components/FlowBox'
 import { PctLabel, donutLabel } from '../components/ChartLabels'
 
 export default function Overview() {
-  const { activationRows, redemptionRows } = useFilters()
+  const { activationRows, redemptionRows, activationRowsAllMonths, redemptionRowsAllMonths, comparisonMonths } = useFilters()
 
   const totalActivation = sumBy(activationRows, 'ActivationAmount')
   const totalRedemption = sumBy(redemptionRows, 'RedemptionAmount')
   const totalActivationCount = sumBy(activationRows, 'ActivationCount')
   const totalRedemptionCount = sumBy(redemptionRows, 'RedemptionCount')
   const overallRedemptionPct = totalActivation > 0 ? (totalRedemption / totalActivation) * 100 : NaN
+
+  const activationDeltas = useMemo(
+    () => computeComparisons(activationRowsAllMonths, 'ActivationAmount', comparisonMonths),
+    [activationRowsAllMonths, comparisonMonths]
+  )
+  const redemptionDeltas = useMemo(
+    () => computeComparisons(redemptionRowsAllMonths, 'RedemptionAmount', comparisonMonths),
+    [redemptionRowsAllMonths, comparisonMonths]
+  )
 
   // ---- Activation flow: Physical vs Non-Physical, then sub-splits ----
   const physicalRows = activationRows.filter((r) => r.ActivationModeFinal === 'Physical')
@@ -101,12 +111,27 @@ export default function Overview() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Kpi label="Total Activation" value={fmtLacs(totalActivation)} sub={`${fmtNumber(totalActivationCount)} cards`} accent="gold" />
+        <Kpi
+          label="Total Activation"
+          value={fmtLacs(totalActivation)}
+          sub={`${fmtNumber(totalActivationCount)} cards`}
+          accent="gold"
+          deltas={[
+            { label: 'MoM', pct: activationDeltas.mom },
+            { label: 'QoQ', pct: activationDeltas.qoq },
+            { label: 'YoY', pct: activationDeltas.yoy }
+          ]}
+        />
         <Kpi
           label="Total Redemption (net)"
           value={fmtLacs(totalRedemption)}
           sub={`${fmtNumber(totalRedemptionCount)} redemptions · cancellations netted`}
           accent="teal"
+          deltas={[
+            { label: 'MoM', pct: redemptionDeltas.mom },
+            { label: 'QoQ', pct: redemptionDeltas.qoq },
+            { label: 'YoY', pct: redemptionDeltas.yoy }
+          ]}
         />
         <Kpi label="Overall Redemption %" value={fmtPct(overallRedemptionPct)} accent="navy" />
         <Kpi
@@ -237,7 +262,7 @@ export default function Overview() {
                   innerRadius={55}
                   outerRadius={90}
                   paddingAngle={2}
-                  strokeWidth={2}
+                  strokeWidth={3}
                   stroke="#ffffff"
                   label={donutLabel}
                   labelLine={false}
@@ -276,8 +301,8 @@ export default function Overview() {
                 }
               />
               <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
-              <Line type="monotone" dataKey="Activation" stroke={COLORS.activation} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-              <Line type="monotone" dataKey="Redemption" stroke={COLORS.redemption} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+              <Line type="monotone" dataKey="Activation" stroke={COLORS.activationDark} strokeWidth={3} dot={{ r: 3.5 }} activeDot={{ r: 6 }} />
+              <Line type="monotone" dataKey="Redemption" stroke={COLORS.redemption} strokeWidth={3} dot={{ r: 3.5 }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
         )}

@@ -281,6 +281,101 @@ is a Chromium/Playwright tiling artifact specific to `fullPage` capture +
 one again if it resurfaces in a `fullPage` shot; confirm with a normal
 viewport screenshot first.
 
+## 2026-07-31 — Multi-select filters, MoM/QoQ/YoY badges, bolder visuals
+
+**Multi-select filters (breaking change to filter shape)**: every filter
+value went from a single string (`'All'` sentinel) to an array (`[]` =
+no restriction). `lib/FilterContext.jsx`'s `matches(selected, value)`
+helper — `selected.length === 0 || selected.includes(value)` — replaced
+every `filters.x !== 'All' && row.field !== filters.x` check. Within one
+dimension, selected values OR together (row matches if its value is in the
+set); dimensions still AND. `Select.jsx` now renders `isMulti`, with a
+custom `ValueContainer` showing a condensed summary ("All" / one label /
+"N selected") instead of react-select's default per-item pill chips —
+needed since the 8-filters-in-one-row layout (see the entry below this one)
+has no room for chips once 2+ values are picked.
+
+**Active-filter chip row removed** (`FilterBar.jsx`) — was redundant once
+each dropdown shows its own "N selected" state; also freed vertical space.
+
+**MoM / QoQ / YoY comparison badges** (`lib/comparisons.js`,
+`components/DeltaBadge.jsx`): the genuinely new piece is
+`FilterContext` exposing `activationRowsAllMonths` /
+`redemptionRowsAllMonths` (all active filters applied *except* Month) and
+`comparisonMonths` (resolved "current period": explicit Month selection if
+set, else the latest month present under the rest of the active filters).
+Pages compute `computeComparisons(rowsAllMonths, field, comparisonMonths)`
+against these pools, never against the Month-filtered `activationRows` /
+`redemptionRows` — the whole point is reaching adjacent months the Month
+filter would otherwise exclude.
+  - Quarters use plain calendar-quarter boundaries (Jan/Apr/Jul/Oct) — these
+    are literally the same 3-month windows as the Indian FY quarters (Q1
+    Apr-Jun .. Q4 Jan-Mar), just without FY-year relabeling, so no special
+    FY arithmetic was needed, only the boundary check.
+  - A multi-month Month selection generalizes MoM to "same-length window
+    immediately before" and YoY to "same months, one year back"
+    (`precedingPeriod`/`yoyPeriod` in `comparisons.js`) — single-month
+    selection is just the n=1 case of the same code path. QoQ always
+    compares whole quarters (the quarter containing the latest selected/
+    default month vs. the one before), per the request's literal wording,
+    not scaled by the exact sub-selection.
+  - **Decided against** reaching across an active FY filter to find
+    comparison data (e.g. YoY from FY2025-26 pulling FY2024-25 rows even
+    with FY filtered to 2025-26 only) — the request's own hide-condition
+    example ("FY2024-25 selected, no prior year exists → hide") describes
+    exactly the FY-respecting behavior, so `activationRowsAllMonths` only
+    lifts the Month restriction, not FY. Simpler, and matches the spec's
+    own example rather than a more permissive reading of it.
+  - Hide condition: `computeComparisons` returns `null` (not 0 or Infinity)
+    whenever the comparison period has zero matching rows *or* the
+    previous-period sum is exactly 0 (avoids ±Infinity%); `DeltaBadge`
+    renders nothing for `null`. Verified by selecting Apr 2024 (the
+    dataset's first month) — MoM, QoQ, and YoY all correctly disappear
+    since Mar 2024, Jan-Mar 2024, and Apr 2023 all fall entirely outside
+    the data.
+  - Wired onto the one primary Amount KPI per page (Overview: Total
+    Activation + Total Redemption; Activation: Total Activation; Redemption
+    · Box Office: Box Office Redemption; Redemption · F&B: F&B Redemption)
+    rather than every KPI tile — ratio/derived tiles (Overall Redemption %,
+    Avg Ticket Size, Avg per Redemption) don't have a natural "amount to
+    compare period-over-period" and adding badges there would mostly just
+    be visual noise.
+
+**Item 9 (Total Redemption count) was already done** in the previous
+session's pass — `Total Redemption (net)` on Overview already carries
+`sub={... redemptions ...}`. No change needed, just re-verified.
+
+**Bolder visual pass**: KPI value `text-2xl font-bold` → `text-3xl
+font-extrabold`; Card titles → `font-extrabold`; FlowBox border `2px` →
+`3px` and amount text bumped a size; donut `strokeWidth` 2→3; line
+`strokeWidth` 2→3 with larger dots. Left gridlines/axis lines alone —
+the dataviz skill calls those recessive by design, and "bolder" was about
+data marks and typography, not chrome. Where a chart used the base
+`COLORS.activation` (gold) as a **solid single-color fill** (not part of
+the validated 5-hue categorical rotation), switched to `COLORS.activationDark`
+for the contrast bump the request asked for — gold was the one color with a
+documented sub-3:1 contrast WARN from the original palette validation.
+Left `REGION_COLORS`/`MODE_COLORS`/`HEAD_COLORS`/`SOURCE_COLORS` (the
+validated categorical theme) untouched — those hexes are load-bearing for
+the CVD-separation gates the dataviz skill's validator checked; changing
+one shifts the adjacent-pair math for the others.
+
+**Concurrent-edit note**: `FilterBar.jsx` was being hand-edited in the IDE
+while this work was in progress (caught it mid-save twice, briefly invalid
+JSX both times). Left it alone until it settled rather than fighting the
+live edit — it landed with the filters in a different order (FY, Month,
+Week, Region, Mode, Source, Ticket/F&B, Denomination) than originally
+built, which is fine; nothing downstream depends on filter order.
+
+**Verification**: multi-select tested with Region = North+South (OR
+within the dimension — KPI fell between "just North" and "no filter",
+`2 selected` shown in the control) combined with Mode = Physical (AND
+across dimensions, further narrowed correctly); baseline Total Activation
+still reads ₹6,127.62L, matching every prior verification pass in this
+file; zero console errors across all interactions; production build
+unaffected (705KB → 708KB JS, no new warnings beyond the pre-existing
+500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

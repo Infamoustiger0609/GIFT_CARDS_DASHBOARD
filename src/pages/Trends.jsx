@@ -84,8 +84,8 @@ export default function Trends() {
                 }
               />
               <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
-              <Line type="monotone" dataKey="Activation" stroke={COLORS.activation} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-              <Line type="monotone" dataKey="Redemption" stroke={COLORS.redemption} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+              <Line type="monotone" dataKey="Activation" stroke={COLORS.activationDark} strokeWidth={3} dot={{ r: 3.5 }} activeDot={{ r: 6 }} />
+              <Line type="monotone" dataKey="Redemption" stroke={COLORS.redemption} strokeWidth={3} dot={{ r: 3.5 }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -102,8 +102,8 @@ export default function Trends() {
               <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtNumber} />
               <Tooltip content={<ChartTooltip formatter={countFormatter} />} />
               <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
-              <Line type="monotone" dataKey="Activation" stroke={COLORS.activation} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
-              <Line type="monotone" dataKey="Redemption" stroke={COLORS.redemption} strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+              <Line type="monotone" dataKey="Activation" stroke={COLORS.activationDark} strokeWidth={3} dot={{ r: 3.5 }} activeDot={{ r: 6 }} />
+              <Line type="monotone" dataKey="Redemption" stroke={COLORS.redemption} strokeWidth={3} dot={{ r: 3.5 }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
         )}
@@ -128,7 +128,7 @@ export default function Trends() {
                 cursor={{ fill: 'rgba(27,36,48,0.04)' }}
               />
               <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
-              <Bar dataKey="Activation" fill={COLORS.activation} radius={[4, 4, 0, 0]} maxBarSize={72}>
+              <Bar dataKey="Activation" fill={COLORS.activationDark} radius={[4, 4, 0, 0]} maxBarSize={72}>
                 <LabelList dataKey="Activation" content={AmountLabel} />
               </Bar>
               <Bar dataKey="Redemption" fill={COLORS.redemption} radius={[4, 4, 0, 0]} maxBarSize={72}>

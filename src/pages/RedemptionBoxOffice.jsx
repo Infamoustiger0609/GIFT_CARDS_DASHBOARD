@@ -2,6 +2,7 @@ import React, { useMemo } from 'react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, PieChart, Pie, Legend, LabelList } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum, topNWithOther } from '../lib/aggregate'
+import { computeComparisons } from '../lib/comparisons'
 import { orderBy, MODE_ORDER, REGION_ORDER, WEEKDAY_ORDER, HEAD_ORDER } from '../lib/constants'
 import { COLORS, MODE_COLORS, REGION_COLORS, HEAD_COLORS, SOURCE_COLORS } from '../lib/theme'
 import { fmtLacs, fmtNumber, fmtPct, fmtLacsAxis } from '../lib/format'
@@ -12,11 +13,16 @@ import ChartTooltip from '../components/ChartTooltip'
 import { AmountLabel, donutLabel } from '../components/ChartLabels'
 
 export default function RedemptionBoxOffice() {
-  const { redemptionRows } = useFilters()
+  const { redemptionRows, redemptionRowsAllMonths, comparisonMonths } = useFilters()
 
   const boxOfficeRows = useMemo(() => redemptionRows.filter((r) => r.Head === 'Box Office'), [redemptionRows])
+  const boxOfficeRowsAllMonths = useMemo(() => redemptionRowsAllMonths.filter((r) => r.Head === 'Box Office'), [redemptionRowsAllMonths])
   const total = sumBy(boxOfficeRows, 'RedemptionAmount')
   const totalCount = sumBy(boxOfficeRows, 'RedemptionCount')
+  const deltas = useMemo(
+    () => computeComparisons(boxOfficeRowsAllMonths, 'RedemptionAmount', comparisonMonths),
+    [boxOfficeRowsAllMonths, comparisonMonths]
+  )
   const sourceRows = boxOfficeRows.filter((r) => r.SourceFlag === 'Source')
   const sourceAmt = sumBy(sourceRows, 'RedemptionAmount')
   const sourceCount = sumBy(sourceRows, 'RedemptionCount')
@@ -65,7 +71,17 @@ export default function RedemptionBoxOffice() {
   return (
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Kpi label="Box Office Redemption" value={fmtLacs(total)} sub={`${fmtNumber(totalCount)} redemptions`} accent="teal" />
+        <Kpi
+          label="Box Office Redemption"
+          value={fmtLacs(total)}
+          sub={`${fmtNumber(totalCount)} redemptions`}
+          accent="teal"
+          deltas={[
+            { label: 'MoM', pct: deltas.mom },
+            { label: 'QoQ', pct: deltas.qoq },
+            { label: 'YoY', pct: deltas.yoy }
+          ]}
+        />
         <Kpi
           label="Source Redemption"
           value={fmtLacs(sourceAmt)}
@@ -178,7 +194,7 @@ export default function RedemptionBoxOffice() {
                   innerRadius={55}
                   outerRadius={90}
                   paddingAngle={2}
-                  strokeWidth={2}
+                  strokeWidth={3}
                   stroke="#ffffff"
                   label={donutLabel}
                   labelLine={false}
