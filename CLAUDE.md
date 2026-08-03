@@ -467,29 +467,48 @@ Added a "Select All" row at the top of every filter's option list
 (`components/Select.jsx`), gold/bold, divider below it, above the regular
 checkbox rows.
 
-**Design choice — action, not a tracked value**: clicking it doesn't write
-every option's value into the filter array; it calls `onChange([])`,
-resetting the filter to the existing empty-array "unrestricted" convention
-every filter in this app already uses. Considered making it a real toggle
-(checked when `value.length === options.length`, unchecked otherwise) but
-that needed a second, disproportionately fiddly state (distinguishing "all
-selected" from "nothing selected but nothing to hide" — plus a `Month`
-filter with all months explicitly listed would break the MoM/QoQ/YoY
-`comparisonMonths` default-latest-anchor logic, which only kicks in when
-`filters.month.length === 0`). An action row that resets to empty sidesteps
-both problems and is functionally identical for every filter that reads
-through `matches()` — empty already means "matches everything" everywhere
-in `FilterContext.jsx`.
+**First attempt was wrong, corrected same day**: shipped it as an
+action-only row — clicking it called `onChange([])` (the existing
+empty-array "unrestricted" convention) without writing individual values,
+reasoning that empty-selection and all-selected are functionally
+identical everywhere `matches()` is read. Functionally true, but the user
+correctly called it broken: clicking "Select All" left every checkbox in
+the open menu visibly unchecked, which reads as "did nothing" no matter
+what the closed control's summary text says. A "Select All" control has
+to visibly check the boxes — that's the entire point of it.
 
-Implemented as a synthetic `{value: '__select_all__', ...}` entry prepended
-to each dropdown's option list; the custom `Option` renderer intercepts it
-and renders a plain non-checkbox row with its own `onMouseDown` (not
+**Fixed to a real toggle**: unchecked → checks every option (writes the
+full explicit value array); checked (all real options already
+individually selected) → clears them all back to `[]`. Verified via
+Playwright reading actual DOM `checkbox.checked` state, not just the
+resulting KPI numbers, after getting burned by trusting the numbers alone
+the first time — initial state all-unchecked, one click → all 7 (6
+regions + the Select All row itself) `checked: true`, second click → all
+back to `false`.
+
+This reopened the exact edge case the first design had sidestepped:
+selecting *every* Month explicitly (`filters.month.length === 24`) now
+needs to behave identically to selecting none, or the MoM/QoQ/YoY
+`comparisonMonths` anchor logic (`lib/FilterContext.jsx`) would treat the
+whole 24-month range as one "current period" instead of defaulting to the
+latest month. Fixed by changing the anchor condition from `filters.month
+.length > 0` to `filters.month.length > 0 && filters.month.length <
+options.months.length` (moved the `options` memo above `comparisonMonths`
+so it can reference `options.months.length`) — "all selected" and "none
+selected" now both fall through to the same latest-month default. Verified
+by selecting Month → Select All and confirming the KPI grid, including
+every MoM/QoQ/YoY badge, is byte-for-byte identical to the no-filter
+baseline.
+
+Implementation: a synthetic `{value: '__select_all__', ...}` entry
+prepended to each dropdown's option list; the custom `Option` renderer
+intercepts it and renders its own checkbox + row with `onMouseDown` (not
 `onClick` — react-select's own mousedown-based blur/close handling can
-swallow a plain click on a custom element) calling a `onSelectAll` prop
-threaded through to the `<RSelect>` element (react-select forwards unknown
-props into `selectProps`, which is how custom option components reach it).
-The real onChange handler strips the sentinel value out before calling the
-filter's `onChange`, so it can never leak into `filters.<key>`.
+swallow a plain click on a custom element) calling an `onToggleSelectAll`
+prop threaded through to `<RSelect>` (react-select forwards unknown props
+into `selectProps`, which is how custom option components reach them).
+The real `onChange` handler strips the sentinel value out before calling
+the filter's `onChange`, so it can never leak into `filters.<key>`.
 
 Verified: Region = North+South narrowed Revenue to ₹5,183.97L; opening
 Region again and clicking "Select All" reset it to ₹6,127.62L — the exact

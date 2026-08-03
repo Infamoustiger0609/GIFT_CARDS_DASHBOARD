@@ -134,16 +134,6 @@ export function FilterProvider({ children }) {
     [data, filters]
   )
 
-  // The month(s) comparisons treat as "current". Explicit Month selection
-  // wins; otherwise default to the latest month present under the rest of
-  // the active filters (so e.g. an FY filter still picks a sensible anchor).
-  const comparisonMonths = useMemo(() => {
-    if (filters.month.length > 0) return [...filters.month].sort()
-    const allMonths = [...new Set([...activationRowsAllMonths.map((r) => r.YearMonth), ...redemptionRowsAllMonths.map((r) => r.YearMonth)])].sort()
-    const latest = allMonths[allMonths.length - 1]
-    return latest ? [latest] : []
-  }, [filters.month, activationRowsAllMonths, redemptionRowsAllMonths])
-
   // Options are derived from the full, unfiltered cubes so the dropdowns
   // never shrink based on other active filters.
   const options = useMemo(() => {
@@ -163,6 +153,20 @@ export function FilterProvider({ children }) {
     ].sort()
     return { regions, modes, months, fys, denominations }
   }, [data])
+
+  // The month(s) comparisons treat as "current". Explicit Month selection
+  // wins; otherwise default to the latest month present under the rest of
+  // the active filters (so e.g. an FY filter still picks a sensible anchor).
+  // Selecting every month via "Select All" is treated the same as selecting
+  // none — both mean "no real restriction" — so the anchor logic still
+  // kicks in instead of treating the whole date range as one "current period".
+  const comparisonMonths = useMemo(() => {
+    const isRealRestriction = filters.month.length > 0 && filters.month.length < options.months.length
+    if (isRealRestriction) return [...filters.month].sort()
+    const allMonths = [...new Set([...activationRowsAllMonths.map((r) => r.YearMonth), ...redemptionRowsAllMonths.map((r) => r.YearMonth)])].sort()
+    const latest = allMonths[allMonths.length - 1]
+    return latest ? [latest] : []
+  }, [filters.month, options.months, activationRowsAllMonths, redemptionRowsAllMonths])
 
   const value = {
     filters,

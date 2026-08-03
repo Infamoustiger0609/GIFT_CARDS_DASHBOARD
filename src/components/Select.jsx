@@ -34,10 +34,13 @@ const styles = {
 // Selected values render as a compact summary ("All" / one label / "N
 // selected") instead of react-select's default per-item pill chips, which
 // would blow out the column width now that 8 filters share one row.
+// "All real options individually selected" reads the same as "none
+// selected" — both mean unrestricted — so both collapse to "All" here.
 function ValueContainer({ children, ...props }) {
   const selected = props.getValue()
+  const totalReal = (props.selectProps.options?.length || 1) - 1
   let label
-  if (selected.length === 0) label = 'All'
+  if (selected.length === 0 || selected.length === totalReal) label = 'All'
   else if (selected.length === 1) label = selected[0].label
   else label = `${selected.length} selected`
   const input = Array.isArray(children) ? children[1] : children
@@ -49,21 +52,24 @@ function ValueContainer({ children, ...props }) {
   )
 }
 
-// "Select All" is an action row, not a tracked checkbox value — clicking it
-// resets the filter to unrestricted (the existing empty-array convention,
-// same as never touching the filter) rather than writing every option's
-// value into the array. That keeps it consistent with the rest of the app:
-// empty already means "matches everything" everywhere filters are read.
+// "Select All" is a real toggle, not a static action: unchecked -> checks
+// every option below it (and their boxes visibly tick); checked (every real
+// option already individually selected) -> clears them all. Uses onMouseDown
+// + preventDefault instead of onClick because react-select's own mousedown
+// handling (menu-close/blur) can otherwise swallow a click on a custom
+// element before our handler runs.
 function Option(props) {
   if (props.data.value === ALL_VALUE) {
+    const allChecked = props.selectProps.allChecked
     return (
       <div
         onMouseDown={(e) => {
           e.preventDefault()
-          props.selectProps.onSelectAll()
+          props.selectProps.onToggleSelectAll(allChecked)
         }}
-        className="px-3 py-2 text-xs font-bold text-gold uppercase tracking-wide cursor-pointer hover:bg-gold-light border-b border-warmgray-border"
+        className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-gold uppercase tracking-wide cursor-pointer hover:bg-gold-light border-b border-warmgray-border"
       >
+        <input type="checkbox" checked={allChecked} onChange={() => {}} className="accent-gold" />
         Select All
       </div>
     )
@@ -80,6 +86,7 @@ export default function Select({ label, value, options, onChange }) {
   const rsOptions = options.map((o) => ({ value: o.value ?? o, label: o.label ?? o }))
   const menuOptions = [{ value: ALL_VALUE, label: 'Select All' }, ...rsOptions]
   const selected = rsOptions.filter((o) => value.includes(o.value))
+  const allChecked = rsOptions.length > 0 && selected.length === rsOptions.length
   return (
     <div className="flex flex-col gap-0.5 w-full min-w-0">
       <label className="text-[10px] leading-tight font-semibold uppercase tracking-wide text-warmgray-muted">{label}</label>
@@ -92,7 +99,8 @@ export default function Select({ label, value, options, onChange }) {
         value={selected}
         options={menuOptions}
         onChange={(opts) => onChange((opts || []).filter((o) => o.value !== ALL_VALUE).map((o) => o.value))}
-        onSelectAll={() => onChange([])}
+        onToggleSelectAll={(wasAllChecked) => onChange(wasAllChecked ? [] : rsOptions.map((o) => o.value))}
+        allChecked={allChecked}
         styles={styles}
         isSearchable={false}
         components={{ ValueContainer, Option, MultiValue: () => null }}
