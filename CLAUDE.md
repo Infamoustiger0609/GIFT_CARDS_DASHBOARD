@@ -516,6 +516,78 @@ unfiltered baseline every prior verification pass in this file has
 confirmed — and the control's closed-state summary read "All" again.
 Zero console errors; clean production build.
 
+## 2026-08-03 — Data refresh (CardType field) + real "Select All" bug fix
+
+**Data swap**: both cubes replaced (activation 6,363 → 6,608 rows, redemption
+81,031 → 85,248 rows) adding a `CardType` field — `Digital`/`Physical` on
+activation rows, plus `N/A` (a value the request didn't mention but the
+actual data has, same pattern as every prior data-reality-vs-spec gap in
+this log); `Digital`/`Physical`/`Unknown (pre-existing)`/`N/A` on
+redemption rows, matching the request exactly. No other fields changed. Not
+wired up as a filter yet — the request only asked for the swap, explicitly
+flagging "nothing should change yet" for this phase. Confirmed via a full
+page pass that every existing KPI/chart total is byte-for-byte identical to
+every prior verification in this file despite the row-count change, so
+whatever the refresh restructured, it didn't touch the aggregates anything
+here reads.
+
+**The "Select All" bug** (Denomination and Source gave different results
+for "default/untouched" vs "every box manually ticked"): traced to the
+2026-07-31 "Select All" fix itself. That version wrote every option's
+*explicit* value into the filter array when toggled on. `Denom` and
+`SourceFlag` both have real `N/A` rows in the data (cancellations, mostly)
+that are deliberately excluded from each dropdown's option list — so an
+explicit "every option" array never included `'N/A'`, and `matches()`
+correctly-but-unintentionally excluded those rows, while the untouched `[]`
+state (which bypasses the check entirely) correctly included them. Verified
+the exact size of the discrepancy against the data directly before touching
+code: excluding `Denom='N/A'` rows inflates the redemption total from
+₹4,993.79L to ₹6,073.98L (those rows are the negative cancellation
+amounts — excluding them un-nets the total); excluding `SourceFlag='N/A'`
+drops it to ₹1,244.49L (51,628 rows, mostly the entire Online head).
+
+**The real fix, and a UX request that came with it**: the request also
+asked for every filter to *look* pre-ticked by default, not just
+function as unrestricted — "should look and behave like a typical
+bank-dashboard multi-select". Solved both at once by decoupling what's
+*stored* from what's *displayed* in `Select.jsx`:
+  - `filters.<key>` stays exactly `[]` for "unrestricted" — `matches()` in
+    `FilterContext.jsx` is untouched, still just `selected.length === 0 ||
+    selected.includes(value)`. This is what fixes the bug: the filter
+    value pushed to `FilterContext` is normalized back to `[]` whenever
+    the resulting selection covers every real option, so it can never
+    again silently turn into an explicit list that excludes `N/A`.
+  - The *display* layer independently computes `effectiveSelected = value
+    .length === 0 ? everyRealOption : value`-derived subset, and passes
+    that to `<RSelect value={...}>` — so the checkbox list shows
+    everything ticked on first open (not just a text label reading "All"
+    next to an empty-looking list), and unticking one option lands on a
+    correctly-computed N-1 explicit array through react-select's own
+    diffing (no separate code path to fall out of sync with — this
+    directly satisfies the request's "deselecting one option should
+    narrow... not switch to some different select-all code path").
+  - `isClearable` had to be explicitly set `false`, not just omitted —
+    react-select defaults it to `true` regardless of `isMulti`, and once
+    `value` is never empty at the display layer, that default surfaced a
+    permanent clear-× on all 8 filters simultaneously (an unrequested
+    regression caught by screenshot, not by the functional checks, which
+    all still passed with the × sitting there uselessly).
+
+**Verified**: opening Denomination or Source now shows every checkbox
+pre-ticked; clicking "Select All" (now effectively a no-op landing back on
+the pre-ticked default) reproduces the exact unfiltered baseline for both
+— the specific bug the request called out. Manually unticking one
+Denomination option narrows the total as expected (confirms real per-item
+narrowing still works through the same path). Re-ran every fixture from
+the 2026-07-31 entries (Mode-filter fix, Month "Select All" vs. the
+MoM/QoQ/YoY anchor) with corrected interaction scripts — the *old* test
+scripts' "click an option to select it" pattern now does the opposite
+(unticks it, since everything starts ticked), which is expected given the
+new interaction model, not a regression; rewritten to untick every
+non-target option instead, and the results matched their original
+2026-07-31 figures exactly (Mode=Online-only + FY2025-26-only → still
+₹1,840.46L / 5,51,193). Zero console errors; clean production build.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
