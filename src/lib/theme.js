@@ -50,3 +50,17 @@ export const SOURCE_COLORS = {
   'Non-Source': '#c1502e',
   'N/A': '#9a9890'
 }
+
+// Overview's activation flow: 3 origin sources (same hues MODE_COLORS
+// already uses per-mode — "PVR Corporate" merges the Corporate + Online
+// modes, so it takes Corporate's color), each further split by CardType.
+export const ACTIVATION_SOURCE_COLORS = {
+  Cinema: '#c8952e',
+  Aggregators: '#3568b3',
+  'PVR Corporate': '#00805a'
+}
+
+export const CARD_TYPE_COLORS = {
+  Digital: '#9c3f8a',
+  Physical: '#6b7a1f'
+}

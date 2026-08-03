@@ -19,7 +19,7 @@ import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum } from '../lib/aggregate'
 import { computeComparisons } from '../lib/comparisons'
 import { orderBy, MODE_ORDER, REGION_ORDER } from '../lib/constants'
-import { COLORS, MODE_COLORS, REGION_COLORS, HEAD_COLORS } from '../lib/theme'
+import { COLORS, REGION_COLORS, HEAD_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS } from '../lib/theme'
 import { fmtLacs, fmtPct, fmtNumber, fmtLacsAxis, monthLabel } from '../lib/format'
 import Card from '../components/Card'
 import Kpi from '../components/Kpi'
@@ -27,6 +27,12 @@ import EmptyState from '../components/EmptyState'
 import ChartTooltip from '../components/ChartTooltip'
 import { FlowBox, FlowBranch } from '../components/FlowBox'
 import { PctLabel, donutLabel } from '../components/ChartLabels'
+
+const ACTIVATION_SOURCES = [
+  { key: 'PVR Corporate', modes: ['Corporate', 'Online'] },
+  { key: 'Aggregators', modes: ['Aggregator'] },
+  { key: 'Cinema', modes: ['Physical'] }
+]
 
 export default function Overview() {
   const { activationRows, redemptionRows, activationRowsAllMonths, redemptionRowsAllMonths, comparisonMonths } = useFilters()
@@ -47,23 +53,37 @@ export default function Overview() {
     [redemptionRowsAllMonths, comparisonMonths]
   )
 
-  // ---- Activation flow: Physical vs Non-Physical, then sub-splits ----
-  const physicalRows = activationRows.filter((r) => r.ActivationModeFinal === 'Physical')
-  const nonPhysicalRows = activationRows.filter((r) => r.ActivationModeFinal !== 'Physical')
-  const physicalTotal = sumBy(physicalRows, 'ActivationAmount')
-  const nonPhysicalTotal = sumBy(nonPhysicalRows, 'ActivationAmount')
-  const physicalCount = sumBy(physicalRows, 'ActivationCount')
-  const nonPhysicalCount = sumBy(nonPhysicalRows, 'ActivationCount')
-
-  const physicalByRegion = useMemo(() => {
-    const g = groupSum(physicalRows, 'Region_Clean', ['ActivationAmount', 'ActivationCount'])
-    return orderBy(g.map((r) => r.key), REGION_ORDER).map((k) => g.find((r) => r.key === k))
-  }, [physicalRows])
-
-  const nonPhysicalByMode = useMemo(() => {
-    const g = groupSum(nonPhysicalRows, 'ActivationModeFinal', ['ActivationAmount', 'ActivationCount'])
-    return orderBy(g.map((r) => r.key), MODE_ORDER).map((k) => g.find((r) => r.key === k))
-  }, [nonPhysicalRows])
+  // ---- Activation flow: 3 origin sources, each split by CardType ----
+  // "PVR Corporate" merges the Corporate + Online modes (per clarification:
+  // PVR Inox Online + PVR-Corporate together represent the Corporate
+  // channel's redeem/activate split). ActivationModeFinal has exactly 4
+  // values (Aggregator, Corporate, Online, Physical), so every row lands in
+  // exactly one of these 3 buckets — no leftover "Other" group.
+  const activationBySource = useMemo(() => {
+    return ACTIVATION_SOURCES.map(({ key, modes }) => {
+      const rows = activationRows.filter((r) => modes.includes(r.ActivationModeFinal))
+      const amount = sumBy(rows, 'ActivationAmount')
+      const count = sumBy(rows, 'ActivationCount')
+      const digitalRows = rows.filter((r) => r.CardType === 'Digital')
+      const physicalRows = rows.filter((r) => r.CardType === 'Physical')
+      let digitalAmount = sumBy(digitalRows, 'ActivationAmount')
+      let physicalAmount = sumBy(physicalRows, 'ActivationAmount')
+      // A handful of rows carry no CardType (small correction/adjustment
+      // entries, always zero count) — fold that remainder into whichever
+      // bucket is larger so Digital + Physical always sums exactly back to
+      // the source total, and neither bucket is ever pushed negative.
+      const unclassified = amount - digitalAmount - physicalAmount
+      if (digitalAmount >= physicalAmount) digitalAmount += unclassified
+      else physicalAmount += unclassified
+      return {
+        key,
+        amount,
+        count,
+        digital: { amount: digitalAmount, count: sumBy(digitalRows, 'ActivationCount') },
+        physical: { amount: physicalAmount, count: sumBy(physicalRows, 'ActivationCount') }
+      }
+    })
+  }, [activationRows])
 
   // ---- Redemption flow: by Head ----
   const byHead = useMemo(() => {
@@ -149,50 +169,41 @@ export default function Overview() {
         ) : (
           <div className="grid md:grid-cols-2 gap-8 md:gap-4 overflow-x-auto pb-2">
             {/* Activation flow */}
-            <div className="flex flex-col items-center min-w-[380px]">
+            <div className="flex flex-col items-center min-w-[460px]">
               <div className="text-xs font-semibold uppercase tracking-wide text-gold mb-2">Activation</div>
               <FlowBox label="Total Activation" amount={totalActivation} count={totalActivationCount} color={COLORS.activation} size="lg" />
               <FlowBranch>
-                <FlowBox
-                  label="Physical"
-                  amount={physicalTotal}
-                  count={physicalCount}
-                  pct={totalActivation ? (physicalTotal / totalActivation) * 100 : 0}
-                  color={MODE_COLORS.Physical}
-                />
-                <FlowBox
-                  label="Non-Physical"
-                  amount={nonPhysicalTotal}
-                  count={nonPhysicalCount}
-                  pct={totalActivation ? (nonPhysicalTotal / totalActivation) * 100 : 0}
-                  color={COLORS.redemption}
-                />
+                {activationBySource.map((src) => (
+                  <FlowBox
+                    key={src.key}
+                    label={src.key}
+                    amount={src.amount}
+                    count={src.count}
+                    pct={totalActivation ? (src.amount / totalActivation) * 100 : 0}
+                    color={ACTIVATION_SOURCE_COLORS[src.key]}
+                  />
+                ))}
               </FlowBranch>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full mt-6">
-                <div className="flex flex-col items-center gap-2 sm:border-r border-warmgray-border sm:pr-2">
-                  <div className="text-[10px] font-semibold uppercase text-warmgray-muted">by Region</div>
-                  {physicalByRegion.map((r) => (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full mt-6">
+                {activationBySource.map((src) => (
+                  <div key={src.key} className="flex flex-col items-center gap-2">
+                    <div className="text-[10px] font-semibold uppercase text-warmgray-muted">{src.key}</div>
                     <FlowBox
-                      key={r.key}
-                      label={r.key}
-                      amount={r.ActivationAmount}
-                      count={r.ActivationCount}
-                      color={REGION_COLORS[r.key] || COLORS.inkMuted}
+                      label="Digital"
+                      amount={src.digital.amount}
+                      count={src.digital.count}
+                      pct={src.amount ? (src.digital.amount / src.amount) * 100 : 0}
+                      color={CARD_TYPE_COLORS.Digital}
                     />
-                  ))}
-                </div>
-                <div className="flex flex-col items-center gap-2 sm:pl-2">
-                  <div className="text-[10px] font-semibold uppercase text-warmgray-muted">by Channel</div>
-                  {nonPhysicalByMode.map((r) => (
                     <FlowBox
-                      key={r.key}
-                      label={r.key}
-                      amount={r.ActivationAmount}
-                      count={r.ActivationCount}
-                      color={MODE_COLORS[r.key] || COLORS.inkMuted}
+                      label="Physical"
+                      amount={src.physical.amount}
+                      count={src.physical.count}
+                      pct={src.amount ? (src.physical.amount / src.amount) * 100 : 0}
+                      color={CARD_TYPE_COLORS.Physical}
                     />
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             </div>
 

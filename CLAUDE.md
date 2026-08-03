@@ -588,6 +588,51 @@ non-target option instead, and the results matched their original
 2026-07-31 figures exactly (Mode=Online-only + FY2025-26-only → still
 ₹1,840.46L / 5,51,193). Zero console errors; clean production build.
 
+## 2026-08-03 — Overview activation flow reworked around CardType
+
+Replaced the Overview page's Activation-side flow (was: Total Activation →
+Physical/Non-Physical → "by Region" / "by Channel" sub-lists) with a
+3-source × Digital/Physical tree using the newly-added `CardType` field:
+Total Activation → PVR Corporate / Aggregators / Cinema → each →
+Digital / Physical.
+
+**Source grouping**: `ActivationModeFinal` has exactly 4 values (Aggregator,
+Corporate, Online, Physical); per the request's clarification, "PVR
+Corporate" merges Corporate + Online (PVR Inox Online + PVR-Corporate
+together represent the Corporate channel's redeem/activate split),
+Aggregators = Aggregator, Cinema = Physical. Every row lands in exactly one
+of the 3 buckets — no leftover "Other" group, so the 3 sources always sum
+exactly to the top-level total by construction.
+
+**The one wrinkle**: ~134 activation rows carry `CardType = 'N/A'`
+(negative-amount, zero-count correction/adjustment entries, e.g.
+`ActivationAmount: -847500` — same netting pattern as the redemption
+cube's Cancellation rows, just not broken out as its own bucket in this
+schema). A strict Digital + Physical split would miss this remainder and
+fail the request's own "children sum back to the source total" check.
+Folded the remainder into whichever of Digital/Physical is the *larger*
+bucket for that source, per row — verified this never flips a bucket
+negative for the current data (Aggregators' real Physical amount is only
+₹4.31L against a −₹6.27L adjustment; folding into the dominant Digital
+bucket instead avoids a negative-looking node). Documented inline in
+`Overview.jsx` rather than silently dropping the remainder.
+
+**Colors** (`lib/theme.js`): `ACTIVATION_SOURCE_COLORS` reuses the exact
+hues `MODE_COLORS` already assigns per mode (Cinema/Physical → gold,
+Aggregators/Aggregator → blue, PVR Corporate → teal, Corporate's color)
+rather than inventing new ones. `CARD_TYPE_COLORS` (Digital → plum,
+Physical → olive) are the two categorical hues that weren't already in use
+by this diagram, kept consistent across all 3 branches so the color means
+the same thing everywhere in the tree.
+
+**Verified the request's own arithmetic check directly against the data**
+(not just visually): the 3 source totals sum to the grand total to the
+rupee (₹61,27,61,674.97 both ways), and each source's folded Digital +
+Physical sums exactly back to that source's own total, for all 3 sources.
+Small percentages are shown as computed, not rounded away — Aggregators'
+Physical share and Cinema's Digital share both render at sub-1-percent
+scale exactly like the request called for.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
