@@ -20,6 +20,7 @@ import { sumBy, groupSum } from '../lib/aggregate'
 import { computeComparisons } from '../lib/comparisons'
 import { orderBy, MODE_ORDER, REGION_ORDER } from '../lib/constants'
 import { COLORS, REGION_COLORS, HEAD_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS } from '../lib/theme'
+import { groupByActivationSource } from '../lib/activationSource'
 import { fmtLacs, fmtPct, fmtNumber, fmtLacsAxis, monthLabel } from '../lib/format'
 import Card from '../components/Card'
 import Kpi from '../components/Kpi'
@@ -27,12 +28,6 @@ import EmptyState from '../components/EmptyState'
 import ChartTooltip from '../components/ChartTooltip'
 import { FlowBox, FlowBranch } from '../components/FlowBox'
 import { PctLabel, donutLabel } from '../components/ChartLabels'
-
-const ACTIVATION_SOURCES = [
-  { key: 'PVR Corporate', modes: ['Corporate', 'Online'] },
-  { key: 'Aggregators', modes: ['Aggregator'] },
-  { key: 'Cinema', modes: ['Physical'] }
-]
 
 export default function Overview() {
   const { activationRows, redemptionRows, activationRowsAllMonths, redemptionRowsAllMonths, comparisonMonths } = useFilters()
@@ -54,36 +49,12 @@ export default function Overview() {
   )
 
   // ---- Activation flow: 3 origin sources, each split by CardType ----
-  // "PVR Corporate" merges the Corporate + Online modes (per clarification:
-  // PVR Inox Online + PVR-Corporate together represent the Corporate
-  // channel's redeem/activate split). ActivationModeFinal has exactly 4
-  // values (Aggregator, Corporate, Online, Physical), so every row lands in
-  // exactly one of these 3 buckets — no leftover "Other" group.
-  const activationBySource = useMemo(() => {
-    return ACTIVATION_SOURCES.map(({ key, modes }) => {
-      const rows = activationRows.filter((r) => modes.includes(r.ActivationModeFinal))
-      const amount = sumBy(rows, 'ActivationAmount')
-      const count = sumBy(rows, 'ActivationCount')
-      const digitalRows = rows.filter((r) => r.CardType === 'Digital')
-      const physicalRows = rows.filter((r) => r.CardType === 'Physical')
-      let digitalAmount = sumBy(digitalRows, 'ActivationAmount')
-      let physicalAmount = sumBy(physicalRows, 'ActivationAmount')
-      // A handful of rows carry no CardType (small correction/adjustment
-      // entries, always zero count) — fold that remainder into whichever
-      // bucket is larger so Digital + Physical always sums exactly back to
-      // the source total, and neither bucket is ever pushed negative.
-      const unclassified = amount - digitalAmount - physicalAmount
-      if (digitalAmount >= physicalAmount) digitalAmount += unclassified
-      else physicalAmount += unclassified
-      return {
-        key,
-        amount,
-        count,
-        digital: { amount: digitalAmount, count: sumBy(digitalRows, 'ActivationCount') },
-        physical: { amount: physicalAmount, count: sumBy(physicalRows, 'ActivationCount') }
-      }
-    })
-  }, [activationRows])
+  // See lib/activationSource.js for the shared bucketing logic (also used
+  // by Activation.jsx / RedemptionBoxOffice.jsx / RedemptionFnb.jsx).
+  const activationBySource = useMemo(
+    () => groupByActivationSource(activationRows, { modeField: 'ActivationModeFinal', amountField: 'ActivationAmount', countField: 'ActivationCount' }),
+    [activationRows]
+  )
 
   // ---- Redemption flow: by Head ----
   const byHead = useMemo(() => {

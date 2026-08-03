@@ -14,16 +14,22 @@ import {
   LabelList
 } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
-import { sumBy, groupSum, pivot } from '../lib/aggregate'
+import { sumBy, groupSum } from '../lib/aggregate'
 import { computeComparisons } from '../lib/comparisons'
-import { orderBy, MODE_ORDER, REGION_ORDER, WEEKDAY_ORDER } from '../lib/constants'
-import { COLORS, MODE_COLORS, REGION_COLORS } from '../lib/theme'
+import { ACTIVATION_SOURCES, groupByActivationSource, pivotByActivationSource } from '../lib/activationSource'
+import { orderBy, REGION_ORDER, WEEKDAY_ORDER } from '../lib/constants'
+import { COLORS, REGION_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS } from '../lib/theme'
 import { fmtLacs, fmtNumber, fmtPct, fmtLacsAxis, monthLabel } from '../lib/format'
 import Card from '../components/Card'
 import Kpi from '../components/Kpi'
 import EmptyState from '../components/EmptyState'
 import ChartTooltip from '../components/ChartTooltip'
 import { AmountLabel } from '../components/ChartLabels'
+
+// Kpi's accent prop only has 4 fixed colors; map each source to whichever
+// reads closest to its ACTIVATION_SOURCE_COLORS hex (Aggregators' blue has
+// no existing accent slot, added to Kpi.jsx alongside gold/teal/coral/navy).
+const SOURCE_ACCENT = { 'PVR Corporate': 'teal', Aggregators: 'blue', Cinema: 'gold' }
 
 export default function Activation() {
   const { activationRows, activationRowsAllMonths, comparisonMonths } = useFilters()
@@ -34,28 +40,40 @@ export default function Activation() {
     () => computeComparisons(activationRowsAllMonths, 'ActivationAmount', comparisonMonths),
     [activationRowsAllMonths, comparisonMonths]
   )
-  const physicalRows = useMemo(() => activationRows.filter((r) => r.ActivationModeFinal === 'Physical'), [activationRows])
-  const physicalTotal = sumBy(physicalRows, 'ActivationAmount')
-  const physicalCount = sumBy(physicalRows, 'ActivationCount')
-  const nonPhysicalTotal = total - physicalTotal
-  const nonPhysicalCount = totalCount - physicalCount
 
+  // ---- 3-source split (PVR Corporate / Aggregators / Cinema), each by CardType ----
+  const bySource = useMemo(
+    () => groupByActivationSource(activationRows, { modeField: 'ActivationModeFinal', amountField: 'ActivationAmount', countField: 'ActivationCount' }),
+    [activationRows]
+  )
+  const sourceChartData = useMemo(
+    () =>
+      bySource.map((s) => ({
+        key: s.key,
+        digitalAmount: s.digital.amount,
+        physicalAmount: s.physical.amount,
+        digitalCount: s.digital.count,
+        physicalCount: s.physical.count
+      })),
+    [bySource]
+  )
+
+  // Cinema = ActivationModeFinal === 'Physical' (same rows the old "Physical
+  // Activation — Regional Split" chart used, just renamed to match the
+  // 3-source model's label).
+  const cinemaRows = useMemo(() => activationRows.filter((r) => r.ActivationModeFinal === 'Physical'), [activationRows])
   const regionalSplit = useMemo(() => {
-    const g = groupSum(physicalRows, 'Region_Clean', ['ActivationAmount', 'ActivationCount'])
+    const g = groupSum(cinemaRows, 'Region_Clean', ['ActivationAmount', 'ActivationCount'])
     return orderBy(g.map((r) => r.key), REGION_ORDER).map((k) => g.find((r) => r.key === k))
-  }, [physicalRows])
-
-  const channelSplit = useMemo(() => {
-    const rows = activationRows.filter((r) => r.ActivationModeFinal !== 'Physical')
-    const g = groupSum(rows, 'ActivationModeFinal', ['ActivationAmount', 'ActivationCount'])
-    return orderBy(g.map((r) => r.key), MODE_ORDER).map((k) => g.find((r) => r.key === k))
-  }, [activationRows])
+  }, [cinemaRows])
 
   const monthTrend = useMemo(() => {
-    const p = pivot(activationRows, 'YearMonth', 'ActivationModeFinal', 'ActivationAmount', 'ActivationCount')
-    return p
-      .sort((a, b) => (a.x > b.x ? 1 : -1))
-      .map((r) => ({ ...r, label: monthLabel(r.x) }))
+    const p = pivotByActivationSource(activationRows, 'YearMonth', {
+      modeField: 'ActivationModeFinal',
+      amountField: 'ActivationAmount',
+      countField: 'ActivationCount'
+    })
+    return p.sort((a, b) => (a.x > b.x ? 1 : -1)).map((r) => ({ ...r, label: monthLabel(r.x) }))
   }, [activationRows])
 
   const weekdayTrend = useMemo(() => {
@@ -64,10 +82,11 @@ export default function Activation() {
   }, [activationRows])
 
   const hasData = activationRows.length > 0
+  const hasSourceData = sourceChartData.some((s) => s.digitalAmount || s.physicalAmount)
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <Kpi
           label="Total Activation"
           value={fmtLacs(total)}
@@ -79,23 +98,20 @@ export default function Activation() {
             { label: 'YoY', pct: deltas.yoy }
           ]}
         />
-        <Kpi
-          label="Physical"
-          value={fmtLacs(physicalTotal)}
-          sub={`${fmtNumber(physicalCount)} cards · ${fmtPct(total ? (physicalTotal / total) * 100 : 0)}`}
-          accent="gold"
-        />
-        <Kpi
-          label="Non-Physical"
-          value={fmtLacs(nonPhysicalTotal)}
-          sub={`${fmtNumber(nonPhysicalCount)} cards · ${fmtPct(total ? (nonPhysicalTotal / total) * 100 : 0)}`}
-          accent="teal"
-        />
+        {bySource.map((s) => (
+          <Kpi
+            key={s.key}
+            label={s.key}
+            value={fmtLacs(s.amount)}
+            sub={`${fmtNumber(s.count)} cards · ${fmtPct(total ? (s.amount / total) * 100 : 0)}`}
+            accent={SOURCE_ACCENT[s.key]}
+          />
+        ))}
         <Kpi label="Avg Ticket Size" value={totalCount ? fmtLacs(total / totalCount, 4) : '—'} sub="per card, ₹ Lacs" accent="navy" />
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
-        <Card title="Physical Activation — Regional Split" subtitle="Activation amount by region">
+        <Card title="Cinema Activation — Regional Split" subtitle="Activation amount by region">
           {regionalSplit.length === 0 ? (
             <EmptyState />
           ) : (
@@ -116,29 +132,34 @@ export default function Activation() {
           )}
         </Card>
 
-        <Card title="Non-Physical Activation — Channel Split" subtitle="Aggregator / Corporate / Online">
-          {channelSplit.length === 0 ? (
+        <Card title="Activation by Source" subtitle="PVR Corporate / Aggregators / Cinema, split by card type, ₹ Lacs">
+          {!hasSourceData ? (
             <EmptyState />
           ) : (
             <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={channelSplit} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
+              <BarChart data={sourceChartData} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
                 <XAxis dataKey="key" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
                 <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
-                <Tooltip content={<ChartTooltip countField="ActivationCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
-                <Bar dataKey="ActivationAmount" name="Activation" radius={[4, 4, 0, 0]} maxBarSize={56}>
-                  <LabelList dataKey="ActivationAmount" content={AmountLabel} />
-                  {channelSplit.map((r) => (
-                    <Cell key={r.key} fill={MODE_COLORS[r.key] || COLORS.teal} />
-                  ))}
-                </Bar>
+                <Tooltip
+                  content={
+                    <ChartTooltip
+                      countField={(p) => (p.dataKey === 'digitalAmount' ? 'digitalCount' : 'physicalCount')}
+                      countUnit="cards"
+                    />
+                  }
+                  cursor={{ fill: 'rgba(27,36,48,0.04)' }}
+                />
+                <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
+                <Bar dataKey="digitalAmount" name="Digital" stackId="source" fill={CARD_TYPE_COLORS.Digital} maxBarSize={64} />
+                <Bar dataKey="physicalAmount" name="Physical" stackId="source" fill={CARD_TYPE_COLORS.Physical} radius={[4, 4, 0, 0]} maxBarSize={64} />
               </BarChart>
             </ResponsiveContainer>
           )}
         </Card>
       </div>
 
-      <Card title="Month-wise Activation Trend" subtitle="By channel, ₹ Lacs">
+      <Card title="Month-wise Activation Trend" subtitle="By source, ₹ Lacs">
         {!hasData ? (
           <EmptyState />
         ) : (
@@ -149,13 +170,13 @@ export default function Activation() {
               <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
               <Tooltip content={<ChartTooltip countField={(p) => `${p.dataKey}__count`} countUnit="cards" />} />
               <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
-              {MODE_ORDER.map((mode) => (
+              {ACTIVATION_SOURCES.map(({ key }) => (
                 <Line
-                  key={mode}
+                  key={key}
                   type="monotone"
-                  dataKey={mode}
-                  name={mode}
-                  stroke={MODE_COLORS[mode]}
+                  dataKey={key}
+                  name={key}
+                  stroke={ACTIVATION_SOURCE_COLORS[key]}
                   strokeWidth={3}
                   dot={{ r: 3 }}
                   activeDot={{ r: 6 }}

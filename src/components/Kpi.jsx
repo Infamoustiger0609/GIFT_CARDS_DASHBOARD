@@ -5,7 +5,8 @@ const ACCENTS = {
   gold: 'border-l-gold text-gold',
   teal: 'border-l-teal text-teal',
   coral: 'border-l-coral text-coral',
-  navy: 'border-l-navy text-navy'
+  navy: 'border-l-navy text-navy',
+  blue: 'border-l-cat-blue text-cat-blue'
 }
 
 export default function Kpi({ label, value, sub, accent = 'navy', deltas }) {

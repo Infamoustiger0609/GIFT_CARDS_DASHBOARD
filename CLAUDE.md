@@ -633,6 +633,70 @@ Small percentages are shown as computed, not rounded away — Aggregators'
 Physical share and Cinema's Digital share both render at sub-1-percent
 scale exactly like the request called for.
 
+## 2026-08-03 — Rolled out the 3-source activation model to 3 more pages
+
+Extracted Overview.jsx's `ACTIVATION_SOURCES` + bucketing logic into
+`lib/activationSource.js` (`groupByActivationSource`, `pivotByActivationSource`,
+`sourceOf`) so Activation.jsx, RedemptionBoxOffice.jsx, and RedemptionFnb.jsx
+share exactly one implementation — no risk of the pages drifting apart on
+the unclassified-remainder-folding rule (see the 2026-08-03 activation-flow
+entry above) the way there'd be if each page re-derived it.
+
+**Activation.jsx**: KPI grid went from 4 cards (Total, Physical, Non-Physical,
+Avg Ticket Size) to 5 (Total, PVR Corporate, Aggregators, Cinema, Avg Ticket
+Size) — grid breakpoints widened to `sm:grid-cols-3 lg:grid-cols-5` to fit
+the extra card. Added a `blue` accent to `Kpi.jsx` (`cat.blue`, already in
+`tailwind.config.js`) since Aggregators' color didn't have an existing slot
+among gold/teal/coral/navy. "Physical Activation — Regional Split" renamed
+to "Cinema Activation — Regional Split" (identical underlying filter —
+`ActivationModeFinal === 'Physical'` — just relabeled to match the new
+model, per the request's "same filter, renamed" option). "Non-Physical
+Activation — Channel Split" replaced by "Activation by Source": a stacked
+bar (Digital/Physical per source) rather than a bar-in-bar or a second row
+of small charts — reads cleanest at this chart size and keeps parity with
+Overview's per-source Digital/Physical split. Month-wise trend now plots 3
+source lines instead of 4 mode lines, via `pivotByActivationSource`.
+
+**RedemptionBoxOffice.jsx / RedemptionFnb.jsx**: "by Mode" (grouped by the
+raw `ActivationMode` origin-channel field, colored via `MODE_COLORS`)
+replaced with "by Source" — the same 3-bucket model, each stacked by
+CardType. The wrinkle: on the redemption cube, `ActivationMode` also
+carries `"Pre-existing (activated before Apr 2024)"` and `"N/A"` values
+that don't map to any of the 3 sources, and unlike the activation cube
+these aren't negligible (~5–6% of each head's total: ₹50.2L of Box
+Office's ₹803.3L, ₹60.5L of F&B's ₹1,472.5L). Rather than silently
+dropping that remainder or excluding it from the chart, added it as an
+explicit 4th "Pre-existing" bar in `CATEGORICAL_GRAY` (the reserved
+"Other/Unassigned" color) — same "kept as a real category, not dropped"
+convention already documented for `NO_SITE` and the Format/Category long
+tails. Verified directly against the data: for both Box Office and F&B,
+each of the 3 sources' Digital+Physical sums exactly to that source's own
+total, and the 3 sources plus the Pre-existing remainder sum exactly to
+each head's grand total (checked to the rupee, not just visually).
+
+**Stacked-bar rounding**: initially rounded the last-declared segment's top
+corners (standard "round only the outermost segment" practice), but for
+the 4-bucket redemption charts the 3 main sources' "Pre-existing" segment
+is usually zero height — rounding a zero-height segment doesn't round
+anything visible. Removed the `radius` prop entirely from these 3-series
+stacks rather than add per-category conditional rounding logic for a
+secondary chart; Activation.jsx's 2-series stack (Digital always at the
+bottom, Physical always on top and never zero in the current data) keeps
+its rounded top since that edge case doesn't apply there.
+
+**Confirmed before removing anything**: `MODE_ORDER`/`MODE_COLORS` in
+`constants.js`/`theme.js` are untouched — Overview's "Redemption % by
+Mode" chart still legitimately joins `ActivationModeFinal` against the
+raw `ActivationMode` field (a different, already-documented question:
+tracing redemption back to activation origin, not the 3-source model) and
+was out of scope for this rollout.
+
+Verified: all 4 pages screenshot cleanly with zero console errors: KPI
+grid, stacked source/CardType charts, and the 3-line trend all render
+with correct colors and visible small percentages (Aggregators' ~0.2%
+Physical sliver, Cinema's ~2% Digital sliver, both on Activation.jsx and
+the redemption pages); clean production build.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
