@@ -1,6 +1,8 @@
 import React from 'react'
 import RSelect, { components } from 'react-select'
 
+const ALL_VALUE = '__select_all__'
+
 const styles = {
   control: (base, state) => ({
     ...base,
@@ -47,7 +49,25 @@ function ValueContainer({ children, ...props }) {
   )
 }
 
+// "Select All" is an action row, not a tracked checkbox value — clicking it
+// resets the filter to unrestricted (the existing empty-array convention,
+// same as never touching the filter) rather than writing every option's
+// value into the array. That keeps it consistent with the rest of the app:
+// empty already means "matches everything" everywhere filters are read.
 function Option(props) {
+  if (props.data.value === ALL_VALUE) {
+    return (
+      <div
+        onMouseDown={(e) => {
+          e.preventDefault()
+          props.selectProps.onSelectAll()
+        }}
+        className="px-3 py-2 text-xs font-bold text-gold uppercase tracking-wide cursor-pointer hover:bg-gold-light border-b border-warmgray-border"
+      >
+        Select All
+      </div>
+    )
+  }
   return (
     <components.Option {...props}>
       <input type="checkbox" checked={props.isSelected} onChange={() => {}} className="accent-gold" />
@@ -58,6 +78,7 @@ function Option(props) {
 
 export default function Select({ label, value, options, onChange }) {
   const rsOptions = options.map((o) => ({ value: o.value ?? o, label: o.label ?? o }))
+  const menuOptions = [{ value: ALL_VALUE, label: 'Select All' }, ...rsOptions]
   const selected = rsOptions.filter((o) => value.includes(o.value))
   return (
     <div className="flex flex-col gap-0.5 w-full min-w-0">
@@ -69,8 +90,9 @@ export default function Select({ label, value, options, onChange }) {
         closeMenuOnSelect={false}
         hideSelectedOptions={false}
         value={selected}
-        options={rsOptions}
-        onChange={(opts) => onChange((opts || []).map((o) => o.value))}
+        options={menuOptions}
+        onChange={(opts) => onChange((opts || []).filter((o) => o.value !== ALL_VALUE).map((o) => o.value))}
+        onSelectAll={() => onChange([])}
         styles={styles}
         isSearchable={false}
         components={{ ValueContainer, Option, MultiValue: () => null }}

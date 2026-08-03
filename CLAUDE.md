@@ -461,6 +461,42 @@ every other count on the site. Baseline (no filters) KPIs unchanged
 (Revenue ₹6,127.62L, matching every prior verification pass); zero
 console errors; clean production build.
 
+## 2026-07-31 — "Select All" option in every filter dropdown
+
+Added a "Select All" row at the top of every filter's option list
+(`components/Select.jsx`), gold/bold, divider below it, above the regular
+checkbox rows.
+
+**Design choice — action, not a tracked value**: clicking it doesn't write
+every option's value into the filter array; it calls `onChange([])`,
+resetting the filter to the existing empty-array "unrestricted" convention
+every filter in this app already uses. Considered making it a real toggle
+(checked when `value.length === options.length`, unchecked otherwise) but
+that needed a second, disproportionately fiddly state (distinguishing "all
+selected" from "nothing selected but nothing to hide" — plus a `Month`
+filter with all months explicitly listed would break the MoM/QoQ/YoY
+`comparisonMonths` default-latest-anchor logic, which only kicks in when
+`filters.month.length === 0`). An action row that resets to empty sidesteps
+both problems and is functionally identical for every filter that reads
+through `matches()` — empty already means "matches everything" everywhere
+in `FilterContext.jsx`.
+
+Implemented as a synthetic `{value: '__select_all__', ...}` entry prepended
+to each dropdown's option list; the custom `Option` renderer intercepts it
+and renders a plain non-checkbox row with its own `onMouseDown` (not
+`onClick` — react-select's own mousedown-based blur/close handling can
+swallow a plain click on a custom element) calling a `onSelectAll` prop
+threaded through to the `<RSelect>` element (react-select forwards unknown
+props into `selectProps`, which is how custom option components reach it).
+The real onChange handler strips the sentinel value out before calling the
+filter's `onChange`, so it can never leak into `filters.<key>`.
+
+Verified: Region = North+South narrowed Revenue to ₹5,183.97L; opening
+Region again and clicking "Select All" reset it to ₹6,127.62L — the exact
+unfiltered baseline every prior verification pass in this file has
+confirmed — and the control's closed-state summary read "All" again.
+Zero console errors; clean production build.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
