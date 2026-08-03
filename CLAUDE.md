@@ -413,6 +413,54 @@ sub-label reads "81% of total activation" matching the prior
 ₹96.98L, Uptake scales down proportionally, sub-label recomputes to 82%);
 zero console errors; clean production build.
 
+## 2026-07-31 — Bug fix: Mode filter used the wrong field on the redemption side
+
+**The bug**: the global Mode filter's redemption-side check was
+`row.ActivationMode` — the origin channel of the card being redeemed —
+instead of `row.RedemptionModeFinal` — where *this specific redemption
+transaction* happened (Online vs. Physical/Cinema, from that row's own
+Outlet). Activation and redemption are independent questions (a
+Corporate-activated card can be redeemed online, and vice versa), so
+chaining the redemption-side Mode filter off the activation-origin field
+was wrong. Confirmed with the data directly before touching code:
+`ActivationMode='Online'` + FY2025-26 on the redemption cube → ₹0.58L /
+163 rows; `RedemptionModeFinal='Online'` + FY2025-26 → ₹1,840.46L / 1,805
+rows — the fix target the request specified almost exactly.
+
+**The fix** (`lib/FilterContext.jsx#filterRedemption`): one-line change,
+`matches(filters.mode, row.ActivationMode)` → `matches(filters.mode,
+row.RedemptionModeFinal)`. Activation-side filtering
+(`filterActivation` against `ActivationModeFinal`) was already correct
+and untouched. `ActivationMode` stays on every redemption row — the
+existing "by Mode" breakdown charts (`RedemptionBoxOffice`/`RedemptionFnb`
+"by Mode" bars, subtitled "Origin channel of the redeemed card") and the
+Overview "Redemption % by Mode" chart's `ActivationModeFinal` ↔
+`ActivationMode` join both intentionally use it for a genuinely different
+question ("which origin channel does this redemption trace back to") —
+those were correct before this bug and stay as-is; only the *global Mode
+filter's* redemption-side field changed.
+
+**Data note**: the request described `ActivationModeFinal` as having 5
+values including "PVR Director's Cut" — the actual data has 4 (Aggregator,
+Corporate, Online, Physical), no fifth value. Didn't chase this since the
+request said no data changes were needed and the fix is field-selection
+logic, not a value-list problem; flagging in case that value is expected
+in a future data refresh.
+
+**Verified**: Total Redemption (net) at Mode=Online + FY2025-26 now reads
+₹1,840.46L — matches the request's ~₹1,840L target almost exactly. The
+displayed count (5,51,193) doesn't match the request's ~444,475 exactly —
+traced this to the existing app-wide convention (documented in the
+2026-07-31 "Denomination filter" entry above) of summing `RedemptionCount`
+across *all* matching Head values including Cancellation, whereas 444,475
+is the Head='Online'-only count with the 1,06,718 cancellation-count
+excluded (551,193 − 106,718 = 444,475, confirmed by hand). Left the
+existing sum-everything convention alone rather than special-casing this
+one filter combination, since changing it would be inconsistent with
+every other count on the site. Baseline (no filters) KPIs unchanged
+(Revenue ₹6,127.62L, matching every prior verification pass); zero
+console errors; clean production build.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

@@ -63,7 +63,13 @@ function filterActivation(cube, filters, opts) {
 function filterRedemption(cube, filters, opts) {
   return cube.filter((row) => {
     if (!passesCommon(row, filters, opts)) return false
-    if (!matches(filters.mode, row.ActivationMode)) return false
+    // Mode filters by *this redemption's own* channel (RedemptionModeFinal:
+    // Online/Physical, based on the transaction's Outlet), not by where the
+    // card was originally activated (ActivationMode) — those are two
+    // independent questions. ActivationMode stays on the row for anyone
+    // building a separate "origin channel" lens later; it must not drive
+    // the main Mode filter's Online/Physical decision for redemption rows.
+    if (!matches(filters.mode, row.RedemptionModeFinal)) return false
     if (!matches(filters.source, row.SourceFlag)) return false
     if (filters.ticketFnb.length > 0) {
       const bucket = ticketFnbBucket(row.Head)
