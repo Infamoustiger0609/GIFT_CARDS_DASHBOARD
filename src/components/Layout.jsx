@@ -8,7 +8,8 @@ const TABS = [
   { to: '/activation', label: 'Activation' },
   { to: '/redemption/box-office', label: 'Redemption · Box Office' },
   { to: '/redemption/fnb', label: 'Redemption · F&B' },
-  { to: '/trends', label: 'Trends' }
+  { to: '/trends', label: 'Trends' },
+  { to: '/cancel-redeem', label: 'Cancel Redeem' }
 ]
 
 function DataStatus({ isLoading, error }) {
@@ -37,10 +38,13 @@ export default function Layout() {
           separately would need a hardcoded offset equal to the header's
           height, which itself changes when the nav wraps on narrow screens. */}
       <div className="sticky top-0 z-40">
-        <header className="bg-navy text-white shadow-md">
-          <div className="max-w-[1400px] mx-auto px-4 md:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
+        <header className="bg-ribbon text-white shadow-md">
+          <div className="max-w-[1400px] mx-auto px-4 md:px-6 py-2 flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3">
-              <img src="/pvr-inox-logo.jpeg" alt="PVR INOX" className="h-8 w-auto rounded-sm" />
+              {/* Sized to fill the ribbon's height — the JPEG's own
+                  background matches bg-ribbon exactly (see tailwind.config.js),
+                  so no border/rounding is needed to hide a seam. */}
+              <img src="/pvr-inox-logo.jpeg" alt="PVR INOX" className="h-14 md:h-16 w-auto" />
               <div className="border-l border-white/20 pl-3 hidden sm:block">
                 <h1 className="font-serif text-sm font-bold leading-tight">Gift Card</h1>
                 <p className="text-[11px] text-white/60 leading-tight tracking-wide uppercase">Analytics</p>

@@ -1,8 +1,7 @@
 import React, { useMemo } from 'react'
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, LabelList } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
-import { groupSum } from '../lib/aggregate'
-import { WEEKEND_DAYS } from '../lib/constants'
+import { groupSum, weekSlotBreakdown } from '../lib/aggregate'
 import { COLORS } from '../lib/theme'
 import { monthLabel, fmtLacsAxis, fmtNumber } from '../lib/format'
 import Card from '../components/Card'
@@ -37,30 +36,7 @@ export default function Trends() {
     }))
   }, [activationRows, redemptionRows])
 
-  const weekSlot = useMemo(() => {
-    const slot = (weekday) => (WEEKEND_DAYS.has(weekday) ? 'Weekend' : 'Weekday')
-    const actWeekday = activationRows.filter((r) => slot(r.Weekday) === 'Weekday')
-    const actWeekend = activationRows.filter((r) => slot(r.Weekday) === 'Weekend')
-    const redWeekday = redemptionRows.filter((r) => slot(r.Weekday) === 'Weekday')
-    const redWeekend = redemptionRows.filter((r) => slot(r.Weekday) === 'Weekend')
-    const sum = (rows, f) => rows.reduce((s, r) => s + (r[f] || 0), 0)
-    return [
-      {
-        slot: 'Weekday',
-        Activation: sum(actWeekday, 'ActivationAmount'),
-        ActivationCount: sum(actWeekday, 'ActivationCount'),
-        Redemption: sum(redWeekday, 'RedemptionAmount'),
-        RedemptionCount: sum(redWeekday, 'RedemptionCount')
-      },
-      {
-        slot: 'Weekend',
-        Activation: sum(actWeekend, 'ActivationAmount'),
-        ActivationCount: sum(actWeekend, 'ActivationCount'),
-        Redemption: sum(redWeekend, 'RedemptionAmount'),
-        RedemptionCount: sum(redWeekend, 'RedemptionCount')
-      }
-    ]
-  }, [activationRows, redemptionRows])
+  const weekSlot = useMemo(() => weekSlotBreakdown(activationRows, redemptionRows), [activationRows, redemptionRows])
 
   const hasData = activationRows.length > 0 || redemptionRows.length > 0
 
@@ -74,7 +50,14 @@ export default function Trends() {
             <LineChart data={monthAmountTrend} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
+              <YAxis
+                tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                axisLine={false}
+                tickLine={false}
+                width={64}
+                tickFormatter={fmtLacsAxis}
+                label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+              />
               <Tooltip
                 content={
                   <ChartTooltip
@@ -117,7 +100,14 @@ export default function Trends() {
             <BarChart data={weekSlot} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
               <XAxis dataKey="slot" tick={{ fontSize: 12, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
+              <YAxis
+                tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                axisLine={false}
+                tickLine={false}
+                width={64}
+                tickFormatter={fmtLacsAxis}
+                label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+              />
               <Tooltip
                 content={
                   <ChartTooltip

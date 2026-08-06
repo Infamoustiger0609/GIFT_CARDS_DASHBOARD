@@ -16,9 +16,9 @@ import {
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum } from '../lib/aggregate'
 import { computeComparisons } from '../lib/comparisons'
-import { ACTIVATION_SOURCES, groupByActivationSource, pivotByActivationSource } from '../lib/activationSource'
-import { orderBy, REGION_ORDER, WEEKDAY_ORDER } from '../lib/constants'
-import { COLORS, REGION_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS } from '../lib/theme'
+import { ACTIVATION_SOURCES, groupByActivationSource, pivotByActivationSource, sourceOf } from '../lib/activationSource'
+import { orderBy, REGION_ORDER, WEEKDAY_ORDER, regionLabel } from '../lib/constants'
+import { COLORS, REGION_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS, categoricalColor } from '../lib/theme'
 import { fmtLacs, fmtNumber, fmtPct, fmtLacsAxis, monthLabel } from '../lib/format'
 import Card from '../components/Card'
 import Kpi from '../components/Kpi'
@@ -29,7 +29,7 @@ import { AmountLabel } from '../components/ChartLabels'
 // Kpi's accent prop only has 4 fixed colors; map each source to whichever
 // reads closest to its ACTIVATION_SOURCE_COLORS hex (Aggregators' blue has
 // no existing accent slot, added to Kpi.jsx alongside gold/teal/coral/navy).
-const SOURCE_ACCENT = { 'PVR Corporate': 'teal', Aggregators: 'blue', Cinema: 'gold' }
+const SOURCE_ACCENT = { Corporate: 'teal', Aggregators: 'blue', Cinema: 'gold' }
 
 export default function Activation() {
   const { activationRows, activationRowsAllMonths, comparisonMonths } = useFilters()
@@ -41,11 +41,24 @@ export default function Activation() {
     [activationRowsAllMonths, comparisonMonths]
   )
 
-  // ---- 3-source split (PVR Corporate / Aggregators / Cinema), each by CardType ----
+  // ---- 3-source split (Aggregators / Corporate / Cinema), each by CardType ----
   const bySource = useMemo(
     () => groupByActivationSource(activationRows, { modeField: 'ActivationModeFinal', amountField: 'ActivationAmount', countField: 'ActivationCount' }),
     [activationRows]
   )
+
+  // Per-source MoM/QoQ/YoY deltas, same "AllMonths" pool the headline KPI's
+  // own deltas use, just further split by sourceOf() first — bringing
+  // these up to the same info-parity level as the headline KPI (which
+  // already had deltas) and every other "% but no deltas" KPI on this page.
+  const sourceDeltas = useMemo(() => {
+    const map = {}
+    for (const s of ACTIVATION_SOURCES) {
+      const rows = activationRowsAllMonths.filter((r) => sourceOf(r.ActivationModeFinal) === s.key)
+      map[s.key] = computeComparisons(rows, 'ActivationAmount', comparisonMonths)
+    }
+    return map
+  }, [activationRowsAllMonths, comparisonMonths])
   const sourceChartData = useMemo(
     () =>
       bySource.map((s) => ({
@@ -105,6 +118,11 @@ export default function Activation() {
             value={fmtLacs(s.amount)}
             sub={`${fmtNumber(s.count)} cards · ${fmtPct(total ? (s.amount / total) * 100 : 0)}`}
             accent={SOURCE_ACCENT[s.key]}
+            deltas={[
+              { label: 'MoM', pct: sourceDeltas[s.key]?.mom },
+              { label: 'QoQ', pct: sourceDeltas[s.key]?.qoq },
+              { label: 'YoY', pct: sourceDeltas[s.key]?.yoy }
+            ]}
           />
         ))}
         <Kpi label="Avg Ticket Size" value={totalCount ? fmtLacs(total / totalCount, 4) : '—'} sub="per card, ₹ Lacs" accent="navy" />
@@ -118,9 +136,20 @@ export default function Activation() {
             <ResponsiveContainer width="100%" height={280}>
               <BarChart data={regionalSplit} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
-                <XAxis dataKey="key" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
-                <Tooltip content={<ChartTooltip countField="ActivationCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+                <XAxis dataKey="key" tickFormatter={regionLabel} tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+                <YAxis
+                  tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={64}
+                  tickFormatter={fmtLacsAxis}
+                  label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                />
+                <Tooltip
+                  content={<ChartTooltip countField="ActivationCount" countUnit="cards" />}
+                  labelFormatter={regionLabel}
+                  cursor={{ fill: 'rgba(27,36,48,0.04)' }}
+                />
                 <Bar dataKey="ActivationAmount" name="Activation" radius={[4, 4, 0, 0]} maxBarSize={56}>
                   <LabelList dataKey="ActivationAmount" content={AmountLabel} />
                   {regionalSplit.map((r) => (
@@ -132,7 +161,7 @@ export default function Activation() {
           )}
         </Card>
 
-        <Card title="Activation by Source" subtitle="PVR Corporate / Aggregators / Cinema, split by card type, ₹ Lacs">
+        <Card title="Activation by Source" subtitle="Aggregators / Corporate / Cinema, split by card type, ₹ Lacs">
           {!hasSourceData ? (
             <EmptyState />
           ) : (
@@ -140,7 +169,14 @@ export default function Activation() {
               <BarChart data={sourceChartData} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
                 <XAxis dataKey="key" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
+                <YAxis
+                  tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={64}
+                  tickFormatter={fmtLacsAxis}
+                  label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                />
                 <Tooltip
                   content={
                     <ChartTooltip
@@ -167,7 +203,14 @@ export default function Activation() {
             <LineChart data={monthTrend} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
+              <YAxis
+                tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                axisLine={false}
+                tickLine={false}
+                width={64}
+                tickFormatter={fmtLacsAxis}
+                label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+              />
               <Tooltip content={<ChartTooltip countField={(p) => `${p.dataKey}__count`} countUnit="cards" />} />
               <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
               {ACTIVATION_SOURCES.map(({ key }) => (
@@ -196,12 +239,19 @@ export default function Activation() {
             <BarChart data={weekdayTrend} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
               <XAxis dataKey="key" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={64} tickFormatter={fmtLacsAxis} />
+              <YAxis
+                tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                axisLine={false}
+                tickLine={false}
+                width={64}
+                tickFormatter={fmtLacsAxis}
+                label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+              />
               <Tooltip content={<ChartTooltip countField="ActivationCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
-              <Bar dataKey="ActivationAmount" name="Activation" fill={COLORS.activationDark} radius={[4, 4, 0, 0]} maxBarSize={56}>
+              <Bar dataKey="ActivationAmount" name="Activation" radius={[4, 4, 0, 0]} maxBarSize={56}>
                 <LabelList dataKey="ActivationAmount" content={AmountLabel} />
-                {weekdayTrend.map((r) => (
-                  <Cell key={r.key} fill={r.key === 'Saturday' || r.key === 'Sunday' ? COLORS.redemption : COLORS.activationDark} />
+                {weekdayTrend.map((r, i) => (
+                  <Cell key={r.key} fill={categoricalColor(i)} />
                 ))}
               </Bar>
             </BarChart>

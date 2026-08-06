@@ -1,51 +1,40 @@
-import { sumBy } from './aggregate'
+import { groupByModeTable } from './aggregate'
 
-// The 3-source activation model shared across Overview/Activation/
-// Redemption pages: ActivationModeFinal (activation cube) or ActivationMode
-// (redemption cube's origin-channel field) always maps to exactly one of
-// these — "PVR Corporate" merges the Corporate + Online mode values (PVR
-// Inox Online + PVR-Corporate together represent the Corporate channel's
-// redeem/activate split; "Online" never appears as its own label in the UI).
+// The 3-source ORIGIN model — activation-only, drives both the
+// activationSource FILTER (FilterContext.jsx) and every "by Source" chart.
+// Applies to ActivationModeFinal on the activation cube only — never reads
+// or derives anything from the redemption cube; see lib/redemptionMode.js
+// for the separate, unrelated 2-bucket model that drives every
+// redemption-side Source question instead.
+//
+// 'Corporate' merges the raw 'Corporate' + 'Online' ActivationModeFinal
+// values — 'Online' is real but time-boxed (Apr-Jul 2024 only, ~₹96.98L)
+// and isn't offered as its own bucket; it folds into Corporate for
+// reporting. 'Cinema' is the raw 'Physical' value, renamed here (not just
+// display-renamed downstream) specifically to avoid colliding with the
+// unrelated CardType field's own 'Physical' value (card form factor,
+// e-gift vs. tangible — see lib/theme.js#CARD_TYPE_COLORS) — same word,
+// two different questions, worth never letting collide even as an internal
+// key.
 export const ACTIVATION_SOURCES = [
-  { key: 'PVR Corporate', modes: ['Corporate', 'Online'] },
   { key: 'Aggregators', modes: ['Aggregator'] },
+  { key: 'Corporate', modes: ['Corporate', 'Online'] },
   { key: 'Cinema', modes: ['Physical'] }
 ]
 
+// The mapping from a raw ActivationModeFinal value to its 3-source bucket —
+// activation-side only (see the module doc comment above). Returns
+// undefined for values with no source.
 export function sourceOf(modeValue) {
   return ACTIVATION_SOURCES.find((s) => s.modes.includes(modeValue))?.key
 }
 
-// Buckets `rows` into the 3 sources by whichever field carries the mode
-// value (modeField), then splits each bucket by CardType (Digital/
-// Physical). A handful of rows carry no CardType (small zero-count
-// correction/adjustment entries) — folded into whichever of Digital/
-// Physical is larger for that source, so the two always sum exactly back
-// to the source total without ever going negative. Rows whose mode value
-// doesn't match any of the 3 sources (e.g. the redemption cube's "N/A" or
-// "Pre-existing (activated before Apr 2024)") aren't counted here — a
-// caller that needs to surface that remainder computes it separately (see
-// RedemptionBoxOffice.jsx / RedemptionFnb.jsx's "Pre-existing" bucket).
-export function groupByActivationSource(rows, { modeField, amountField, countField, cardTypeField = 'CardType' }) {
-  return ACTIVATION_SOURCES.map(({ key, modes }) => {
-    const sourceRows = rows.filter((r) => modes.includes(r[modeField]))
-    const amount = sumBy(sourceRows, amountField)
-    const count = sumBy(sourceRows, countField)
-    const digitalRows = sourceRows.filter((r) => r[cardTypeField] === 'Digital')
-    const physicalRows = sourceRows.filter((r) => r[cardTypeField] === 'Physical')
-    let digitalAmount = sumBy(digitalRows, amountField)
-    let physicalAmount = sumBy(physicalRows, amountField)
-    const unclassified = amount - digitalAmount - physicalAmount
-    if (digitalAmount >= physicalAmount) digitalAmount += unclassified
-    else physicalAmount += unclassified
-    return {
-      key,
-      amount,
-      count,
-      digital: { amount: digitalAmount, count: sumBy(digitalRows, countField) },
-      physical: { amount: physicalAmount, count: sumBy(physicalRows, countField) }
-    }
-  })
+// Buckets `rows` into the 3 activation sources, each split by CardType. See
+// lib/aggregate.js#groupByModeTable for the shared bucketing/fold mechanics
+// (also used by lib/redemptionMode.js's unrelated 2-bucket redemption
+// model).
+export function groupByActivationSource(rows, opts) {
+  return groupByModeTable(rows, ACTIVATION_SOURCES, opts)
 }
 
 // Month-wise (or any x-field-wise) pivot of the 3 sources, for line-chart

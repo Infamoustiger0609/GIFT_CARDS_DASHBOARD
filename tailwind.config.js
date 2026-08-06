@@ -9,6 +9,11 @@ export default {
           light: '#2a3646',
           border: '#31404f'
         },
+        // Header ribbon color, sampled directly from pvr-inox-logo.jpeg's
+        // own background pixels (#231F20, confirmed via a pixel probe, not
+        // guessed) so the logo's JPEG background — which can't be made
+        // transparent — blends into the header with no visible box edge.
+        ribbon: '#231f20',
         cream: '#faf8f4',
         card: '#ffffff',
         warmgray: {

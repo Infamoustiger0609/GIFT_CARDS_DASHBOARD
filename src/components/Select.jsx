@@ -1,5 +1,6 @@
 import React from 'react'
 import RSelect, { components } from 'react-select'
+import { NONE_SELECTED } from '../lib/constants'
 
 const ALL_VALUE = '__select_all__'
 
@@ -38,7 +39,8 @@ function ValueContainer({ children, ...props }) {
   const selected = props.getValue()
   const totalReal = (props.selectProps.options?.length || 1) - 1
   let label
-  if (selected.length === 0 || selected.length === totalReal) label = 'All'
+  if (selected.length === totalReal) label = 'All'
+  else if (selected.length === 0) label = 'None'
   else if (selected.length === 1) label = selected[0].label
   else label = `${selected.length} selected`
   const input = Array.isArray(children) ? children[1] : children
@@ -50,8 +52,11 @@ function ValueContainer({ children, ...props }) {
   )
 }
 
-// "Select All" is a one-click shortcut back to unrestricted — same
-// destination as the true default, not a separate state. Uses onMouseDown +
+// "Select All" is a toggle: unchecked -> checks every option (back to
+// unrestricted, same destination as the true default); checked (every real
+// option already selected) -> unchecks every option, which stores the
+// NONE_SELECTED sentinel so the filter matches zero rows rather than
+// silently falling back to "All" (see constants.js). Uses onMouseDown +
 // preventDefault instead of onClick because react-select's own mousedown
 // handling (menu-close/blur) can otherwise swallow a click on a custom
 // element before our handler runs.
@@ -80,7 +85,7 @@ function Option(props) {
 
 // The filter's own value is the ground truth: [] means unrestricted
 // (matches everything, including rows outside this dropdown's option list —
-// e.g. Denom/SourceFlag "N/A" cancellation rows). But an *empty-looking*
+// e.g. Denom/CardType "N/A" cancellation rows). But an *empty-looking*
 // control reads as "nothing chosen" to a user, not "everything included",
 // so the checkbox list displays every option ticked by default and the
 // closed control reads "All" — exactly as if the user had ticked every box
@@ -94,11 +99,19 @@ function Option(props) {
 export default function Select({ label, value, options, onChange }) {
   const rsOptions = options.map((o) => ({ value: o.value ?? o, label: o.label ?? o }))
   const menuOptions = [{ value: ALL_VALUE, label: 'Select All' }, ...rsOptions]
-  const effectiveSelected = value.length === 0 ? rsOptions : rsOptions.filter((o) => value.includes(o.value))
+  // Both "true unrestricted" ([]) and "every option explicitly deselected"
+  // ([NONE_SELECTED]) resolve to zero checked boxes here — but only the
+  // former should show every checkbox pre-ticked, so they're handled as
+  // separate branches rather than folded into one `.filter()` call.
+  const isNoneSelected = value.length === 1 && value[0] === NONE_SELECTED
+  const effectiveSelected = value.length === 0 ? rsOptions : isNoneSelected ? [] : rsOptions.filter((o) => value.includes(o.value))
+  const allChecked = effectiveSelected.length === rsOptions.length && rsOptions.length > 0
 
   function handleChange(opts) {
     const reals = (opts || []).filter((o) => o.value !== ALL_VALUE)
-    onChange(reals.length === rsOptions.length ? [] : reals.map((o) => o.value))
+    if (reals.length === rsOptions.length) onChange([])
+    else if (reals.length === 0) onChange([NONE_SELECTED])
+    else onChange(reals.map((o) => o.value))
   }
 
   return (
@@ -113,8 +126,8 @@ export default function Select({ label, value, options, onChange }) {
         value={effectiveSelected}
         options={menuOptions}
         onChange={handleChange}
-        onSelectAll={() => onChange([])}
-        allChecked={effectiveSelected.length === rsOptions.length}
+        onSelectAll={() => onChange(allChecked ? [NONE_SELECTED] : [])}
+        allChecked={allChecked}
         styles={styles}
         isSearchable={false}
         components={{ ValueContainer, Option, MultiValue: () => null }}
