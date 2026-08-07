@@ -339,17 +339,6 @@ export default function Overview() {
     <div className="flex flex-col gap-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Kpi
-          label="Total Transaction Value"
-          value={fmtLacs(totalTransactionValue)}
-          sub={`${fmtNumber(totalRedemptionCount)} redemptions · Redemption + Uptake`}
-          accent="blue"
-          deltas={[
-            { label: 'MoM', pct: transactionValueDeltas.mom },
-            { label: 'QoQ', pct: transactionValueDeltas.qoq },
-            { label: 'YoY', pct: transactionValueDeltas.yoy }
-          ]}
-        />
-        <Kpi
           label="Revenue/Activation Amount"
           value={fmtLacs(totalActivation)}
           sub={`${fmtNumber(totalActivationCount)} cards`}
@@ -369,6 +358,17 @@ export default function Overview() {
             { label: 'MoM', pct: redemptionDeltas.mom },
             { label: 'QoQ', pct: redemptionDeltas.qoq },
             { label: 'YoY', pct: redemptionDeltas.yoy }
+          ]}
+        />
+        <Kpi
+          label="Total Transaction Value"
+          value={fmtLacs(totalTransactionValue)}
+          sub={`${fmtNumber(totalRedemptionCount)} redemptions · Redemption + Uptake`}
+          accent="blue"
+          deltas={[
+            { label: 'MoM', pct: transactionValueDeltas.mom },
+            { label: 'QoQ', pct: transactionValueDeltas.qoq },
+            { label: 'YoY', pct: transactionValueDeltas.yoy }
           ]}
         />
         <Kpi
