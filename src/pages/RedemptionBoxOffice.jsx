@@ -40,14 +40,19 @@ export default function RedemptionBoxOffice() {
   const netBoxOfficeRows = useMemo(() => netHeadRows(redemptionRows, 'Box Office'), [redemptionRows])
   const netBoxOfficeRowsAllMonths = useMemo(() => netHeadRows(redemptionRowsAllMonths, 'Box Office'), [redemptionRowsAllMonths])
   const total = sumBy(netBoxOfficeRows, 'RedemptionAmount')
+  // 2026-08-20: kept distinct from the new card-based count below —
+  // RedemptionCount is a transaction count, needed as-is for "Avg per
+  // Redemption" (revenue per redemption *event*, not per card). Only the
+  // "X redemptions" display line switches to the card-based measure.
   const totalCount = sumBy(netBoxOfficeRows, 'RedemptionCount')
+  const totalCardCount = sumBy(netBoxOfficeRows, 'UniqueCardCount')
   const deltas = useMemo(
     () => computeComparisons(netBoxOfficeRowsAllMonths, 'RedemptionAmount', comparisonMonths),
     [netBoxOfficeRowsAllMonths, comparisonMonths]
   )
   const digitalRows = netBoxOfficeRows.filter((r) => r.CardType === 'Digital')
   const digitalAmt = sumBy(digitalRows, 'RedemptionAmount')
-  const digitalCount = sumBy(digitalRows, 'RedemptionCount')
+  const digitalCardCount = sumBy(digitalRows, 'UniqueCardCount')
   const digitalRowsAllMonths = useMemo(() => netBoxOfficeRowsAllMonths.filter((r) => r.CardType === 'Digital'), [netBoxOfficeRowsAllMonths])
   const digitalDeltas = useMemo(
     () => computeComparisons(digitalRowsAllMonths, 'RedemptionAmount', comparisonMonths),
@@ -61,7 +66,7 @@ export default function RedemptionBoxOffice() {
   const totalPct = grandRedemptionTotal > 0 ? (total / grandRedemptionTotal) * 100 : NaN
 
   const byRegion = useMemo(() => {
-    const g = groupSum(netBoxOfficeRows, 'Region_Clean', ['RedemptionAmount', 'RedemptionCount'])
+    const g = groupSum(netBoxOfficeRows, 'Region_Clean', ['RedemptionAmount', 'UniqueCardCount'])
     return orderBy(g.map((r) => r.key), REGION_ORDER).map((k) => g.find((r) => r.key === k))
   }, [netBoxOfficeRows])
 
@@ -80,7 +85,7 @@ export default function RedemptionBoxOffice() {
   // wider scope doesn't leak into it. ----
   const ticketRows = useMemo(() => [...netBoxOfficeRows, ...netHeadRows(redemptionRows, 'Online')], [netBoxOfficeRows, redemptionRows])
   const bySource = useMemo(
-    () => groupByRedemptionMode(ticketRows, { modeField: 'RedemptionModeFinal', amountField: 'RedemptionAmount', countField: 'RedemptionCount' }),
+    () => groupByRedemptionMode(ticketRows, { modeField: 'RedemptionModeFinal', amountField: 'RedemptionAmount', countField: 'UniqueCardCount' }),
     [ticketRows]
   )
   const sourceChartData = useMemo(
@@ -112,12 +117,12 @@ export default function RedemptionBoxOffice() {
   // both correctly land on the same gray color" pattern already documented
   // for RedemptionFnb.jsx's Category chart.
   const byFormat = useMemo(() => {
-    const g = groupSum(netBoxOfficeRows, 'Format', ['RedemptionAmount', 'RedemptionCount'])
+    const g = groupSum(netBoxOfficeRows, 'Format', ['RedemptionAmount', 'UniqueCardCount'])
     return topNWithOther(g, 10, 'key', 'RedemptionAmount')
   }, [netBoxOfficeRows])
 
   const byWeekday = useMemo(() => {
-    const g = groupSum(netBoxOfficeRows, 'Weekday', ['RedemptionAmount', 'RedemptionCount'])
+    const g = groupSum(netBoxOfficeRows, 'Weekday', ['RedemptionAmount', 'UniqueCardCount'])
     return orderBy(g.map((r) => r.key), WEEKDAY_ORDER).map((k) => g.find((r) => r.key === k))
   }, [netBoxOfficeRows])
 
@@ -125,19 +130,26 @@ export default function RedemptionBoxOffice() {
   // Activation.jsx's new "by Denomination" chart and Overview's — see that
   // file's matching comment.
   //
-  // 2026-08-14 fix: same root cause as byFormat above — Denom is also
+  // 2026-08-14 fix: same root cause as byFormat above — Denom used to be
   // always 'N/A' on the Cancel Redeem rows netted into this pool, so
   // excluding non-listed Denom values dropped the entire netting
   // correction and inflated this chart's total to the gross figure. Fixed
   // the same way Activation.jsx's Denomination chart was fixed: keep the
-  // 11 named buckets, fold everything else into an explicit "Other" bucket
+  // named buckets, fold everything else into an explicit "Other" bucket
   // instead of dropping it.
+  //
+  // 2026-08-19 data refresh: Cancel Redeem rows (and every other redemption
+  // row) now carry a real Denom value — one of the 11 magnitude buckets or
+  // the honest 'Unknown (pre-existing)' 12th bucket (now part of
+  // DENOM_ORDER itself) — never 'N/A'/'Other'. `otherRows` is confirmed
+  // always empty on this cube now, so "Other" no longer renders; the
+  // fallback below stays as a live safety net rather than dead code.
   const byDenomination = useMemo(() => {
-    const g = groupSum(netBoxOfficeRows, 'Denom', ['RedemptionAmount', 'RedemptionCount'])
-    const named = DENOM_ORDER.map((d) => g.find((r) => r.key === d) || { key: d, RedemptionAmount: 0, RedemptionCount: 0 })
+    const g = groupSum(netBoxOfficeRows, 'Denom', ['RedemptionAmount', 'UniqueCardCount'])
+    const named = DENOM_ORDER.map((d) => g.find((r) => r.key === d) || { key: d, RedemptionAmount: 0, UniqueCardCount: 0 })
     const otherRows = netBoxOfficeRows.filter((r) => !DENOM_ORDER.includes(r.Denom))
     if (otherRows.length === 0) return named
-    return [...named, { key: 'Other', RedemptionAmount: sumBy(otherRows, 'RedemptionAmount'), RedemptionCount: sumBy(otherRows, 'RedemptionCount') }]
+    return [...named, { key: 'Other', RedemptionAmount: sumBy(otherRows, 'RedemptionAmount'), UniqueCardCount: sumBy(otherRows, 'UniqueCardCount') }]
   }, [netBoxOfficeRows])
 
   return (
@@ -146,7 +158,7 @@ export default function RedemptionBoxOffice() {
         <Kpi
           label="Box Office Redemption"
           value={fmtLacs(total)}
-          sub={`${fmtNumber(totalCount)} redemptions · ${fmtPct(totalPct, 0)} of total redemption`}
+          sub={`${fmtNumber(totalCardCount)} cards · ${fmtPct(totalPct, 0)} of total redemption`}
           accent="teal"
           deltas={[
             { label: 'MoM', pct: deltas.mom },
@@ -157,7 +169,7 @@ export default function RedemptionBoxOffice() {
         <Kpi
           label="Digital Card Redemption"
           value={fmtLacs(digitalAmt)}
-          sub={`${fmtNumber(digitalCount)} redemptions · ${fmtPct(total ? (digitalAmt / total) * 100 : 0)}`}
+          sub={`${fmtNumber(digitalCardCount)} cards · ${fmtPct(total ? (digitalAmt / total) * 100 : 0)}`}
           accent="blue"
           deltas={[
             { label: 'MoM', pct: digitalDeltas.mom },
@@ -189,7 +201,7 @@ export default function RedemptionBoxOffice() {
                   content={
                     <ChartTooltip
                       countField={(p) => (p.dataKey === 'digitalAmount' ? 'digitalCount' : 'physicalCount')}
-                      countUnit="redemptions"
+                      countUnit="cards"
                     />
                   }
                   cursor={{ fill: 'rgba(27,36,48,0.04)' }}
@@ -208,10 +220,27 @@ export default function RedemptionBoxOffice() {
           {byRegion.length === 0 ? (
             <EmptyState />
           ) : (
-            <ResponsiveContainer width="100%" height={260}>
+            <ResponsiveContainer width="100%" height={280}>
               <BarChart data={byRegion} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
-                <XAxis dataKey="key" tickFormatter={regionLabel} tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+                {/* 2026-08-19: interval={0}/angle/height added — without
+                    them Recharts silently auto-skips ticks it decides won't
+                    fit; confirmed live (Playwright at 800/1024px) that
+                    CENTRAL's label was dropping off this axis below 1440px
+                    now that Director's Cut is a real 6th category here too.
+                    Same treatment Overview's own "by Region" charts already
+                    use for the identical crowding problem. */}
+                <XAxis
+                  dataKey="key"
+                  tickFormatter={regionLabel}
+                  tick={{ fontSize: 9, fill: COLORS.inkMuted }}
+                  axisLine={{ stroke: COLORS.border }}
+                  tickLine={false}
+                  interval={0}
+                  angle={-45}
+                  textAnchor="end"
+                  height={60}
+                />
                 <YAxis
                   tick={{ fontSize: 11, fill: COLORS.inkMuted }}
                   axisLine={false}
@@ -221,7 +250,7 @@ export default function RedemptionBoxOffice() {
                   label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
                 />
                 <Tooltip
-                  content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />}
+                  content={<ChartTooltip countField="UniqueCardCount" countUnit="cards" />}
                   labelFormatter={regionLabel}
                   cursor={{ fill: 'rgba(27,36,48,0.04)' }}
                 />
@@ -253,7 +282,7 @@ export default function RedemptionBoxOffice() {
                 label={{ value: '₹ in Lakhs', position: 'insideBottom', offset: -8, style: { fontSize: 11, fill: COLORS.inkMuted } }}
               />
               <YAxis dataKey="key" type="category" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={false} tickLine={false} width={110} />
-              <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+              <Tooltip content={<ChartTooltip countField="UniqueCardCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
               <Bar dataKey="RedemptionAmount" name="Redemption" radius={[0, 4, 4, 0]} maxBarSize={22}>
                 <LabelList dataKey="RedemptionAmount" content={HorizontalAmountLabel} />
                 {byFormat.map((r, i) => (
@@ -285,7 +314,7 @@ export default function RedemptionBoxOffice() {
                 tickFormatter={fmtLacsAxis}
                 label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
               />
-              <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+              <Tooltip content={<ChartTooltip countField="UniqueCardCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
               <Bar dataKey="RedemptionAmount" name="Redemption" radius={[4, 4, 0, 0]} maxBarSize={40}>
                 <LabelList dataKey="RedemptionAmount" content={AmountLabel} />
                 {byWeekday.map((r, i) => (
@@ -322,7 +351,7 @@ export default function RedemptionBoxOffice() {
                 tickFormatter={fmtLacsAxis}
                 label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
               />
-              <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+              <Tooltip content={<ChartTooltip countField="UniqueCardCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
               <Bar dataKey="RedemptionAmount" name="Redemption" radius={[4, 4, 0, 0]} maxBarSize={44}>
                 <LabelList dataKey="RedemptionAmount" content={AmountLabel} />
                 {byDenomination.map((r, i) => (

@@ -181,15 +181,27 @@ export default function CancelRedeem() {
           {byRegion.length === 0 ? (
             <EmptyState />
           ) : (
-            <ResponsiveContainer width="100%" height={260}>
+            <ResponsiveContainer width="100%" height={280}>
               <BarChart data={byRegion} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                {/* 2026-08-19: interval={0}/angle/height added — without
+                    them Recharts silently auto-skips ticks it decides won't
+                    fit, which was dropping CENTRAL's label off this axis
+                    now that Director's Cut is a real 6th category here too
+                    (5 ticks fit fine without this; 6 didn't). Same
+                    angle/height/fontSize treatment Overview's own "by
+                    Region" charts already use for the identical crowding
+                    problem. */}
                 <XAxis
                   dataKey="key"
                   tickFormatter={regionLabel}
-                  tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                  tick={{ fontSize: 9, fill: COLORS.inkMuted }}
                   axisLine={{ stroke: COLORS.border }}
                   tickLine={false}
+                  interval={0}
+                  angle={-45}
+                  textAnchor="end"
+                  height={60}
                 />
                 <YAxis
                   tick={{ fontSize: 11, fill: COLORS.inkMuted }}

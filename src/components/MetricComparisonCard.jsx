@@ -39,6 +39,30 @@ const ACCENTS = {
 // unrestricted). Also visually restyled to match the app's established
 // KPI language — colored left-border accent + text-3xl serif value, same
 // as Kpi.jsx — rather than a plain unaccented number.
+// 2026-08-19: `nestedBreakdowns` — an optional `{ [parentBucketKey]:
+// { buckets, cancelPredicate? } }` map — lets one top-level bucket (e.g.
+// "Redemption by Source"'s Cinema row) expand into its own indented
+// sub-rows (e.g. Box Office vs. F&B) instead of needing a second,
+// overlapping top-level card. Reuses the exact same computeBucketComparisons
+// /computeNettedBucketComparisons/computeBucketFYSeries/
+// computeNettedBucketFYSeries functions the top-level table already calls —
+// just re-run against `rows`/`rowsAllMonths`/`rowsAllFY` pre-filtered to the
+// parent bucket's own predicate first, so the child buckets always sum
+// exactly to their parent row's own amount, by the same construction
+// guarantee the top-level table already has (a netted child set sums to
+// whatever pool it's given; here that pool is the parent's own rows, not
+// the whole card's). Only one level of nesting is supported — this isn't a
+// general tree, just enough to fold two overlapping "by X" cards into one.
+function computeNestedBreakdown(nested, parentRows, parentRowsAllMonths, parentRowsAllFY, amountField, countField, comparisonMonths, fys) {
+  const current = nested.cancelPredicate
+    ? computeNettedBucketComparisons(parentRows, parentRowsAllMonths, nested.buckets, nested.cancelPredicate, amountField, countField, comparisonMonths)
+    : computeBucketComparisons(parentRows, parentRowsAllMonths, nested.buckets, amountField, countField, comparisonMonths)
+  const byYear = nested.cancelPredicate
+    ? computeNettedBucketFYSeries(parentRowsAllFY, nested.buckets, nested.cancelPredicate, amountField, countField, fys)
+    : computeBucketFYSeries(parentRowsAllFY, nested.buckets, amountField, countField, fys)
+  return { current, byYear }
+}
+
 export default function MetricComparisonCard({
   title,
   rows,
@@ -51,13 +75,14 @@ export default function MetricComparisonCard({
   buckets,
   bucketLabelFn,
   cancelPredicate,
+  nestedBreakdowns,
   accent = 'navy'
 }) {
   const accentClasses = ACCENTS[accent] || { border: 'border-l-navy', text: 'text-navy' }
   const [totalRow] = computeBucketComparisons(rows, rowsAllMonths, TOTAL_BUCKET, amountField, countField, comparisonMonths)
   const total = totalRow || { amount: 0, count: 0, mom: null, yoy: null }
-  // 2026-08-14 fix: some bucket sets (Denomination, Card Type) don't
-  // partition every row — a row with Denom/CardType='N/A' (a real,
+  // 2026-08-14 fix: some bucket sets (Denomination, Card Type at the time)
+  // don't partition every row — a row with Denom/CardType='N/A' (a real,
   // typically negative correction/adjustment amount, not junk) matched
   // none of the named buckets, so the table's own rows summed to less than
   // — or, once cancellation-attributed rows are involved, more than — the
@@ -72,13 +97,37 @@ export default function MetricComparisonCard({
   // the 3 pages' own by-Format/Category/Denomination chart fixes earlier
   // the same day. computeBucketComparisons() already drops zero-amount
   // buckets, so "Other" simply doesn't render for bucket sets with no gap.
+  //
+  // 2026-08-17: Activation's own Card Type joined the "complete partition"
+  // group above — a data-level fix reclassified Cancel Activate rows from
+  // CardType='N/A' to their real Digital/Physical value, so
+  // ACTIVATION_CUBE-backed CardType buckets now always sum exactly to the
+  // headline total and "Other" no longer renders for that card. Nothing
+  // changed here to make that happen — the zero-amount filter above
+  // already handled it once the underlying data stopped leaking.
+  //
+  // 2026-08-18: same fix, same mechanism, extended to Denomination —
+  // another data-level refresh reclassified Cancel Activate rows away from
+  // Denom='N/A' into their own real bucket (plus closed a fractional-amount
+  // boundary gap between adjacent buckets), so "Activation by
+  // Denomination" also no longer renders an "Other" row (confirmed: the 11
+  // DENOM_ORDER buckets now sum to the headline total with zero leftover).
+  // "Redemption by Denomination" still legitimately shows "Other" —
+  // Cancel *Redeem* rows on the redemption cube still carry a real
+  // Denom='N/A' (confirmed: ~1,103 rows, -₹146.3L), a different, untouched
+  // situation the request creating this fix explicitly said not to touch.
+  // Both cards share the exact same DENOM_BUCKETS predicate array
+  // (Summary.jsx) — which one shows "Other" is entirely a function of
+  // which `rows` pool (activationRows vs. redemptionRows) each card is
+  // given, not any per-card special-casing here.
   // 2026-08-15: `cancelPredicate` marks a bucket set where a category-less
   // subset of rows (Cancel Redeem transactions) must be netted
   // proportionally into the real buckets instead of getting its own
-  // "Other"/N/A row — see lib/aggregate.js#netBucketsProportionally. Only
-  // "Redemption by Card Type" and "Redemption by Head" pass this; every
-  // other bucketed card keeps the plain computeBucketComparisons path with
-  // its synthetic "Other" bucket (Region/Source/Head-elsewhere are already
+  // "Other"/N/A row — see lib/aggregate.js#netBucketsProportionally.
+  // "Redemption by Card Type" passes this (and, nested, "Redemption by
+  // Source"'s Cinema→Box Office/F&B breakdown below); every other bucketed
+  // card keeps the plain computeBucketComparisons path with its synthetic
+  // "Other" bucket (Region/Source-itself/Head-elsewhere are already
   // complete partitions with no such leak; Activation's own "Other" is a
   // real correction-row bucket, not Cancellation).
   const bucketsWithOther = buckets && !cancelPredicate ? [...buckets, { key: 'Other', predicate: (r) => !buckets.some((b) => b.predicate(r)) }] : null
@@ -97,6 +146,29 @@ export default function MetricComparisonCard({
     : bucketsWithOther
       ? computeBucketFYSeries(rowsAllFY, bucketsWithOther, amountField, countField, fySeries.map((f) => f.fy))
       : []
+
+  // See computeNestedBreakdown()'s own doc comment above. `nested` here is
+  // keyed by parent bucket key (e.g. 'Cinema'), each value `{ current,
+  // byYear }` shaped exactly like `bucketRows`/`bucketFYRows` themselves so
+  // the render below can treat parent and child rows uniformly.
+  const nestedByParentKey = {}
+  if (nestedBreakdowns && buckets) {
+    const fys = fySeries.map((f) => f.fy)
+    for (const [parentKey, nested] of Object.entries(nestedBreakdowns)) {
+      const parentBucket = buckets.find((b) => b.key === parentKey)
+      if (!parentBucket) continue
+      nestedByParentKey[parentKey] = computeNestedBreakdown(
+        nested,
+        rows.filter(parentBucket.predicate),
+        rowsAllMonths.filter(parentBucket.predicate),
+        rowsAllFY.filter(parentBucket.predicate),
+        amountField,
+        countField,
+        comparisonMonths,
+        fys
+      )
+    }
+  }
 
   const hasAnyData = rows.length > 0 || rowsAllFY.length > 0
 
@@ -132,16 +204,40 @@ export default function MetricComparisonCard({
                 </thead>
                 <tbody>
                   {bucketRows.map((r) => (
-                    <tr key={r.key} className="border-t border-warmgray-border/60 hover:bg-cream/60 transition-colors">
-                      <td className="py-1.5 text-navy font-medium whitespace-nowrap">{bucketLabelFn ? bucketLabelFn(r.key) : r.key}</td>
-                      <td className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">{fmtLacs(r.amount)}</td>
-                      <td className="py-1.5 text-right">
-                        <DeltaBadge pct={r.mom} label="" />
-                      </td>
-                      <td className="py-1.5 text-right">
-                        <DeltaBadge pct={r.yoy} label="" />
-                      </td>
-                    </tr>
+                    <React.Fragment key={r.key}>
+                      <tr className="border-t border-warmgray-border/60 hover:bg-cream/60 transition-colors">
+                        <td className="py-1.5 text-navy font-medium whitespace-nowrap">{bucketLabelFn ? bucketLabelFn(r.key) : r.key}</td>
+                        <td className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">
+                          {fmtLacs(r.amount)}
+                          <span className="block font-normal text-[10px] text-warmgray-muted">
+                            ({fmtNumber(r.count)} {unit})
+                          </span>
+                        </td>
+                        <td className="py-1.5 text-right">
+                          <DeltaBadge pct={r.mom} label="" />
+                        </td>
+                        <td className="py-1.5 text-right">
+                          <DeltaBadge pct={r.yoy} label="" />
+                        </td>
+                      </tr>
+                      {nestedByParentKey[r.key]?.current.map((nr) => (
+                        <tr key={`${r.key}-${nr.key}`} className="border-t border-warmgray-border/30 hover:bg-cream/40 transition-colors">
+                          <td className="py-1 pl-4 text-warmgray-muted font-normal whitespace-nowrap text-[11px]">↳ {nr.key}</td>
+                          <td className="py-1 text-right text-warmgray-muted tabular-nums whitespace-nowrap text-[11px]">
+                            {fmtLacs(nr.amount)}
+                            <span className="block font-normal text-[9px] text-warmgray-muted">
+                              ({fmtNumber(nr.count)} {unit})
+                            </span>
+                          </td>
+                          <td className="py-1 text-right">
+                            <DeltaBadge pct={nr.mom} label="" />
+                          </td>
+                          <td className="py-1 text-right">
+                            <DeltaBadge pct={nr.yoy} label="" />
+                          </td>
+                        </tr>
+                      ))}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -174,20 +270,41 @@ export default function MetricComparisonCard({
                 </thead>
                 <tbody>
                   {bucketFYRows.map((r) => (
-                    <tr key={r.key} className="border-t border-warmgray-border/60 hover:bg-cream/60 transition-colors">
-                      <td className="py-1.5 text-navy font-medium whitespace-nowrap">{bucketLabelFn ? bucketLabelFn(r.key) : r.key}</td>
-                      {fySeries.map((f) => (
-                        <td key={f.fy} className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">
-                          {fmtLacs(r.byFY[f.fy].amount)}
-                        </td>
+                    <React.Fragment key={r.key}>
+                      <tr className="border-t border-warmgray-border/60 hover:bg-cream/60 transition-colors">
+                        <td className="py-1.5 text-navy font-medium whitespace-nowrap">{bucketLabelFn ? bucketLabelFn(r.key) : r.key}</td>
+                        {fySeries.map((f) => (
+                          <td key={f.fy} className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">
+                            {fmtLacs(r.byFY[f.fy].amount)}
+                            <span className="block font-normal text-[10px] text-warmgray-muted">
+                              ({fmtNumber(r.byFY[f.fy].count)} {unit})
+                            </span>
+                          </td>
+                        ))}
+                      </tr>
+                      {nestedByParentKey[r.key]?.byYear.map((nr) => (
+                        <tr key={`${r.key}-${nr.key}`} className="border-t border-warmgray-border/30 hover:bg-cream/40 transition-colors">
+                          <td className="py-1 pl-4 text-warmgray-muted font-normal whitespace-nowrap text-[11px]">↳ {nr.key}</td>
+                          {fySeries.map((f) => (
+                            <td key={f.fy} className="py-1 text-right text-warmgray-muted tabular-nums whitespace-nowrap text-[11px]">
+                              {fmtLacs(nr.byFY[f.fy].amount)}
+                              <span className="block font-normal text-[9px] text-warmgray-muted">
+                                ({fmtNumber(nr.byFY[f.fy].count)} {unit})
+                              </span>
+                            </td>
+                          ))}
+                        </tr>
                       ))}
-                    </tr>
+                    </React.Fragment>
                   ))}
                   <tr className="border-t border-warmgray-border font-semibold">
                     <td className="py-1.5 text-navy">Total</td>
                     {fySeries.map((f) => (
                       <td key={f.fy} className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">
                         {fmtLacs(f.amount)}
+                        <span className="block font-normal text-[10px] text-warmgray-muted">
+                          ({fmtNumber(f.count)} {unit})
+                        </span>
                       </td>
                     ))}
                   </tr>

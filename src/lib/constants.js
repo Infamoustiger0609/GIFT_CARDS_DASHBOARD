@@ -51,7 +51,32 @@ export function cohortLabel(key) {
 // filter is unrestricted" treatment already applied to 'N/A' everywhere
 // else in this app — not silently dropped from the data, just not offered
 // as its own bucket/option anymore.
-export const DENOM_ORDER = ['0-299', '300', '301-499', '500', '501-999', '1000', '1001-1999', '2000', '2000+', '5000+', '10000+']
+//
+// 2026-08-19 data refresh (redemption cube only): the generic 'Other'/'N/A'
+// catch-all Denom values are gone entirely, replaced by an honest, named
+// 12th bucket — 'Unknown (pre-existing)', for redemptions of cards
+// activated before the denomination was ever tracked (same "pre-existing"
+// concept as ActivationCohort's own bucket of that name). Unlike the old
+// 'Other'/'N/A' values, this is real, always-present, and not junk — added
+// as a real 12th entry here rather than treated as an unlabeled leftover,
+// so it renders as its own honestly-labeled bucket/bar instead of a
+// synthetic "Other." Redemption-only: the activation cube has no such value
+// (confirmed directly), so it simply never matches on that side, same as
+// any other cube-specific value already tolerated by this shared list.
+export const DENOM_ORDER = [
+  '0-299',
+  '300',
+  '301-499',
+  '500',
+  '501-999',
+  '1000',
+  '1001-1999',
+  '2000',
+  '2000+',
+  '5000+',
+  '10000+',
+  'Unknown (pre-existing)'
+]
 
 // Display-only rename: the raw Region_Clean value 'NO_SITE' renders as
 // "Online" everywhere in the UI (axis ticks, tooltips, the Region filter

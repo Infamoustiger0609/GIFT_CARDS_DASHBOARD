@@ -16,12 +16,12 @@ import {
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum, weekSlotBreakdown, netCinemaRedemption, netRedemptionHeads, netHeadRows } from '../lib/aggregate'
 import { computeComparisons } from '../lib/comparisons'
-import { DENOM_ORDER, HEAD_ORDER, fyOf, regionLabel } from '../lib/constants'
+import { DENOM_ORDER, HEAD_ORDER, WEEKDAY_ORDER, fyOf, regionLabel, orderBy } from '../lib/constants'
 import { COLORS, REGION_COLORS, HEAD_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS, categoricalColor } from '../lib/theme'
 import { groupByActivationSource, sourceOf } from '../lib/activationSource'
 import { redemptionModeOf } from '../lib/redemptionMode'
 import { ACTIVATION_REGION_BUCKETS, REDEMPTION_REGION_BUCKETS, redemptionRegionLabel } from '../lib/regionBuckets'
-import { fmtLacs, fmtPct, fmtNumber, fmtLacsAxis, monthLabel } from '../lib/format'
+import { fmtLacs, fmtNumber, fmtLacsAxis, monthLabel } from '../lib/format'
 import Card from '../components/Card'
 import Kpi from '../components/Kpi'
 import EmptyState from '../components/EmptyState'
@@ -62,11 +62,13 @@ function bucketRegionData(rows, rowsAllMonths, buckets, amountField, countField,
 // regionBuckets.js in the first place.
 const ACTIVATION_REGION_ONLY_BUCKETS = ACTIVATION_REGION_BUCKETS.slice(0, 6)
 // 2026-08-15 reverted (see the 2026-08-14 follow-up entry in CLAUDE.md for
-// the prior "5 named regions" version this undoes): NO_SITE belongs on this
-// chart, not on "Redemption by Head" — it's a Region_Clean value, not a
-// Head value, and mixing it into the Head breakdown was itself the bug this
-// reversion fixes (see REDEMPTION_HEAD_BUCKETS below). Back to all 6
-// REGION_ORDER entries (5 named regions + NO_SITE).
+// the prior "5 named regions" version this undoes): the 6th region bucket
+// belongs on this chart, not on "Redemption by Head" — it's a Region_Clean
+// value, not a Head value, and mixing it into the Head breakdown was itself
+// the bug this reversion fixes (see REDEMPTION_HEAD_BUCKETS below). Back to
+// all 6 buckets REDEMPTION_REGION_BUCKETS exports (5 named regions +
+// "Director's Cut" — see lib/regionBuckets.js for why that 6th one is no
+// longer the shared NO_SITE sentinel on this cube).
 const REDEMPTION_REGION_ONLY_BUCKETS = REDEMPTION_REGION_BUCKETS.slice(0, 6)
 
 // 2026-08-15: all 3 real activation sources (Aggregator, Corporate, Cinema),
@@ -113,18 +115,38 @@ export default function Overview() {
     redemptionRowsAllMonths,
     activationRowsAllFY,
     redemptionRowsAllFY,
-    comparisonMonths,
-    dailyTrendAvailable,
-    dailyMonthActivationRows,
-    dailyMonthRedemptionRows
+    comparisonMonths
   } = useFilters()
 
   const totalActivation = sumBy(activationRows, 'ActivationAmount')
   const totalRedemption = sumBy(redemptionRows, 'RedemptionAmount')
   const totalActivationCount = sumBy(activationRows, 'ActivationCount')
-  const totalRedemptionCount = sumBy(redemptionRows, 'RedemptionCount')
   const totalUptake = sumBy(redemptionRows, 'Uptake')
-  const overallRedemptionPct = totalActivation > 0 ? (totalRedemption / totalActivation) * 100 : NaN
+  // 2026-08-19: card-based (not transaction-based) count for the "Total
+  // Redemption (net)"/"Total Transaction Value"/"Uptake" KPI sub-lines —
+  // UniqueCardCount (redemption cube only, added the same data refresh as
+  // Region_Clean's "Director's Cut" value) is the distinct card count per
+  // row's own dimension combination, unlike RedemptionCount (transaction
+  // count — one card redeeming 3 times in a month is 3 RedemptionCount but
+  // 1 UniqueCardCount). All three KPIs read the same redemptionRows pool,
+  // so they intentionally show the same figure here, same as they did when
+  // this sub-line existed before (as a RedemptionCount-based "X
+  // redemptions" line) — reintroduced with the correct measure per an
+  // explicit request, not a coincidence.
+  //
+  // KNOWN LIMITATION (do not "fix" client-side — see below): summing
+  // UniqueCardCount across multiple selected time periods (e.g. an FY or
+  // several months at once) overcounts distinct cards whenever the same
+  // card redeems in more than one of those periods — it's counted once per
+  // period it appears in, not once overall. This is a real mathematical
+  // limit of pre-aggregated data: the cube only carries a per-row distinct
+  // count, never individual card identifiers, so there is no way to
+  // deduplicate a card that shows up in, say, both April and May without
+  // the raw per-transaction data this app deliberately doesn't ship (see
+  // README's "Performance" section on why cubes are pre-aggregated at
+  // all). Single-month figures are exact; multi-month figures are a safe
+  // upper bound, not a precise distinct-card count.
+  const totalUniqueCards = sumBy(redemptionRows, 'UniqueCardCount')
   // Total Redemption Amount + Total Uptake — a combined-total KPI, not a
   // sub-component of another KPI on this ribbon (same "no meaningful
   // parent" reasoning as Revenue/Activation Amount), so it gets deltas but
@@ -155,7 +177,6 @@ export default function Overview() {
     () => computeComparisons(transactionValueRowsAllMonths, 'TransactionValue', comparisonMonths),
     [transactionValueRowsAllMonths, comparisonMonths]
   )
-  const uptakePct = totalRedemption > 0 ? (totalUptake / totalRedemption) * 100 : NaN
 
   // ---- Activation flow: 3 origin sources, each split by CardType ----
   // See lib/activationSource.js for the shared bucketing logic (also used
@@ -240,7 +261,7 @@ export default function Overview() {
   const [onlineHead, boxOfficeHead, fnbHead] = positiveHeads
 
   // ---- Activation by Region (5 physical-cinema regions, pure geography)
-  // and Redemption by Region (5 regions + NO_SITE, pure geography) — see
+  // and Redemption by Region (5 regions + Director's Cut, pure geography) — see
   // the module-level bucket definitions above for why these are bucketed
   // this way instead of a raw Region_Clean groupby. Each bar's MoM delta is
   // computed the same way the KPI deltas are (computeComparisons against
@@ -251,7 +272,7 @@ export default function Overview() {
     [activationRows, activationRowsAllMonths, comparisonMonths]
   )
   const redemptionByRegion = useMemo(
-    () => bucketRegionData(redemptionRows, redemptionRowsAllMonths, REDEMPTION_REGION_ONLY_BUCKETS, 'RedemptionAmount', 'RedemptionCount', comparisonMonths),
+    () => bucketRegionData(redemptionRows, redemptionRowsAllMonths, REDEMPTION_REGION_ONLY_BUCKETS, 'RedemptionAmount', 'UniqueCardCount', comparisonMonths),
     [redemptionRows, redemptionRowsAllMonths, comparisonMonths]
   )
 
@@ -268,7 +289,7 @@ export default function Overview() {
     [activationRows, activationRowsAllMonths, comparisonMonths]
   )
   const redemptionByHead = useMemo(
-    () => bucketRegionData(redemptionRows, redemptionRowsAllMonths, REDEMPTION_HEAD_BUCKETS, 'RedemptionAmount', 'RedemptionCount', comparisonMonths),
+    () => bucketRegionData(redemptionRows, redemptionRowsAllMonths, REDEMPTION_HEAD_BUCKETS, 'RedemptionAmount', 'UniqueCardCount', comparisonMonths),
     [redemptionRows, redemptionRowsAllMonths, comparisonMonths]
   )
 
@@ -287,7 +308,7 @@ export default function Overview() {
         Activation: sumBy(actRows, 'ActivationAmount'),
         ActivationCount: sumBy(actRows, 'ActivationCount'),
         Redemption: sumBy(redRows, 'RedemptionAmount'),
-        RedemptionCount: sumBy(redRows, 'RedemptionCount')
+        RedemptionCardCount: sumBy(redRows, 'UniqueCardCount')
       }
     })
   }, [activationRowsAllFY, redemptionRowsAllFY])
@@ -299,16 +320,18 @@ export default function Overview() {
   // weekend. ----
   const weekSlot = useMemo(() => weekSlotBreakdown(activationRows, redemptionRows), [activationRows, redemptionRows])
 
-  // ---- Activation vs. Redemption amount by Denomination tier. 'N/A'
-  // (cancellation-side entries) and 'Other' are both excluded here the same
-  // way they're excluded from the filter's own dropdown options — neither
-  // is one of the 11 fixed DENOM_ORDER buckets (2026-08-12: 'Other' is a
-  // real Denom value but is no longer offered as its own bucket/option, per
-  // an explicit request — same treatment 'N/A' already had). Iterates
-  // DENOM_ORDER directly (fixed 11 buckets) rather than deriving-then-
-  // ordering the set of values actually present, so a value outside this
-  // list can't slip back in via orderBy()'s "unknown, append alphabetically"
-  // fallback the way 'Other' used to before this fix. ----
+  // ---- Activation vs. Redemption amount by Denomination tier. Iterates
+  // DENOM_ORDER directly (fixed buckets, 11 magnitude tiers + the honest
+  // 'Unknown (pre-existing)' 12th bucket as of the 2026-08-19 refresh)
+  // rather than deriving-then-ordering the set of values actually present,
+  // so a value outside this list can't slip back in via orderBy()'s
+  // "unknown, append alphabetically" fallback. The `DENOM_ORDER.includes`
+  // filters below were originally written to exclude 'N/A'/'Other'
+  // cancellation-side entries — as of the 2026-08-19 refresh the
+  // redemption cube has neither value anymore (everything is a real
+  // magnitude bucket or 'Unknown (pre-existing)', both now in DENOM_ORDER),
+  // so these filters are currently a no-op but stay in place as the same
+  // live safety net every other Denomination chart in this app keeps. ----
   const denominationSplit = useMemo(() => {
     const act = groupSum(
       activationRows.filter((r) => DENOM_ORDER.includes(r.Denom)),
@@ -318,21 +341,21 @@ export default function Overview() {
     const red = groupSum(
       redemptionRows.filter((r) => DENOM_ORDER.includes(r.Denom)),
       'Denom',
-      ['RedemptionAmount', 'RedemptionCount']
+      ['RedemptionAmount', 'UniqueCardCount']
     )
     return DENOM_ORDER.map((d) => ({
       denom: d,
       Activation: act.find((r) => r.key === d)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === d)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === d)?.RedemptionAmount || 0,
-      RedemptionCount: red.find((r) => r.key === d)?.RedemptionCount || 0
+      RedemptionCardCount: red.find((r) => r.key === d)?.UniqueCardCount || 0
     }))
   }, [activationRows, redemptionRows])
 
   // ---- Pan-India month-wise trend ----
   const monthTrend = useMemo(() => {
     const act = groupSum(activationRows, 'YearMonth', ['ActivationAmount', 'ActivationCount'])
-    const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionAmount', 'RedemptionCount'])
+    const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionAmount', 'UniqueCardCount'])
     const months = [...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])].sort()
     return months.map((m) => ({
       month: m,
@@ -340,35 +363,37 @@ export default function Overview() {
       Activation: act.find((r) => r.key === m)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === m)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === m)?.RedemptionAmount || 0,
-      RedemptionCount: red.find((r) => r.key === m)?.RedemptionCount || 0
+      RedemptionCardCount: red.find((r) => r.key === m)?.UniqueCardCount || 0
     }))
   }, [activationRows, redemptionRows])
 
-  // ---- Day-by-day breakdown (2026-08-10) — only meaningful, and only
-  // rendered, when exactly one month is selected and no field the daily
-  // cubes lack (CardType/Denomination/either Source) is active — see
-  // FilterContext.jsx's "Daily Activation & Redemption Trend chart
-  // availability" doc comment. Always covers every day of the selected
-  // month. 2026-08-15: this chart itself is unchanged (still backed by the
-  // daily cubes, still day-of-month analysis) — only the highlight-one-
-  // specific-day layer is gone, since that was driven by the old numeric
-  // "Day" global filter, which no longer exists (replaced by "Weekday" on
-  // the main cubes — see FilterBar.jsx). Every bar now renders at full
-  // opacity; there's no narrower "selection" than the whole month anymore. ----
-  const dailyTrend = useMemo(() => {
-    if (!dailyTrendAvailable) return []
-    const act = groupSum(dailyMonthActivationRows, 'DateStr', ['ActivationAmount', 'ActivationCount'])
-    const red = groupSum(dailyMonthRedemptionRows, 'DateStr', ['RedemptionAmount', 'RedemptionCount'])
-    const dates = [...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])].sort()
-    return dates.map((d) => ({
-      date: d,
-      day: Number(d.slice(8, 10)),
-      Activation: act.find((r) => r.key === d)?.ActivationAmount || 0,
-      ActivationCount: act.find((r) => r.key === d)?.ActivationCount || 0,
-      Redemption: red.find((r) => r.key === d)?.RedemptionAmount || 0,
-      RedemptionCount: red.find((r) => r.key === d)?.RedemptionCount || 0
+  // ---- Activation vs. Redemption by Weekday (2026-08-17) — replaces the
+  // removed "Daily Activation & Redemption Trend" (day-of-month) chart.
+  // Same concept as Activation.jsx's "Week-slot Activation Trend" and both
+  // Redemption pages' "Week-slot Redemption Trend", combined into one
+  // 2-series chart here rather than the per-page single-series versions.
+  // Redemption is `redemptionRows` grouped by Weekday directly (Online +
+  // Box Office + F&B + Cancellation, i.e. the exact same rows
+  // `totalRedemption` above sums) — not netHeadRows()'s per-head netting,
+  // which exists to solve a Head-attribution ambiguity that doesn't apply
+  // here: this chart never asks "how much of this belongs to Box Office vs.
+  // F&B," only "how much redeemed (net, cancellations included) on this
+  // weekday," which a plain groupBy already answers exactly, cancellations
+  // netting in via their own real (negative) RedemptionAmount and real
+  // Weekday value like any other row. Both series are therefore guaranteed
+  // to sum to this page's own Total Activation / Total Redemption (net)
+  // KPIs by construction, not by a separately-verified coincidence. ----
+  const weekdayTrend = useMemo(() => {
+    const act = groupSum(activationRows, 'Weekday', ['ActivationAmount', 'ActivationCount'])
+    const red = groupSum(redemptionRows, 'Weekday', ['RedemptionAmount', 'UniqueCardCount'])
+    return orderBy([...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])], WEEKDAY_ORDER).map((w) => ({
+      key: w,
+      Activation: act.find((r) => r.key === w)?.ActivationAmount || 0,
+      ActivationCount: act.find((r) => r.key === w)?.ActivationCount || 0,
+      Redemption: red.find((r) => r.key === w)?.RedemptionAmount || 0,
+      RedemptionCardCount: red.find((r) => r.key === w)?.UniqueCardCount || 0
     }))
-  }, [dailyTrendAvailable, dailyMonthActivationRows, dailyMonthRedemptionRows])
+  }, [activationRows, redemptionRows])
 
   const hasData = activationRows.length > 0 || redemptionRows.length > 0
 
@@ -389,7 +414,7 @@ export default function Overview() {
         <Kpi
           label="Total Redemption (net)"
           value={fmtLacs(totalRedemption)}
-          sub={`${fmtNumber(totalRedemptionCount)} redemptions · ${fmtPct(overallRedemptionPct, 0)} of total activation`}
+          sub={`${fmtNumber(totalUniqueCards)} cards`}
           accent="teal"
           deltas={[
             { label: 'MoM', pct: redemptionDeltas.mom },
@@ -400,7 +425,7 @@ export default function Overview() {
         <Kpi
           label="Total Transaction Value"
           value={fmtLacs(totalTransactionValue)}
-          sub={`${fmtNumber(totalRedemptionCount)} redemptions · Redemption + Uptake`}
+          sub={`${fmtNumber(totalUniqueCards)} cards`}
           accent="blue"
           deltas={[
             { label: 'MoM', pct: transactionValueDeltas.mom },
@@ -412,7 +437,7 @@ export default function Overview() {
           label="Uptake"
           value={fmtLacs(totalUptake)}
           valueClassName="text-2xl"
-          sub={`${fmtNumber(totalRedemptionCount)} redemptions · ${fmtPct(uptakePct, 0)} of total redemption`}
+          sub={`${fmtNumber(totalUniqueCards)} cards`}
           accent="navy"
           deltas={[
             { label: 'MoM', pct: uptakeDeltas.mom },
@@ -425,42 +450,6 @@ export default function Overview() {
           ]}
         />
       </div>
-
-      {dailyTrendAvailable && (
-        <Card title="Daily Activation & Redemption Trend">
-          {dailyTrend.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={dailyTrend} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
-                <XAxis dataKey="day" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
-                <YAxis
-                  tick={{ fontSize: 11, fill: COLORS.inkMuted }}
-                  axisLine={false}
-                  tickLine={false}
-                  width={64}
-                  tickFormatter={fmtLacsAxis}
-                  label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
-                />
-                <Tooltip
-                  content={
-                    <ChartTooltip
-                      countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
-                      countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
-                    />
-                  }
-                  labelFormatter={(day) => `Day ${day}`}
-                  cursor={{ fill: 'rgba(27,36,48,0.04)' }}
-                />
-                <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
-                <Bar dataKey="Activation" fill={COLORS.activationDark} radius={[3, 3, 0, 0]} maxBarSize={18} />
-                <Bar dataKey="Redemption" fill={COLORS.redemption} radius={[3, 3, 0, 0]} maxBarSize={18} />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </Card>
-      )}
 
       <Card title="Gift Card Activation vs. Redemption">
         {!hasData ? (
@@ -518,8 +507,7 @@ export default function Overview() {
               <FlowBox
                 label="Total Redemption (net)"
                 amount={totalRedemption}
-                count={totalRedemptionCount}
-                countUnit="redemptions"
+                count={totalUniqueCards}
                 color={COLORS.redemption}
                 size="lg"
               />
@@ -528,8 +516,7 @@ export default function Overview() {
                   key={onlineHead.key}
                   label={onlineHead.key}
                   amount={onlineHead.RedemptionAmount}
-                  count={onlineHead.RedemptionCount}
-                  countUnit="redemptions"
+                  count={onlineHead.UniqueCardCount}
                   pct={totalRedemption ? (onlineHead.RedemptionAmount / totalRedemption) * 100 : 0}
                   color={HEAD_COLORS[onlineHead.key] || COLORS.inkMuted}
                 />
@@ -537,8 +524,7 @@ export default function Overview() {
                   <FlowBox
                     label="Cinema"
                     amount={cinemaTotal.RedemptionAmount}
-                    count={cinemaTotal.RedemptionCount}
-                    countUnit="redemptions"
+                    count={cinemaTotal.UniqueCardCount}
                     pct={totalRedemption ? (cinemaTotal.RedemptionAmount / totalRedemption) * 100 : 0}
                     color={HEAD_COLORS.Cinema}
                   />
@@ -548,8 +534,7 @@ export default function Overview() {
                         key={h.key}
                         label={h.key}
                         amount={h.RedemptionAmount}
-                        count={h.RedemptionCount}
-                        countUnit="redemptions"
+                        count={h.UniqueCardCount}
                         pct={totalRedemption ? (h.RedemptionAmount / totalRedemption) * 100 : 0}
                         color={HEAD_COLORS[h.key] || COLORS.inkMuted}
                       />
@@ -632,7 +617,7 @@ export default function Overview() {
                   label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
                 />
                 <Tooltip
-                  content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />}
+                  content={<ChartTooltip countField="UniqueCardCount" countUnit="cards" />}
                   labelFormatter={redemptionRegionLabel}
                   cursor={{ fill: 'rgba(27,36,48,0.04)' }}
                 />
@@ -709,7 +694,7 @@ export default function Overview() {
                   label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
                 />
                 <Tooltip
-                  content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />}
+                  content={<ChartTooltip countField="UniqueCardCount" countUnit="cards" />}
                   cursor={{ fill: 'rgba(27,36,48,0.04)' }}
                 />
                 <Bar dataKey="RedemptionAmount" name="Redemption" radius={[4, 4, 0, 0]} maxBarSize={64}>
@@ -744,8 +729,8 @@ export default function Overview() {
                 <Tooltip
                   content={
                     <ChartTooltip
-                      countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
-                      countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
+                      countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCardCount')}
+                      countUnit="cards"
                     />
                   }
                   cursor={{ fill: 'rgba(27,36,48,0.04)' }}
@@ -778,7 +763,7 @@ export default function Overview() {
                   tickFormatter={fmtLacsAxis}
                   label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
                 />
-                <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+                <Tooltip content={<ChartTooltip countField="RedemptionCardCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
                 <Bar dataKey="Redemption" fill={COLORS.redemption} radius={[4, 4, 0, 0]} maxBarSize={72}>
                   <LabelList dataKey="Redemption" content={AmountLabel} />
                 </Bar>
@@ -787,6 +772,43 @@ export default function Overview() {
           )}
         </Card>
       </div>
+
+      <Card title="Activation vs. Redemption by Weekday">
+        {weekdayTrend.length === 0 ? (
+          <EmptyState />
+        ) : (
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={weekdayTrend} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+              <XAxis dataKey="key" tick={{ fontSize: 11, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+              <YAxis
+                tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                axisLine={false}
+                tickLine={false}
+                width={64}
+                tickFormatter={fmtLacsAxis}
+                label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+              />
+              <Tooltip
+                content={
+                  <ChartTooltip
+                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCardCount')}
+                    countUnit="cards"
+                  />
+                }
+                cursor={{ fill: 'rgba(27,36,48,0.04)' }}
+              />
+              <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
+              <Bar dataKey="Activation" fill={COLORS.activationDark} radius={[4, 4, 0, 0]} maxBarSize={48}>
+                <LabelList dataKey="Activation" content={AmountLabel} />
+              </Bar>
+              <Bar dataKey="Redemption" fill={COLORS.redemption} radius={[4, 4, 0, 0]} maxBarSize={48}>
+                <LabelList dataKey="Redemption" content={AmountLabel} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
 
       <Card title="Activation vs. Redemption by Denomination">
         {denominationSplit.length === 0 ? (
@@ -807,8 +829,8 @@ export default function Overview() {
               <Tooltip
                 content={
                   <ChartTooltip
-                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
-                    countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
+                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCardCount')}
+                    countUnit="cards"
                   />
                 }
                 cursor={{ fill: 'rgba(27,36,48,0.04)' }}
@@ -844,8 +866,8 @@ export default function Overview() {
               <Tooltip
                 content={
                   <ChartTooltip
-                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
-                    countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
+                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCardCount')}
+                    countUnit="cards"
                   />
                 }
               />

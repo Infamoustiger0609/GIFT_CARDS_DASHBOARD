@@ -64,14 +64,16 @@ export function weekSlotBreakdown(activationRows, redemptionRows) {
       Activation: sumBy(actWeekday, 'ActivationAmount'),
       ActivationCount: sumBy(actWeekday, 'ActivationCount'),
       Redemption: sumBy(redWeekday, 'RedemptionAmount'),
-      RedemptionCount: sumBy(redWeekday, 'RedemptionCount')
+      RedemptionCount: sumBy(redWeekday, 'RedemptionCount'),
+      RedemptionCardCount: sumBy(redWeekday, 'UniqueCardCount')
     },
     {
       slot: 'Weekend',
       Activation: sumBy(actWeekend, 'ActivationAmount'),
       ActivationCount: sumBy(actWeekend, 'ActivationCount'),
       Redemption: sumBy(redWeekend, 'RedemptionAmount'),
-      RedemptionCount: sumBy(redWeekend, 'RedemptionCount')
+      RedemptionCount: sumBy(redWeekend, 'RedemptionCount'),
+      RedemptionCardCount: sumBy(redWeekend, 'UniqueCardCount')
     }
   ]
 }
@@ -186,12 +188,20 @@ export function netHeadRows(redemptionRows, headKey, winnerMap) {
 }
 
 // Flat net Online/Box Office/F&B totals (amount + count) — e.g. the
-// redemption flow diagram's 3 head nodes.
+// redemption flow diagram's 3 head nodes. RedemptionCount (transaction
+// count) is kept alongside UniqueCardCount (distinct-card count) rather than
+// replaced — some future/other consumer may still need the transaction
+// figure; every current card-count display reads UniqueCardCount instead.
 export function netRedemptionHeads(redemptionRows) {
   const winner = physicalCancelWinnerMap(redemptionRows)
   return ['Online', 'Box Office', 'F&B'].map((key) => {
     const rows = netHeadRows(redemptionRows, key, winner)
-    return { key, RedemptionAmount: sumBy(rows, 'RedemptionAmount'), RedemptionCount: sumBy(rows, 'RedemptionCount') }
+    return {
+      key,
+      RedemptionAmount: sumBy(rows, 'RedemptionAmount'),
+      RedemptionCount: sumBy(rows, 'RedemptionCount'),
+      UniqueCardCount: sumBy(rows, 'UniqueCardCount')
+    }
   })
 }
 
@@ -219,14 +229,18 @@ export function isNetCinemaRedemptionRow(row) {
 // Flat net Cinema total (amount + count) — e.g. a single flow-diagram node.
 export function netCinemaRedemption(redemptionRows) {
   const rows = redemptionRows.filter(isNetCinemaRedemptionRow)
-  return { RedemptionAmount: sumBy(rows, 'RedemptionAmount'), RedemptionCount: sumBy(rows, 'RedemptionCount') }
+  return {
+    RedemptionAmount: sumBy(rows, 'RedemptionAmount'),
+    RedemptionCount: sumBy(rows, 'RedemptionCount'),
+    UniqueCardCount: sumBy(rows, 'UniqueCardCount')
+  }
 }
 
 // Net Cinema total broken out by region — for any future "Cinema by
 // Region" chart that needs to agree with the flat total above by
 // construction (same predicate), not by coincidence.
 export function netCinemaRedemptionByRegion(redemptionRows) {
-  return groupSum(redemptionRows.filter(isNetCinemaRedemptionRow), 'Region_Clean', ['RedemptionAmount', 'RedemptionCount'])
+  return groupSum(redemptionRows.filter(isNetCinemaRedemptionRow), 'Region_Clean', ['RedemptionAmount', 'RedemptionCount', 'UniqueCardCount'])
 }
 
 // Nets a "no real category" subset of rows (e.g. Cancel Redeem

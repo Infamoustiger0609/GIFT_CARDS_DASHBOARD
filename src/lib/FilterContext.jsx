@@ -31,33 +31,6 @@ function isWeekend(weekday) {
   return WEEKEND_DAYS.has(weekday)
 }
 
-// The two "daily" cubes (2026-08-10) only carry DateStr/Region_Clean/
-// ActivationModeFinal|RedemptionModeFinal|Head — no Weekday field, unlike
-// the main cubes. Derived the same way monthLabel() (lib/format.js) reads a
-// YearMonth string: explicit Y/M/D components into the local Date
-// constructor, never a raw ISO-string parse, so this can't drift a day
-// depending on the browser's timezone the way `new Date('2024-04-01')`
-// (UTC midnight) can.
-const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-function weekdayOfDateStr(dateStr) {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  return WEEKDAY_NAMES[new Date(y, m - 1, d).getDay()]
-}
-
-// Region + Week + Weekday are the dimensions genuinely present (or
-// derivable, via weekdayOfDateStr) on both daily cubes, so they're the only
-// ones applied when narrowing daily rows — see the daily-trend-availability
-// doc comment further down for why CardType/Denomination/ActivationSource/
-// RedemptionSource are excluded instead of combined (those genuinely don't
-// exist, or derive from, anything on the daily cubes).
-function passesDailyCommon(row, filters) {
-  if (!matches(filters.region, row.Region_Clean)) return false
-  const dailyWeekday = weekdayOfDateStr(row.DateStr)
-  if (!matches(filters.week, isWeekend(dailyWeekday) ? 'Weekend' : 'Weekday')) return false
-  if (!matches(filters.weekday, dailyWeekday)) return false
-  return true
-}
-
 // selected.length === 0 => no restriction (matches everything).
 // selected === [NONE_SELECTED] => every option was explicitly deselected
 // (matches nothing) — see NONE_SELECTED's doc comment in constants.js.
@@ -89,13 +62,9 @@ function passesCommon(row, filters, { skipMonth = false, skipFY = false } = {}) 
   if (!matches(filters.denomination, row.Denom)) return false
   if (!matches(filters.cardType, row.CardType)) return false
   if (!matches(filters.week, isWeekend(row.Weekday) ? 'Weekend' : 'Weekday')) return false
-  // 2026-08-15: replaces the old numeric "Day" (1-31) global filter, which
-  // was powered by the two daily cubes (DateStr field) and had to grey out
-  // CardType/Denomination/ActivationSource/RedemptionSource whenever active
-  // (those dimensions don't exist at daily granularity). Weekday is a real
-  // field on both MAIN cubes already — same field passesDailyCommon derives
-  // for the daily cubes' own Week filter above — so it needs no such
-  // restriction: every other filter on this page already carries it.
+  // 2026-08-15: replaces the old numeric "Day" (1-31) global filter — a
+  // real field on the main cubes, unlike Day, so it needs no per-dimension
+  // incompatibility restriction the way Day used to.
   if (!matches(filters.weekday, row.Weekday)) return false
   return true
 }
@@ -148,9 +117,8 @@ function filterRedemption(cube, filters, opts) {
 // mattered enough to replace the whole page).
 //
 // Only CardJourney.jsx reads this. 2026-08-16: the cube gained
-// ActivationModeFinal/CardType/Weekday (previously absent — the same
-// limitation the daily cubes below still have), so `filterCohort`/
-// `filterCohortByActivation` now apply Activation Source, Card Type, and
+// ActivationModeFinal/CardType/Weekday (previously absent), so
+// `filterCohort`/`filterCohortByActivation` now apply Activation Source, Card Type, and
 // Weekday too, alongside the pre-existing FY/Month (via whichever month
 // field(s) the function name says), Region, Redemption Source, and
 // Ticket/F&B — every global filter this page's own data can support.
@@ -252,15 +220,9 @@ export function FilterProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([
-      loadCube('/data/activationCube.json'),
-      loadCube('/data/redemptionCube.json'),
-      loadCube('/data/heroProducts.json'),
-      loadCube('/data/dailyActivationCube.json'),
-      loadCube('/data/dailyRedemptionCube.json')
-    ])
-      .then(([activationCube, redemptionCube, heroProducts, dailyActivationCube, dailyRedemptionCube]) => {
-        if (!cancelled) setData({ activationCube, redemptionCube, heroProducts, dailyActivationCube, dailyRedemptionCube })
+    Promise.all([loadCube('/data/activationCube.json'), loadCube('/data/redemptionCube.json'), loadCube('/data/heroProducts.json')])
+      .then(([activationCube, redemptionCube, heroProducts]) => {
+        if (!cancelled) setData({ activationCube, redemptionCube, heroProducts })
       })
       .catch((err) => {
         if (!cancelled) setError(err)
@@ -348,51 +310,6 @@ export function FilterProvider({ children }) {
     [data, filters]
   )
 
-  // ---- Daily Activation & Redemption Trend chart availability (2026-08-10)
-  // ----
-  // 2026-08-15: the numeric "Day" (1-31) global filter this gating used to
-  // also drive is gone, replaced by a "Weekday" global filter powered by
-  // the main cubes' own Weekday field (see passesCommon above) — the daily
-  // cubes' own day-of-month chart (Overview.jsx) is a separate, still-live
-  // concern that this section now exists purely to support. Only ever
-  // meaningful for one specific month, and only ever backed by the two
-  // "daily" cubes — which carry just DateStr/Region_Clean/
-  // ActivationModeFinal|RedemptionModeFinal|Head, no CardType/Denom/
-  // ActivationCohort/Format/Category. Rather than partially combine (which
-  // risks a technically-derivable-but-untested field silently producing a
-  // subtly wrong number), the chart goes fully inert whenever CardType,
-  // Denomination, Activation Source, or Redemption Source is active, even
-  // though ActivationModeFinal/RedemptionModeFinal do technically exist on
-  // the daily cubes; "don't silently show wrong/incomplete numbers" wins
-  // over maximizing what's technically combinable. Region, Week, and
-  // Weekday ARE applied (see passesDailyCommon above) since all three are
-  // cleanly present/derivable from DateStr.
-  const monthIsNoneSelected = filters.month.length === 1 && filters.month[0] === NONE_SELECTED
-  const singleMonth = !monthIsNoneSelected && filters.month.length === 1 ? filters.month[0] : null
-  const dailyTrendIncompatibleFilterActive =
-    filters.cardType.length > 0 || filters.denomination.length > 0 || filters.activationSource.length > 0 || filters.redemptionSource.length > 0
-  const dailyTrendAvailable = singleMonth !== null && !dailyTrendIncompatibleFilterActive
-  const dailyTrendUnavailableReason = !singleMonth
-    ? 'Select exactly one month to see the daily trend.'
-    : dailyTrendIncompatibleFilterActive
-    ? "Daily trend isn't available combined with Card Type, Denomination, Activation Source, or Redemption Source — those dimensions don't exist at daily granularity."
-    : null
-
-  // Every day of the selected month — Region/Week/Weekday narrowed — the
-  // day-by-day trend chart's one and only dataset (there's no further
-  // "select one specific day" narrowing anymore, since that was the old Day
-  // filter's job).
-  const dailyMonthActivationRows = useMemo(() => {
-    if (!data || !dailyTrendAvailable) return []
-    return data.dailyActivationCube.filter((row) => row.DateStr.startsWith(singleMonth) && passesDailyCommon(row, filters))
-  }, [data, dailyTrendAvailable, singleMonth, filters])
-  const dailyMonthRedemptionRows = useMemo(() => {
-    if (!data || !dailyTrendAvailable) return []
-    return data.dailyRedemptionCube.filter(
-      (row) => row.DateStr.startsWith(singleMonth) && passesDailyCommon(row, filters) && matches(filters.ticketFnb, ticketFnbBucket(row.Head))
-    )
-  }, [data, dailyTrendAvailable, singleMonth, filters])
-
   // Cards activated in the current period AND redeemed within that same
   // period — see filterCohort()'s doc comment above. Only CardJourney.jsx
   // reads either of these. `cohortCube` is null until loadCohortCube() has
@@ -439,12 +356,14 @@ export function FilterProvider({ children }) {
       ? allMonths
       : allMonths.filter((m) => fySelection.includes(fyOf(m)))
     // 2026-08-12: fixed enumeration, not data-derived — same treatment as
-    // activationSources/redemptionSources below. Deliberately exactly
-    // DENOM_ORDER's 11 magnitude buckets, not "every non-N/A value present
-    // in the cube": 'Other' is a real Denom value but is no longer offered
-    // as a pickable option (per an explicit request), same "not a pickable
-    // option, but real rows still pass through untouched when unrestricted"
-    // treatment as 'N/A' already gets.
+    // activationSources/redemptionSources below. 2026-08-19: DENOM_ORDER
+    // itself grew a 12th entry, 'Unknown (pre-existing)' — a real,
+    // honestly-named bucket (not a synthetic catch-all), so it's a pickable
+    // option here like every other DENOM_ORDER entry, unlike the old
+    // 'Other'/'N/A' values it replaced (never added to this list, so never
+    // pickable, same "not a pickable option, but real rows still pass
+    // through untouched when unrestricted" treatment those had while they
+    // still existed in the data).
     const denominations = DENOM_ORDER
     // Same "real value, but not a pickable option" treatment as Denom's
     // N/A: the redemption cube's "Unknown (pre-existing)" and either
@@ -493,10 +412,6 @@ export function FilterProvider({ children }) {
     comparisonMonths,
     heroProducts: data?.heroProducts || [],
     options,
-    dailyTrendAvailable,
-    dailyTrendUnavailableReason,
-    dailyMonthActivationRows,
-    dailyMonthRedemptionRows,
     cohortRows,
     cohortRowsByActivation,
     loadCohortCube,

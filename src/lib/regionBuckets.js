@@ -23,30 +23,38 @@ export const ACTIVATION_REGION_BUCKETS = [
 // region-split — PVR Inox Online is always tagged Region_Clean='NORTH'
 // regardless of the customer's actual location). No Aggregator bucket —
 // aggregator-activated cards have no redemption channel of their own.
+//
+// 2026-08-19 data refresh: the redemption cube's own Region_Clean stopped
+// using the shared 'NO_SITE' sentinel for its 6th value and now carries the
+// literal string "Director's Cut" directly — a real, intentional 6th region
+// (Director's Cut branded screens), not an inferred/guessed identity the way
+// the old NO_SITE→"Director's Cut" relabel used to be (see
+// redemptionRegionLabel's own history below). The activation cube is
+// untouched by this refresh and still uses 'NO_SITE' (regionLabel() below
+// still renames it to "Online" there) — the two cubes are now genuinely
+// asymmetric on this one value, which is why this bucket set can no longer
+// share REGION_ORDER's raw 6-entry list wholesale the way
+// ACTIVATION_REGION_BUCKETS still does: only the 5 named regions
+// (REGION_ORDER's first 5 entries) mean the same thing on both cubes.
+const NAMED_REGIONS = REGION_ORDER.slice(0, 5)
 export const REDEMPTION_REGION_BUCKETS = [
-  ...REGION_ORDER.map((region) => ({
+  ...NAMED_REGIONS.map((region) => ({
     key: region,
     predicate: (r) => redemptionModeOf(r.RedemptionModeFinal) === 'Cinema' && r.Region_Clean === region
   })),
+  { key: "Director's Cut", predicate: (r) => redemptionModeOf(r.RedemptionModeFinal) === 'Cinema' && r.Region_Clean === "Director's Cut" },
   { key: 'Online', predicate: (r) => redemptionModeOf(r.RedemptionModeFinal) === 'Online' }
 ]
 
-// A small number of physical-cinema redemption rows carry Region_Clean=
-// 'NO_SITE' (confirmed against the cube — real data, not an artifact:
-// ~₹10.94L). regionLabel() would render that as "Online" (the established
-// app-wide rename for the *activation*-side NO_SITE meaning), which would
-// collide with this bucket set's own real "Online" bucket — so this
-// chart-family needs its own distinct local label rather than the shared
-// one.
-//
-// 2026-08-15: permanently relabeled back to "Director's Cut", per explicit
-// user instruction — supersedes the 2026-08-14 "Other/Unmapped" entry this
-// paragraph used to document (kept here for history rather than deleted).
-// That entry's caveat still holds as a fact (this repo has no outlet-level
-// export to independently confirm the identity from), but the label to use
-// is now a settled decision, not a placeholder — applies everywhere this
-// function is read, including Summary.jsx's "Redemption by Region" table,
-// which shares this one function rather than a second copy.
+// 2026-08-19: no longer does any relabeling — the raw Region_Clean value on
+// the redemption cube IS "Director's Cut" already (see above), so this is a
+// plain passthrough to the shared regionLabel() (which only ever special-
+// cases 'NO_SITE', a value that never appears on this cube's Region_Clean
+// anymore). Kept as its own named function, not inlined at each call site,
+// so a future redemption-cube refresh that reintroduces a sentinel-style
+// value has one obvious place to add a redemption-specific relabel again —
+// exactly what this function existed for previously (see the 2026-08-14/15
+// history this replaces, kept in git history rather than repeated here).
 export function redemptionRegionLabel(key) {
-  return key === 'NO_SITE' ? "Director's Cut" : regionLabel(key)
+  return regionLabel(key)
 }

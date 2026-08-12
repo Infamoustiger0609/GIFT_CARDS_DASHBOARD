@@ -14,25 +14,28 @@ export default function Trends() {
 
   const monthAmountTrend = useMemo(() => {
     const act = groupSum(activationRows, 'YearMonth', ['ActivationAmount', 'ActivationCount'])
-    const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionAmount', 'RedemptionCount'])
+    const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionAmount', 'UniqueCardCount'])
     const months = [...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])].sort()
     return months.map((m) => ({
       label: monthLabel(m),
       Activation: act.find((r) => r.key === m)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === m)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === m)?.RedemptionAmount || 0,
-      RedemptionCount: red.find((r) => r.key === m)?.RedemptionCount || 0
+      RedemptionCardCount: red.find((r) => r.key === m)?.UniqueCardCount || 0
     }))
   }, [activationRows, redemptionRows])
 
+  // 2026-08-20: "Card Count" per this chart's own title — UniqueCardCount
+  // (distinct cards), not RedemptionCount (transaction count), same swap as
+  // every other "X redemptions" display dashboard-wide.
   const monthCountTrend = useMemo(() => {
     const act = groupSum(activationRows, 'YearMonth', ['ActivationCount'])
-    const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionCount'])
+    const red = groupSum(redemptionRows, 'YearMonth', ['UniqueCardCount'])
     const months = [...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])].sort()
     return months.map((m) => ({
       label: monthLabel(m),
       Activation: act.find((r) => r.key === m)?.ActivationCount || 0,
-      Redemption: red.find((r) => r.key === m)?.RedemptionCount || 0
+      Redemption: red.find((r) => r.key === m)?.UniqueCardCount || 0
     }))
   }, [activationRows, redemptionRows])
 
@@ -61,8 +64,8 @@ export default function Trends() {
               <Tooltip
                 content={
                   <ChartTooltip
-                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
-                    countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
+                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCardCount')}
+                    countUnit="cards"
                   />
                 }
               />
@@ -111,8 +114,8 @@ export default function Trends() {
               <Tooltip
                 content={
                   <ChartTooltip
-                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
-                    countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
+                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCardCount')}
+                    countUnit="cards"
                   />
                 }
                 cursor={{ fill: 'rgba(27,36,48,0.04)' }}

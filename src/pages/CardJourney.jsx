@@ -47,9 +47,22 @@ export default function CardJourney() {
   // cancellations, amount nets them in" split already established
   // elsewhere in this app (e.g. the 2026-07-31/2026-08-04 Mode-filter
   // entries' own count-convention notes).
+  //
+  // 2026-08-20: card count here is UniqueCardCount (distinct cards), not
+  // RedemptionCount (transactions) — and it's this page's one hard
+  // invariant: since cohortRows is already restricted to cards whose
+  // ActivationYearMonth AND RedemptionYearMonth both fall in the selected
+  // period (see FilterContext.jsx#filterCohort), this count is by
+  // definition a subset of "Cards Activated" (totalActivationCount) below,
+  // never independent of it and never larger. Every other page's
+  // redemption card count can legitimately exceed its activation card
+  // count for the same period (redemption includes cards activated in
+  // prior periods) — that's normal there, but NOT here, since this page
+  // asks a narrower, same-cohort question. If this ever renders larger
+  // than totalActivationCount, that's a real bug, not expected variance.
   const redeemedAmount = sumBy(cohortRows, 'RedemptionAmount')
   const redeemedNonCancelRows = useMemo(() => cohortRows.filter((r) => !isCancellationRow(r)), [cohortRows])
-  const redeemedCount = sumBy(redeemedNonCancelRows, 'RedemptionCount')
+  const redeemedCount = sumBy(redeemedNonCancelRows, 'UniqueCardCount')
 
   const samePeriodRedemptionRate = totalActivation > 0 ? (redeemedAmount / totalActivation) * 100 : NaN
 
@@ -62,7 +75,7 @@ export default function CardJourney() {
   // sumBy(cohortRows, 'RedemptionAmount'), the same total this netting
   // redistributes without dropping or double-counting any of it.
   const byHead = useMemo(
-    () => netBucketsProportionally(cohortRows, REAL_HEAD_BUCKETS, isCancellationRow, 'RedemptionAmount', 'RedemptionCount'),
+    () => netBucketsProportionally(cohortRows, REAL_HEAD_BUCKETS, isCancellationRow, 'RedemptionAmount', 'UniqueCardCount'),
     [cohortRows]
   )
 
@@ -101,7 +114,7 @@ export default function CardJourney() {
   // be the most recent one with nothing yet to spill into.
   const spillover = useMemo(() => {
     const actByMonth = groupSum(activationRows, 'YearMonth', ['ActivationAmount', 'ActivationCount'])
-    const redByMonth = groupSum(cohortRowsByActivation, 'RedemptionYearMonth', ['RedemptionAmount', 'RedemptionCount'])
+    const redByMonth = groupSum(cohortRowsByActivation, 'RedemptionYearMonth', ['RedemptionAmount', 'UniqueCardCount'])
     const months = [...new Set([...actByMonth.map((r) => r.key), ...redByMonth.map((r) => r.key)])].sort()
     return months.map((m) => {
       const act = actByMonth.find((r) => r.key === m)
@@ -114,7 +127,7 @@ export default function CardJourney() {
         ActivationCount: act?.ActivationCount || 0,
         Redemption: redemptionAmount,
         RedemptionDown: -redemptionAmount,
-        RedemptionCount: red?.RedemptionCount || 0
+        RedemptionCardCount: red?.UniqueCardCount || 0
       }
     })
   }, [activationRows, cohortRowsByActivation])
@@ -163,7 +176,7 @@ export default function CardJourney() {
             <div className="text-center">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-warmgray-muted mb-1">Of Those, Redeemed</div>
               <div className="text-3xl font-serif font-extrabold text-teal">{fmtLacs(redeemedAmount)}</div>
-              <div className="text-xs font-medium text-warmgray-muted mt-1">{fmtNumber(redeemedCount)} redemptions</div>
+              <div className="text-xs font-medium text-warmgray-muted mt-1">{fmtNumber(redeemedCount)} cards</div>
             </div>
 
             <div className="text-2xl text-warmgray-muted leading-none px-1 hidden md:block">=</div>
@@ -205,7 +218,7 @@ export default function CardJourney() {
                 tickFormatter={fmtLacsAxis}
                 label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
               />
-              <Tooltip content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
+              <Tooltip content={<ChartTooltip countField="UniqueCardCount" countUnit="cards" />} cursor={{ fill: 'rgba(27,36,48,0.04)' }} />
               <Bar dataKey="RedemptionAmount" name="Redemption" radius={[4, 4, 0, 0]} maxBarSize={64}>
                 <LabelList dataKey="RedemptionAmount" content={AmountLabel} />
                 {byHead.map((r) => (
@@ -250,8 +263,8 @@ export default function CardJourney() {
                 content={
                   <ChartTooltip
                     formatter={(v) => fmtLacs(Math.abs(v))}
-                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
-                    countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
+                    countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCardCount')}
+                    countUnit="cards"
                   />
                 }
                 cursor={{ fill: 'rgba(27,36,48,0.04)' }}

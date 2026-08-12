@@ -102,19 +102,24 @@ export default function Activation() {
   // 2026-08-14 fix: this chart used to silently exclude Denom values
   // outside the 11-bucket list ('N/A'/'Other') before summing, which made
   // its own total drift from this page's own "Total Activation" KPI right
-  // above it — the excluded rows carry a real, negative amount (~134
-  // correction/adjustment rows, documented in the 2026-08-03 "3-source
-  // activation flow" entry), so dropping them *inflated* the visible sum
-  // above the true total by exactly that amount (checked directly:
-  // ₹8,347.19L shown vs. ₹8,266.57L actual — an ₹80.61L gap). A chart whose
-  // entire purpose is decomposing this page's own headline KPI needs to sum
-  // back to it exactly, unlike Overview's combined Activation-vs-Redemption
-  // Denomination chart (a different, cross-cube comparison with no single
-  // KPI it's meant to reconcile against, left as-is). Fixed by keeping the
-  // 11 named buckets and folding everything else into an explicit "Other"
-  // bucket (gray, same reserved color as topNWithOther's own "Other"
-  // convention) instead of dropping it — same "show it, don't hide it"
-  // rule as the Redemption Heads Breakdown chart's visible Cancellation bar.
+  // above it — the excluded rows carried a real, negative amount, so
+  // dropping them *inflated* the visible sum above the true total. A chart
+  // whose entire purpose is decomposing this page's own headline KPI needs
+  // to sum back to it exactly, unlike Overview's combined Activation-vs-
+  // Redemption Denomination chart (a different, cross-cube comparison with
+  // no single KPI it's meant to reconcile against, left as-is). Fixed by
+  // keeping the 11 named buckets and folding everything else into an
+  // explicit "Other" bucket instead of dropping it — same "show it, don't
+  // hide it" rule as the Redemption Heads Breakdown chart's visible
+  // Cancellation bar.
+  //
+  // 2026-08-18: a later data-level fix reclassified the leaking Cancel
+  // Activate rows away from Denom='N/A' into their own real bucket (see the
+  // 2026-08-17/18 CLAUDE.md entries), so `otherRows` is now always empty on
+  // this cube and "Other" no longer renders — this fallback stays in place
+  // as a live safety net, not dead code: if a future data refresh
+  // reintroduces off-bucket Denom values, this is exactly what should
+  // surface them again rather than silently dropping them.
   const byDenomination = useMemo(() => {
     const g = groupSum(activationRows, 'Denom', ['ActivationAmount', 'ActivationCount'])
     const named = DENOM_ORDER.map((d) => g.find((r) => r.key === d) || { key: d, ActivationAmount: 0, ActivationCount: 0 })

@@ -3751,6 +3751,112 @@ Cut) with no Cancellation bar and no negative axis range. Zero console
 errors across all 8 pages; clean production build (722.26 kB JS, 207.25 kB
 gzipped).
 
+## 2026-08-20 — UniqueCardCount (distinct cards) replaces RedemptionCount
+(transactions) everywhere dashboard-wide; new Card Journey invariant found
+and flagged, not silently patched
+
+`cohortCube.json` gained a `UniqueCardCount` measure (same schema
+otherwise) — distinct cards per row's own dimension combination, unlike
+`RedemptionCount` (a transaction count: one card redeeming 3 times in a
+month is 3 `RedemptionCount` but 1 `UniqueCardCount`). `redemptionCube.json`
+already carried it (added the same day `Overview.jsx`'s KPI ribbon started
+showing "X cards" instead of "X redemptions" — see that entry's own note).
+
+**Global replace, every "X redemptions" display → "X cards" via
+UniqueCardCount** (`Overview.jsx`, `Trends.jsx`, `RedemptionBoxOffice.jsx`,
+`RedemptionFnb.jsx`, `CardJourney.jsx`, `Summary.jsx`/
+`MetricComparisonCard.jsx`) — swept every KPI sub-line, chart tooltip
+(`countField`/`countUnit` props), and `groupSum`/bucket computation that
+paired an amount with `RedemptionCount`. `lib/aggregate.js`'s hardcoded-shape
+helpers (`weekSlotBreakdown`, `netRedemptionHeads`, `netCinemaRedemption`,
+`netCinemaRedemptionByRegion`) now compute and return `UniqueCardCount`
+*alongside* `RedemptionCount` rather than replacing it — `RedemptionCount`
+stays load-bearing for the one place it must never be swapped:
+`RedemptionBoxOffice.jsx`/`RedemptionFnb.jsx`'s "Avg per Redemption" (₹
+per transaction, not per card — a card redeeming 3 times contributes 3x to
+the denominator, correctly). `CancelRedeem.jsx` was audited and left
+untouched — its unit is literally `"cancellations"`, not `"redemptions"`,
+a different concept out of this task's stated scope.
+
+**Overview's Denomination chart tooltip** (explicitly named in the
+request): now shows `ActivationCount` for the Activation series and
+`UniqueCardCount` for the Redemption series — verified live by hovering
+the "300" tier bar: `Activation ₹946 L, 3,19,429 cards` / `Redemption
+₹589 L, 2,85,415 cards`, the Redemption figure matching Summary's own
+"Redemption by Denomination" table row for the same tier to the card,
+confirming the two pages can't drift on this number.
+
+**Summary page: `(X cards)` added to every bucket table row and every "By
+Year" FY-matrix cell**, not just Denomination — `computeBucketComparisons`/
+`computeBucketFYSeries`/`computeNettedBucketFYSeries`/`computeFYSeries`
+(`lib/comparisons.js`) already computed `count` per bucket/per-FY from
+early in this page's history (the 2026-08-11 build), just never rendered
+it — this was a rendering-only change to `MetricComparisonCard.jsx`,
+adding a `({fmtNumber(count)} {unit})` line under each amount cell (both
+the top-level and nested rows), no new computation. The flat "FY
+Comparison" chip row (non-bucketed cards: Total Activation, Total
+Redemption, Box Office/F&B Redemption net) already showed count per FY
+since 2026-08-11 — confirmed, not touched.
+
+**Card Journey's "Redeemed within this period" card count** — the one
+page where "redemption count > activation count" is *not* expected
+variance, per the request's own explicit two-behavior distinction. Wired
+to `sumBy(cohortRows.filter(r => !isCancellationRow(r)), 'UniqueCardCount')`
+(was `'RedemptionCount'`), keeping the existing cancellation-row exclusion
+(a cancellation isn't a redemption event to count, same convention as
+every other net-count split in this app).
+
+**Verified the ≤-Activated invariant live in the app for 5 filter
+combinations** (Playwright, reading the funnel's actual rendered
+`(X cards)` sub-line, not just the underlying data): Unfiltered
+(1,243,826 ≤ 1,337,018 ✓), FY2026-27 (257,600 ≤ 358,012 ✓ — the exact
+reference figures the request asked for), FY2025-26 (494,860 ≤ 563,399 ✓),
+FY2024-25 (319,879 ≤ 415,607 ✓), **Region=NORTH (981,894 ≤ 596,475 —
+FAILS, 159.5% "redemption rate")**.
+
+**The Region failure is a pre-existing data/schema issue, not something
+this task's UniqueCardCount swap introduced** — confirmed by hand against
+the raw cube before touching any code, then confirmed the root cause:
+`cohortCube.json`'s `Region_Clean` field encodes the *redemption* event's
+own region (the outlet's location), not the card's *activation* region —
+proven directly by checking Corporate/Online-activated cards, which are
+~100% `NORTH`-tagged on `activationCube.json`'s own `Region_Clean` (a
+fact already on record in this file from the 2026-08-05 "Region
+Contribution" entry) but appear redeemed across every region in
+`cohortCube.json` (NORTH: 300,533 of their ~350K unique-card total, but
+also EAST/SOUTH/WEST/CENTRAL/Director's Cut/NO_SITE in real volume).
+`FilterContext.jsx#filterCohort`'s Region filter (`passesCohortCommon`,
+pre-existing code, untouched by this task) applies the *same* `Region`
+selection to both cubes — but on `activationCube.json` that means "card's
+own activation region," and on `cohortCube.json` it means "this
+redemption's own region," two different populations with no subset
+relationship. This predates today's change: swapping back to the old
+`RedemptionCount` (transaction count, always ≥ `UniqueCardCount`) makes the
+same combination fail *harder*, not better — confirmed by hand
+(591,590 `RedemptionCount` vs. 224,838 activated, for the FY2025-26+NORTH
+combo checked first). Every *other* filter dimension checked clean
+(FY, Month, CardType, Activation Source — see the raw-cube hand
+verification above and its node-script companions) — this is specifically
+a Region-only issue.
+
+**Deliberately not silently patched**: fixing it means answering a real
+product question — should "Region" on Card Journey mean the card's
+*activation* region (consistent with "Cards Activated" above it, but
+`cohortCube.json` has no such field to filter on) or its *redemption*
+region (what the cube actually carries, consistent with the "spillover"
+chart's own Region-filtered population)? Either answer changes what the
+page's Region filter *means*, which also touches the "Redemption by Head"
+and spillover charts on this same page — a bigger, riskier change than
+this task's stated scope (count-field swaps), so flagged here for a
+follow-up decision rather than guessed at.
+
+**Verified elsewhere**: clean production build (725.17 kB JS, 207.64 kB
+gzipped, no new warnings); zero console errors across all 8 pages
+(Playwright); repo-wide grep confirms zero remaining live-rendered "X
+redemptions" text (only doc comments, which correctly still reference
+`RedemptionCount` where it's the deliberately-kept transaction-count
+field).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

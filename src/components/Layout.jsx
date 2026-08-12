@@ -4,8 +4,8 @@ import FilterBar from './FilterBar'
 import { useFilters } from '../lib/FilterContext'
 
 const TABS = [
-  { to: '/', label: 'Overview', end: true },
   { to: '/summary', label: 'Summary' },
+  { to: '/', label: 'Overview', end: true },
   { to: '/activation', label: 'Activation' },
   { to: '/redemption/box-office', label: 'Redemption · Box Office' },
   { to: '/redemption/fnb', label: 'Redemption · F&B' },
