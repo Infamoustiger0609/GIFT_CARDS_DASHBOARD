@@ -85,17 +85,6 @@ export default function Summary() {
             Box Office/F&B detail moved instead: a nested breakdown under
             "Redemption by Source"'s own Cinema row). */}
         <h2 className="font-serif text-lg font-extrabold text-navy mb-1">Activation &amp; Redemption Trends</h2>
-        <p className="text-xs text-warmgray-muted mb-3 max-w-3xl">
-          YoY = this month vs. the same month last year. MoM = this month vs. the immediately preceding month. FY
-          Comparison = full fiscal-year totals side by side (Apr-Mar); the most recent FY is marked Partial/YTD
-          when it doesn't yet have all 12 months of data, and its own delta compares the same YTD month range
-          against last year rather than a misleading full-year-vs-partial-year number. Activation-side figures are
-          gross (no cancellation concept exists on that cube); Redemption-side figures are net — cancellations
-          carry real signed amounts and net in automatically for "Total," "by Region," "by Source," and "by
-          Denomination," while "by Head" and "by Card Type" net Cancel Redeem transactions in proportionally
-          rather than showing them as their own category (see the Cancel Redeem page for that breakdown). Every
-          card below respects the filters above, live.
-        </p>
         <div className="grid md:grid-cols-2 gap-4">
           <MetricComparisonCard
             title="Total Activation"
