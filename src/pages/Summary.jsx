@@ -109,56 +109,6 @@ export default function Summary() {
             comparisonMonths={comparisonMonths}
           />
           <MetricComparisonCard
-            title="Activation by Denomination"
-            accent="gold"
-            rows={activationRows}
-            rowsAllMonths={activationRowsAllMonths}
-            rowsAllFY={activationRowsAllFY}
-            amountField="ActivationAmount"
-            countField="ActivationCount"
-            unit="cards"
-            comparisonMonths={comparisonMonths}
-            buckets={DENOM_BUCKETS}
-          />
-          <MetricComparisonCard
-            title="Redemption by Denomination"
-            accent="teal"
-            rows={redemptionRows}
-            rowsAllMonths={redemptionRowsAllMonths}
-            rowsAllFY={redemptionRowsAllFY}
-            amountField="RedemptionAmount"
-            countField="UniqueCardCount"
-            unit="cards"
-            comparisonMonths={comparisonMonths}
-            buckets={DENOM_BUCKETS}
-          />
-          <MetricComparisonCard
-            title="Activation by Region"
-            accent="gold"
-            rows={activationRows}
-            rowsAllMonths={activationRowsAllMonths}
-            rowsAllFY={activationRowsAllFY}
-            amountField="ActivationAmount"
-            countField="ActivationCount"
-            unit="cards"
-            comparisonMonths={comparisonMonths}
-            buckets={ACTIVATION_REGION_BUCKETS}
-            bucketLabelFn={regionLabel}
-          />
-          <MetricComparisonCard
-            title="Redemption by Region"
-            accent="teal"
-            rows={redemptionRows}
-            rowsAllMonths={redemptionRowsAllMonths}
-            rowsAllFY={redemptionRowsAllFY}
-            amountField="RedemptionAmount"
-            countField="UniqueCardCount"
-            unit="cards"
-            comparisonMonths={comparisonMonths}
-            buckets={REDEMPTION_REGION_BUCKETS}
-            bucketLabelFn={redemptionRegionLabel}
-          />
-          <MetricComparisonCard
             title="Activation by Source"
             accent="gold"
             rows={activationRows}
@@ -208,6 +158,32 @@ export default function Summary() {
             buckets={CARD_TYPE_BUCKETS}
             cancelPredicate={isCancellationRow}
           />
+          <MetricComparisonCard
+            title="Activation by Region"
+            accent="gold"
+            rows={activationRows}
+            rowsAllMonths={activationRowsAllMonths}
+            rowsAllFY={activationRowsAllFY}
+            amountField="ActivationAmount"
+            countField="ActivationCount"
+            unit="cards"
+            comparisonMonths={comparisonMonths}
+            buckets={ACTIVATION_REGION_BUCKETS}
+            bucketLabelFn={regionLabel}
+          />
+          <MetricComparisonCard
+            title="Redemption by Region"
+            accent="teal"
+            rows={redemptionRows}
+            rowsAllMonths={redemptionRowsAllMonths}
+            rowsAllFY={redemptionRowsAllFY}
+            amountField="RedemptionAmount"
+            countField="UniqueCardCount"
+            unit="cards"
+            comparisonMonths={comparisonMonths}
+            buckets={REDEMPTION_REGION_BUCKETS}
+            bucketLabelFn={redemptionRegionLabel}
+          />
         </div>
       </div>
 
@@ -234,6 +210,35 @@ export default function Summary() {
             countField="UniqueCardCount"
             unit="cards"
             comparisonMonths={comparisonMonths}
+          />
+        </div>
+      </div>
+
+      <div>
+        <div className="grid md:grid-cols-2 gap-4">
+          <MetricComparisonCard
+            title="Activation by Denomination"
+            accent="gold"
+            rows={activationRows}
+            rowsAllMonths={activationRowsAllMonths}
+            rowsAllFY={activationRowsAllFY}
+            amountField="ActivationAmount"
+            countField="ActivationCount"
+            unit="cards"
+            comparisonMonths={comparisonMonths}
+            buckets={DENOM_BUCKETS}
+          />
+          <MetricComparisonCard
+            title="Redemption by Denomination"
+            accent="teal"
+            rows={redemptionRows}
+            rowsAllMonths={redemptionRowsAllMonths}
+            rowsAllFY={redemptionRowsAllFY}
+            amountField="RedemptionAmount"
+            countField="UniqueCardCount"
+            unit="cards"
+            comparisonMonths={comparisonMonths}
+            buckets={DENOM_BUCKETS}
           />
         </div>
       </div>

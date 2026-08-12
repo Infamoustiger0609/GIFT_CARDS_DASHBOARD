@@ -3857,6 +3857,14 @@ redemptions" text (only doc comments, which correctly still reference
 `RedemptionCount` where it's the deliberately-kept transaction-count
 field).
 
+## 2026-08-20 — Removed the explanatory paragraph under Summary's "Activation
+& Redemption Trends" heading
+
+Deleted the `<p>` explaining YoY/MoM/FY Comparison terminology and the
+gross-vs-net Activation/Redemption convention — the `<h2>` heading stays,
+nothing else on the page changed. Purely a copy removal, no computation or
+layout logic touched.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
