@@ -13,27 +13,59 @@ export function AmountLabel(props) {
   )
 }
 
+// Direct value label for a diverging (up/down) bar chart, where one series
+// is rendered as negative values purely to draw downward from a zero
+// baseline (e.g. Card Journey's Activation-up/Redemption-down spillover
+// chart). Always shows the bar's true magnitude (Math.abs) — the downward
+// direction already conveys the sign, so a label reading "-₹123 L" would be
+// redundant/confusing. Positive bars label above (like AmountLabel);
+// negative bars label below, using the same y+offset approach
+// regionDeltaLabel established for a negative Recharts bar (y is already
+// the bar's bottom edge, height is negative, so a small positive offset
+// from y clears the bar without walking back up over it).
+export function DivergingAmountLabel(props) {
+  const { x, y, width, value } = props
+  if (!value) return null
+  const isNegative = value < 0
+  return (
+    <text x={x + width / 2} y={isNegative ? y + 12 : y - 6} textAnchor="middle" fontSize={10} fill={COLORS.inkMuted}>
+      {fmtLacsLabel(Math.abs(value))}
+    </text>
+  )
+}
+
 // Amount label with a period-over-period delta (▲/▼ %) stacked underneath,
 // shown directly on the bar instead of requiring hover. Recharts' LabelList
 // strips non-SVG props before calling `content`, so the per-bar delta can't
 // ride along as an extra prop on the data row — this factory closes over
 // `data` (the same array passed to <BarChart data={...}>) and looks the
 // delta up by `props.index`, which LabelList always passes through intact.
+//
+// 2026-08-14: a negative-valued bar (e.g. "Redemption by Head"'s
+// Cancellation bar) overlapped its own label — checked against the actual
+// rendered SVG (not assumed): for a negative bar Recharts passes `y` as
+// the bar's *bottom* edge already (further down the screen) with a
+// *negative* `height`, so `y + height` walks back up to the zero line
+// rather than down past the bar — the opposite of what's needed. For
+// value < 0, `y` alone is already the bottom edge to anchor below.
 export function regionDeltaLabel(data) {
   return function RegionDeltaLabel(props) {
     const { x, y, width, value, index } = props
     if (!value) return null
     const mom = data[index]?.mom
     const hasMom = mom != null && isFinite(mom)
+    const isNegative = value < 0
+    const amountY = isNegative ? y + (hasMom ? 28 : 14) : y - (hasMom ? 20 : 6)
+    const momY = isNegative ? y + 14 : y - 6
     return (
       <g>
-        <text x={x + width / 2} y={y - (hasMom ? 20 : 6)} textAnchor="middle" fontSize={11} fill={COLORS.inkMuted}>
+        <text x={x + width / 2} y={amountY} textAnchor="middle" fontSize={11} fill={COLORS.inkMuted}>
           {fmtLacsLabel(value)}
         </text>
         {hasMom && (
           <text
             x={x + width / 2}
-            y={y - 6}
+            y={momY}
             textAnchor="middle"
             fontSize={10}
             fontWeight="bold"
@@ -73,6 +105,29 @@ export function PctLabel(props) {
       {fmtPct(value, 0)}
     </text>
   )
+}
+
+// Total value above a stacked bar (e.g. Digital+Physical), attached to the
+// LAST-declared <Bar> in the stack — that segment renders visually on top,
+// so its own x/y/width correspond to the top of the whole stack. Recharts'
+// LabelList only ever gives a segment's own value, not the stack's combined
+// total, so this closes over `data` (the same array passed to <BarChart
+// data={...}>) and the stack's key names, summing them directly — same
+// index-lookup pattern as regionDeltaLabel above, for the same reason
+// (LabelList strips non-SVG props before calling `content`).
+export function stackTotalLabel(data, keys) {
+  return function StackTotalLabel(props) {
+    const { x, y, width, index } = props
+    const row = data[index]
+    if (!row) return null
+    const total = keys.reduce((s, k) => s + (row[k] || 0), 0)
+    if (!total) return null
+    return (
+      <text x={x + width / 2} y={y - 6} textAnchor="middle" fontSize={11} fill={COLORS.inkMuted}>
+        {fmtLacsLabel(total)}
+      </text>
+    )
+  }
 }
 
 // Direct label on a donut/pie segment: category name + share %. Small

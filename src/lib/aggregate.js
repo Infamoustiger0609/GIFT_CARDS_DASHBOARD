@@ -2,7 +2,7 @@
 // already-filtered arrays produced by FilterContext — these functions never
 // filter, only group/sum.
 
-import { WEEKEND_DAYS } from './constants'
+import { WEEKEND_DAYS, HEAD_ORDER } from './constants'
 
 export function sumBy(rows, field) {
   let total = 0
@@ -227,6 +227,48 @@ export function netCinemaRedemption(redemptionRows) {
 // construction (same predicate), not by coincidence.
 export function netCinemaRedemptionByRegion(redemptionRows) {
   return groupSum(redemptionRows.filter(isNetCinemaRedemptionRow), 'Region_Clean', ['RedemptionAmount', 'RedemptionCount'])
+}
+
+// Nets a "no real category" subset of rows (e.g. Cancel Redeem
+// transactions — CardType is always 'N/A' on them, and they shouldn't get
+// their own bar on a Head/Source/Region chart either) proportionally into
+// the real buckets by each bucket's own share of the gross (non-excluded)
+// total, instead of the excluded subset showing up as its own bucket/bar.
+// 2026-08-15: Cancellation should only ever be a visible category on the
+// dedicated Cancel Redeem page — everywhere else that breaks the
+// redemption cube down by CardType/Head/Source/Region, its amount gets
+// folded in like this. `buckets` must be the REAL categories only (e.g.
+// Online/Box Office/F&B, never 'Cancellation' itself) — there's no
+// synthetic "Other"/remainder bucket appended, since the whole point is
+// that the excluded subset never gets a row of its own. `count` is left
+// as each bucket's own gross count, unadjusted — same "amount nets
+// cancellations in, count excludes them" convention already established
+// dashboard-wide (e.g. the Mode-filter entries, Card Journey's own
+// redeemedCount).
+// The 3 real redemption heads (Online/Box Office/F&B), excluding
+// 'Cancellation' — the bucket set to net Cancel Redeem rows into wherever a
+// chart breaks the redemption cube down by Head, plus the predicate that
+// identifies those rows. Shared by Summary.jsx and CardJourney.jsx (the two
+// current consumers) so neither can drift from HEAD_ORDER's own definition
+// of what the real heads are.
+export const REAL_HEAD_BUCKETS = HEAD_ORDER.filter((h) => h !== 'Cancellation').map((h) => ({ key: h, predicate: (r) => r.Head === h }))
+export function isCancellationRow(row) {
+  return row.Head === 'Cancellation'
+}
+
+export function netBucketsProportionally(rows, buckets, isExcludedRow, amountField, countField) {
+  const realRows = rows.filter((r) => !isExcludedRow(r))
+  const excludedAmount = sumBy(rows.filter(isExcludedRow), amountField)
+  const gross = buckets.map((b) => {
+    const bucketRealRows = realRows.filter(b.predicate)
+    return { key: b.key, amount: sumBy(bucketRealRows, amountField), count: sumBy(bucketRealRows, countField) }
+  })
+  const totalGross = sumBy(gross, 'amount')
+  return gross.map((b) => ({
+    key: b.key,
+    [amountField]: totalGross !== 0 ? b.amount + excludedAmount * (b.amount / totalGross) : b.amount,
+    [countField]: b.count
+  }))
 }
 
 // Sums every numeric value field (not just valueField) into the "Other"

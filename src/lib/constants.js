@@ -8,9 +8,50 @@ export const WEEKDAY_ORDER = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Fri
 // Set, so the change propagates everywhere without touching any of them.
 export const WEEKEND_DAYS = new Set(['Friday', 'Saturday', 'Sunday'])
 export const HEAD_ORDER = ['Online', 'Box Office', 'F&B', 'Cancellation']
-// 2026-08-04 data refresh regrouped the Denom tiers (was ₹300/500/1000/
-// 1500/2000/2500/5000/Other-Custom).
-export const DENOM_ORDER = ['₹300', '₹500', '₹1000', '₹2000', '₹2000+', '₹5000+', '₹10000+', 'Other / Custom']
+// 2026-08-10: redemptionCube's new ActivationCohort field — how long before
+// a given redemption its card was originally activated. 'N/A' is always
+// cancellation rows (a cancellation reverses a redemption, not an
+// activation, so "how long ago was it activated" doesn't apply) — kept as
+// its own bucket rather than dropped, same "don't silently exclude real
+// rows" convention as every other breakdown in this app, and required for
+// the cohort chart's own sum-to-total invariant to hold (cancellation rows
+// carry real, negative RedemptionAmount that's part of the total).
+export const COHORT_ORDER = [
+  'Same month',
+  '1-3 months ago',
+  '4-6 months ago',
+  '7-9 months ago',
+  '10-12 months ago',
+  '12+ months ago',
+  'Pre-existing (activated before Apr 2024)',
+  'N/A'
+]
+// Chart-local display label for the 'N/A' cohort bucket — same "raw value
+// stays the data key, only what's drawn changes" pattern as regionLabel()
+// above, kept separate since 'N/A' means something different per field
+// (there it's a real Region_Clean value; here it's cancellation rows).
+export function cohortLabel(key) {
+  return key === 'N/A' ? 'Cancel Redeem' : key
+}
+// 2026-08-10 data refresh regrouped the Denom tiers again (was ₹300/₹500/
+// ₹1000/₹2000/₹2000+/₹5000+/₹10000+/Other-Custom — the currency-symbol
+// strings from the 2026-08-04 refresh) into bare-number exact/range
+// brackets. Found stale while building the Summary page's "by
+// Denomination" comparison (2026-08-11): every real Denom value had
+// silently stopped matching this list, so orderBy() calls (Overview.jsx's
+// Denomination chart) were falling back to alphabetical sort with no
+// values dropped, but a hard-equality bucket predicate (Summary.jsx) was
+// dropping every row outright — fixed at the source rather than patched
+// per call site, so both are correct again.
+// 2026-08-12: narrowed to exactly these 11 magnitude buckets per explicit
+// request — 'Other' (a real Denom value, same as 'N/A') is deliberately no
+// longer part of this list, so it's excluded from the Denomination filter's
+// option list and every "by Denomination" chart bucket, same "not a
+// pickable option, but real rows still pass through untouched when the
+// filter is unrestricted" treatment already applied to 'N/A' everywhere
+// else in this app — not silently dropped from the data, just not offered
+// as its own bucket/option anymore.
+export const DENOM_ORDER = ['0-299', '300', '301-499', '500', '501-999', '1000', '1001-1999', '2000', '2000+', '5000+', '10000+']
 
 // Display-only rename: the raw Region_Clean value 'NO_SITE' renders as
 // "Online" everywhere in the UI (axis ticks, tooltips, the Region filter

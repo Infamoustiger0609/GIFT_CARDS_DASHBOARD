@@ -117,7 +117,7 @@ export default function CancelRedeem() {
         />
       </div>
 
-      <Card title="Cancel Redeem — Monthly Trend" subtitle="Cancel Redeem amount, ₹ Lacs">
+      <Card title="Cancel Redeem — Monthly Trend">
         {!hasData ? (
           <EmptyState />
         ) : (
@@ -149,7 +149,7 @@ export default function CancelRedeem() {
       </Card>
 
       <div className="grid md:grid-cols-3 gap-6">
-        <Card title="Cancel Redeem by Source" subtitle="Online / Cinema">
+        <Card title="Cancel Redeem by Source">
           {bySource.every((s) => s.RedemptionAmount === 0) ? (
             <EmptyState />
           ) : (
@@ -177,7 +177,7 @@ export default function CancelRedeem() {
           )}
         </Card>
 
-        <Card title="Cancel Redeem by Region" subtitle="Cinema only — Online cancellations excluded">
+        <Card title="Cancel Redeem by Region">
           {byRegion.length === 0 ? (
             <EmptyState />
           ) : (

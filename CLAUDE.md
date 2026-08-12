@@ -2526,6 +2526,1231 @@ new net headline total. Zero console errors; clean production build
 (697.67 kB JS, 202.83 kB gzipped — smaller than before, net code reduction
 from removing the two now-dead local Overview.jsx functions).
 
+## 2026-08-10 — Data refresh (new Denom bucketing + ActivationCohort) + new "Card Journey" page
+
+**Data swap**: `activationCube.json` (9,749 rows) / `redemptionCube.json`
+(162,374 rows) replaced with versions carrying regrouped `Denom` values
+(now includes explicit range/exact splits like `0-299`, `300`, `301-499`
+rather than the prior single `₹300` bucket) and a new `ActivationCohort`
+field on the redemption cube only. Two new files also added,
+`dailyActivationCube.json` (6,664 rows) / `dailyRedemptionCube.json`
+(12,842 rows), each with a real `DateStr` field ("2024-04-01") spanning the
+same Apr 2024–Jul 2026 window as the main cubes — lighter/day-level cubes,
+not yet wired into `FilterContext.jsx` or read by any page, per the
+request's own "see [a later prompt] for their use." As with every prior
+data refresh in this file, the request said `src/data/` but the files were
+already placed in (and the app only ever reads from) `public/data/` —
+confirmed, no code change needed for the swap itself. `Denom`'s new
+bucketing wasn't specifically re-validated against the existing
+Denomination filter/chart in this pass (out of scope for this request) —
+worth a follow-up check if the exact bucket set matters for a future
+change.
+
+**`ActivationCohort` values** (confirmed directly against the data, not
+assumed): `Same month`, `1-3 months ago`, `4-6 months ago`, `7-9 months
+ago`, `10-12 months ago`, `12+ months ago`, `Pre-existing (activated before
+Apr 2024)`, `N/A` — the last is exclusively cancellation rows (a
+cancellation reverses a redemption, not an activation, so "how long ago
+was this activated" doesn't apply). New `lib/constants.js#COHORT_ORDER` /
+`#cohortLabel()` (renders `'N/A'` as "Cancel Redeem" for display, same
+raw-key-stays-raw / label-is-a-view-concern pattern as `regionLabel()`).
+
+**New `/card-journey` page** (`pages/CardJourney.jsx`): purpose is
+separating two questions that sound similar but aren't — "cards activated
+in the selected period" vs. "redemptions happening in the selected period,
+regardless of when those specific cards were originally activated." Two
+KPI cards side by side (Activated Cards = `sum(ActivationAmount)` over
+`activationRows`, identical computation to every other page's headline
+Activation KPI; Redeemed Cards = `sum(RedemptionAmount)` over
+`redemptionRows`), an explicit callout paragraph between them stating
+they're different questions (per the request — not left to be inferred
+from two similarly-styled cards sitting next to each other), then a bar
+chart grouping `redemptionRows` by `ActivationCohort` (`groupSum` +
+`orderBy(COHORT_ORDER)`). Colored via `categoricalColor()` cycling for the
+7 real cohorts plus `COLORS.warning` (reserved coral, the established
+"cancellations" status color) for the `N/A`/"Cancel Redeem" bucket, which
+renders as a negative bar — same "show cancellations as their own visible
+negative bar rather than hiding them" convention as the Redemption Heads
+Breakdown chart. X-axis labels angled `-45°`/`height 70` from the start
+(long cohort strings, same crowding fix already applied to the "by Region"
+charts after the 2026-08-05 label-overlap bug) rather than waiting to
+discover the same problem again. Respects every existing global filter
+automatically, no new filter-plumbing — both `activationRows` and
+`redemptionRows` already come from `useFilters()`, already filtered.
+
+**Verified the request's own sum invariant directly**: unfiltered, the 8
+cohort bars (₹5,578L + ₹1,539L + ₹362L + ₹183L + ₹144L + ₹8L + ₹344L −
+₹1,463L) sum to ₹6,695L, matching the Redeemed Cards KPI (₹6,695.32L,
+rounding) exactly — true by construction since `groupSum` drops no rows
+and every redemption row carries exactly one `ActivationCohort` value.
+Re-verified under an active Region=NORTH filter (₹4,480L + ₹1,181L +
+₹297L + ₹149L + ₹119L + ₹6L + ₹303L − ₹1,209L = ₹5,326L, matching that
+filtered Redeemed Cards KPI exactly), confirming the invariant holds
+generally, not just unfiltered. Zero console errors; clean production
+build (700.83 kB JS, 203.64 kB gzipped).
+
+## 2026-08-10 — Day filter (backed by the new daily cubes, Overview-only)
+
+New 10th global filter, "Day" (1-31), positioned right after Month in
+`FilterBar.jsx`. Deliberately narrow in scope — see below — rather than a
+general row-level filter like every other control on the bar.
+
+**Why it's structurally different from every other filter**: every existing
+filter narrows the two *main* (monthly-granularity) cubes. The Day filter
+instead reads from the two new lighter `dailyActivationCube.json` /
+`dailyRedemptionCube.json` files (`DateStr`/`Region_Clean`/
+`ActivationModeFinal`|`RedemptionModeFinal`|`Head` only — no CardType,
+Denom, ActivationCohort, Format, or Category), because the main cubes have
+no day-level field at all, only month-level `YearMonth`. So "select a day"
+can't mean "narrow `activationRows`/`redemptionRows`" the way every other
+filter works — there's a second, parallel row-filtering path
+(`FilterContext.jsx`'s `dailyMonthActivationRows`/`dailyMonthRedemptionRows`/
+`dailySelectionActivationRows`/`dailySelectionRedemptionRows`) that only
+Overview.jsx's new "Daily Activation & Redemption Trend" card reads from.
+Every other page, chart, and KPI in the app is completely unaffected by the
+Day filter, by construction (they never read the daily pools).
+
+**Availability gating**: `dayFilterAvailable` (`FilterContext.jsx`) is true
+only when exactly one Month is selected AND none of Card Type,
+Denomination, Activation Source, or Redemption Source is active. Per the
+request's "don't silently show wrong/incomplete numbers" instruction, this
+is a hard gate, not a partial combine — even though `ActivationModeFinal`/
+`RedemptionModeFinal` do technically exist on the daily cubes (checked
+directly), Activation Source/Redemption Source are still treated as
+incompatible along with Card Type/Denomination, per the request's own
+explicit list, rather than trying to derive which fields are "technically
+fine" and only gating on the rest. When unavailable, `Select.jsx` (which
+gained a new `disabled`/`disabledReason` prop, greyed control + `title`
+tooltip) shows the Day dropdown disabled, and `FilterBar.jsx` surfaces a
+small caption explaining why — but only once it's actually relevant (a
+single Month is already picked, or a Day selection is already stored and
+now inert) rather than on the default all-clear screen, where "select
+exactly one month" would just be noise. Changing Month (or FY, which can
+indirectly change Month via its own pruning) always resets `filters.day`
+back to `[]` — a day number picked under one month is meaningless under a
+different one.
+
+**Overview.jsx's new "Daily Activation & Redemption Trend" card**: renders
+only when `dayFilterAvailable`. Always plots every day of the selected
+month (Activation + Redemption amount, grouped bars, gold/teal per the
+existing Activation-vs-Redemption convention) — the specific Day
+selection, if any, is shown as a *highlight* on top of the full month
+(selected day(s) at full opacity, the rest dimmed to 0.25 via per-bar
+`<Cell fillOpacity>`) rather than narrowing the chart's own dataset, so the
+"spot the best/worst day, correlate with movie releases" use case the
+request describes always has the whole month in view for comparison. A
+small 2-KPI panel (Activation / Redemption amount + count) appears above
+the chart only when `filters.day.length > 0`, scoped to exactly the
+selected day(s) via `dailySelectionActivationRows`/
+`dailySelectionRedemptionRows`. Deliberately **did not** rewire the
+existing headline KPI ribbon (Revenue, Total Redemption (net), Total
+Transaction Value, Uptake) to reflect the Day selection — those depend on
+MoM/QoQ/YoY comparison logic, the Cancel Redeem netting/winner-map, and the
+Uptake Ticket/F&B split, none of which the daily cubes have the fields to
+support, and forcing a day-scoped number through machinery built for
+month-scoped comparisons would be a bigger, riskier rewire than the request
+asked for. This is a scope decision worth revisiting if the headline ribbon
+itself is meant to go day-aware later, not an oversight.
+
+**Verified against the raw daily cubes by hand first, then live in the
+app**: Jul 2024, Day 15 — Activation ₹5.96L / 871 cards, Redemption ₹3.70L
+/ 1,215 redemptions — both matched the app's selection-panel figures to the
+rupee. Day 1 + Day 2 combined (a genuine multi-day OR, not the "all"/"none"
+edge cases) — Activation ₹7.63L / 1,334 cards, Redemption ₹9.57L / 5,067
+redemptions — also matched exactly, confirming the multi-day code path
+works, not just the single-day one. "All days" was verified *by
+construction* rather than by comparing two separately-summed numbers:
+`dailySelectionActivationRows`/`...RedemptionRows` literally **are**
+`dailyMonthActivationRows`/`...RedemptionRows` (the same array reference)
+whenever `filters.day` is `[]`, so there's no second summation path that
+could drift — confirmed by reading the code, and confirmed live that
+ticking every real Day checkbox individually normalizes back to `filters.day
+= []` (the same established "full selection = true unrestricted" rule
+every other filter in this app already follows, from the 2026-08-03
+"Select All" fix), landing back on "Whole month" rather than a 31-element
+explicit list. Separately confirmed the daily cubes' own month-sums match
+the main cubes' `YearMonth` totals to the paisa for every month in the
+dataset (max abs diff ₹6.50 total across all 28 months — pure
+floating-point noise, same pattern as every other cross-cube reconciliation
+in this file). Confirmed live: activating Card Type mid-selection greys out
+the Day control (`rs__control--is-disabled`), shows the incompatibility
+caption, and hides the Daily Trend card entirely (falls back to exactly the
+normal Overview page) rather than showing stale/partial numbers. Zero
+console errors across every scenario; clean production build (705.98 kB
+JS, 204.90 kB gzipped).
+
+## 2026-08-11 — New "Summary" page: YoY/MoM/FY comparisons across every metric
+
+New `/summary` page — 13 metric-comparison cards (5 Activation, 8
+Redemption), each showing the same MoM/YoY/FY-to-FY comparison trio, built
+from one new reusable component rather than 13 hand-written blocks.
+
+**Scope decision, made explicit rather than silently guessed**: the
+request named 5 breakdown dimensions (Region, Mode, Head, CardType,
+Denomination) as what "underlying chart breakdowns" means. Not all of
+these are literally separate charts on Activation/Redemption today (Denom
+only existed on Overview; CardType only existed nested inside "by Source"
+stacked bars) — read as the definitive dimension list to build comparisons
+for, applied to whichever cube each is relevant to, rather than a stricter
+"only exactly the chart titles that already exist" reading. "Mode" is
+read as "Source" (Activation Source's 3-bucket model / Redemption
+Source's 2-bucket model) — the only surviving concept with that meaning
+after this app's several Mode→Source renames earlier in this file.
+**Deliberately excluded**: Format (Box Office seating tier) and Category
+(F&B item), and the Weekday/Week-slot trend charts — none were in the
+request's named list, and both Format/Category are long-tail (~90/many
+values) fields that would need their own top-N+Other treatment to stay
+readable, which felt like scope creep beyond what was asked. Also
+included, beyond a literal reading: `Box Office Redemption (net)` and
+`F&B Redemption (net)` as their own headline metrics (not just a combined
+`Total Redemption (net)`) — since Box Office and F&B are genuinely
+separate pages with separate headline KPIs elsewhere in the app, a
+faithful "every metric currently shown on the Redemption pages" needed
+both, not just the site-wide total.
+
+**Architecture — one reusable component, not 13 copies**
+(`components/MetricComparisonCard.jsx`): takes `rowsAllMonths`/`rowsAllFY`
+(the same Month-unrestricted/FY-unrestricted, filters-respecting pools
+every other page's badges already read from — see FilterContext.jsx),
+`amountField`/`countField`, and an optional `buckets` array of
+`{key, predicate}`. Renders (a) the total with MoM/YoY `DeltaBadge`s — the
+exact same badge component every other page's KPIs use, not a new one —
+(b) an optional per-bucket table (Region/Source/Head/CardType/
+Denomination), each row with its own MoM/YoY, and (c) an FY-to-FY row.
+Because every metric on the page is just a different `{rows, buckets}`
+pairing fed into this one component, adding a 14th metric later is a
+config entry in `Summary.jsx`, not new chart code.
+
+**New shared helpers in `lib/comparisons.js`**:
+  - `computeBucketComparisons(rows, buckets, field, countField,
+    comparisonMonths)` — runs the existing `computeComparisons()` once per
+    bucket after pre-filtering to that bucket's predicate, same pattern
+    Overview.jsx's `bucketRegionData()` already established for its
+    regional charts (drops zero-current buckets, same convention). The
+    card's own "total" row reuses this too, via a synthetic
+    `[{key:'Total', predicate:()=>true}]` single-bucket call — one code
+    path for both, not two.
+  - `computeFYSeries(rows, field, countField)` — full-year totals per FY
+    present in the data, each tagged `isPartial` (fewer than 12 distinct
+    `YearMonth` values actually present for that FY — data-driven, not a
+    hardcoded "current FY," so a future refresh completing FY2026-27 or
+    adding FY2027-28 needs no code change). **The one piece of real
+    design thought here**: a partial trailing FY's delta does *not*
+    compare its own (partial) total against the previous FY's *full*
+    total — that would read as a large fake decline purely from having
+    fewer months, not a real signal. Instead it compares its own YTD
+    total against the *same relative month range* one year prior (e.g.
+    Apr-Jul 2026 vs. Apr-Jul 2025), labeled distinctly ("vs LY (same
+    months)") so it's never mistaken for a full-year comparison. A full
+    FY still compares against the previous FY's full total as normal
+    ("FY YoY"). The very first FY in the data gets no delta at all — same
+    "hide missing comparisons, don't show broken math" rule as
+    `DeltaBadge`/`computeComparisons` already follow everywhere else.
+
+**Region bucket definitions extracted, not duplicated**: `Summary.jsx`'s
+"by Region" cards needed the exact same `ACTIVATION_REGION_BUCKETS`/
+`REDEMPTION_REGION_BUCKETS`/`redemptionRegionLabel` Overview.jsx's own
+region charts use (5 cinema regions + channel-total buckets — see those
+constants' own doc comments for why a plain `Region_Clean` groupby would
+be wrong). Rather than a second hand-written copy that could drift, moved
+them out of `Overview.jsx` into new `lib/regionBuckets.js` and pointed
+both pages at the one definition — same "extract instead of duplicate"
+discipline this file has followed at every prior point where a second
+call site needed the same nuanced bucketing (`groupByActivationSource`,
+`netHeadRows`, etc.).
+
+**Real bug found and fixed while building this, unrelated to the new
+page's own logic**: `lib/constants.js#DENOM_ORDER` was still the
+2026-08-04-era bracket list (`₹300`/`₹500`/.../`Other / Custom`, with a
+currency symbol) — stale ever since the 2026-08-10 data refresh
+regrouped `Denom` into bare-number exact/range brackets (`0-299`, `300`,
+`301-499`, ..., `Other`). This was silently splitting behavior two ways
+depending on how a call site used `DENOM_ORDER`: `orderBy()` calls
+(Overview.jsx's Denomination chart) fell back to alphabetical sorting
+with no data lost (every real value still rendered, just out of magnitude
+order — a cosmetic bug that had been live since the refresh, unnoticed
+until now), while a hard-equality bucket predicate (this page's own new
+"by Denomination" cards) silently matched *zero* rows, since no real
+`Denom` value has ever equaled `'₹300'` etc. — an empty breakdown table,
+caught immediately by the "no rows in the per-bucket table" symptom
+during this page's own verification pass. Fixed at the source
+(`DENOM_ORDER` itself updated to the current 12-bracket list) rather than
+patched per call site, so both the pre-existing Overview ordering bug and
+the new page's empty table are fixed by the same one-line change;
+`Overview.jsx`'s Denomination chart subtitle (which spelled out the old
+bracket list literally) updated to match.
+
+**Verified against the raw cubes by hand first, then live in the app,
+unfiltered**: Total Activation for the current anchor month (Jul 2026,
+the latest month in the data) — ₹1,149.77L, ▲125.7% MoM (vs. ₹509.51L
+Jun 2026), ▲209.2% YoY (vs. ₹371.83L Jul 2025) — all three matched the
+app exactly. FY series — FY2024-25 ₹2,321.80L, FY2025-26 ₹3,480.27L
+(▲49.9% FY YoY), FY2026-27 ₹2,464.50L marked "Partial — 4/12 months
+(YTD)" with ▲95.9% "vs LY (same months)" (vs. ₹1,258.17L for Apr-Jul
+2025) — all matched exactly, confirming the partial-year YTD-vs-YTD delta
+math (not a naive full-year comparison). Re-verified under an active
+Region=NORTH filter — Total Activation ₹110.15L / ▲85.9% MoM / ▼43.5%
+YoY — matched a direct hand-filtered computation on the raw cube exactly,
+confirming every card recomputes live from the global filters rather than
+showing one static view. Zero console errors; clean production build
+(714.49 kB JS, 206.93 kB gzipped).
+
+## 2026-08-11 — Remove all decimals from Lac-denominated currency, no exceptions
+
+Second pass at this (an earlier same-session attempt was explicitly
+reverted at the user's request before landing) — this time with an
+explicit "no exceptions" instruction covering the 3 KPIs the first attempt
+had deliberately excluded.
+
+**Root fix, same as before**: `lib/format.js#fmtLacs`'s default `decimals`
+param changed `2` → `0`. `toLocaleString('en-IN', {minimumFractionDigits:
+0, maximumFractionDigits: 0})` performs standard round-half-away-from-zero
+rounding (confirmed: this is `Intl.NumberFormat`'s spec-default rounding
+mode, not truncation), so `7402.45` → `"7,402"`, matching the request's
+own example exactly. `fmtLacsAxis`/`fmtLacsLabel` (chart axis ticks/
+on-bar labels) were already 0-decimal before this pass, nothing to change
+there — confirmed via the same repo-wide `toFixed|fmtLacs\(|decimals` grep
+used the first time, re-run fresh since the codebase had moved on
+(Card Journey, Day filter, Summary page all added since).
+
+**Explicit call-site overrides, all removed this time**: `FlowBox.jsx`'s
+redundant `fmtLacs(amount, big ? 2 : 2)` ternary (both branches were
+already `2`, now just `fmtLacs(amount)`); `RedemptionFnb.jsx`'s Hero
+Products list (`p.amount.toFixed(2)` → `Math.round(p.amount)` — this
+field is pre-converted to Lacs in the source JSON, not raw rupees, so no
+`fmtLacs`/`/100000` involved, just a plain round). **The 3 "Avg" KPIs**
+(Activation's "Avg Ticket Size", both Redemption pages' "Avg per
+Redemption") — the specific carve-out the first attempt made and reported
+back, since these are genuinely sub-₹1L per-unit averages and rounding to
+whole Lacs makes them display "₹0 L" — were removed this time per the
+request's explicit "no exceptions" instruction. All three now show
+"₹0 L", which is real, not a bug: verified directly (Activation's average
+is ≈₹0.007L/card, F&B's ≈₹0.0027L/redemption) — flagged back to the user
+as an observation, not silently left as a surprise.
+
+**Real bug found and fixed while verifying, unrelated to this task's own
+change**: a full-page sweep (Playwright, regex for any remaining `₹\d+\.\d+`
+across all 8 routes) threw a React error on Overview — `ReferenceError:
+regionLabel is not defined`. Traced to the 2026-08-11 Summary-page work
+earlier the same day: extracting `ACTIVATION_REGION_BUCKETS`/
+`REDEMPTION_REGION_BUCKETS` out of `Overview.jsx` into the new
+`lib/regionBuckets.js` module also stripped `regionLabel` from
+`Overview.jsx`'s own `lib/constants` import line (on the assumption it was
+now only needed inside the extracted bucket file) — but `Overview.jsx`'s
+"Activation by Region" chart's own `XAxis tickFormatter`/`Tooltip
+labelFormatter` call `regionLabel` directly, a second, independent call
+site the earlier grep-before-deleting pass missed. This had been silently
+broken (Overview page crashing to a white error boundary on every load)
+since that same-day change landed, caught only by this task's own
+verification sweep rather than by that change's own testing. Fixed by
+re-adding `regionLabel` to the import line; confirmed no other dropped
+import from that same extraction (`REGION_ORDER` was correctly left out —
+grepped, genuinely unused after the extraction).
+
+**Verified**: Playwright swept all 8 routes (Overview, Activation, both
+Redemption pages, Trends, Cancel Redeem, Card Journey, Summary) for any
+remaining `₹<digits>.<digits>` pattern in the rendered page text — zero
+matches on every page, post-fix. Confirmed the 3 "Avg" KPIs render exactly
+"₹0 L" (not blank, not NaN). Hero Products list confirmed whole-number
+(e.g. "₹393 L"). `ChartTooltip.jsx`'s default value formatter
+(`fmtLacs(p.value)`, no explicit decimals argument) inherits the new
+0-decimal default automatically — confirmed via source read that this is
+the single shared tooltip component every chart on every page uses, with
+no per-chart custom formatter bypassing it (re-ran the repo-wide grep from
+this same entry's first paragraph to confirm). Zero console errors after
+the `regionLabel` fix; clean production build (714.47 kB JS, 206.90 kB
+gzipped).
+
+## 2026-08-12 — Cross-page audit: Overview vs. every other page, no drift found
+
+Requested as a "root-cause, not per-page patch" audit — verify every page
+matches Overview to the rupee for identical filters, and consolidate any
+duplicated aggregation logic found. Re-verified Overview itself first
+(per the request's own "reverify if not confirmed" instruction): its
+headline KPIs are plain `sumBy(activationRows, 'ActivationAmount')` /
+`sumBy(redemptionRows, 'RedemptionAmount')` over the exact rows
+`FilterContext.jsx` produces, no page-specific transformation — about as
+close to ground truth as a computation can be, confirmed by reading the
+source rather than assumed.
+
+**Audit method**: hand-computed ground-truth totals directly from the raw
+cubes in Node (replicating `physicalCancelWinnerMap`/`netHeadRows` exactly)
+for 3 filter combinations — (1) no filters, (2) Region=NORTH, (3)
+Month=Jul 26 — then compared every page's displayed figure against that
+ground truth via Playwright, not just page-to-page. Also traced, via
+direct source reading, exactly which shared arrays each page's totals
+derive from (Overview/Activation/Trends/CancelRedeem all read
+`activationRows`/`redemptionRows`/`redemptionRowsAllMonths` straight from
+`useFilters()` with no independent re-filtering before summing — a
+structural guarantee these can't drift, not just an empirical one).
+
+**Result: zero numeric discrepancies found**, across all 3 combos, on all
+6 pages. Total Activation matched exactly on Overview and Activation.jsx
+(₹8,267L / ₹3,340L / ₹1,150L across the 3 combos). Overview's per-head
+flow-diagram amounts (Box Office, F&B) matched RedemptionBoxOffice.jsx's/
+RedemptionFnb.jsx's own headline KPIs exactly (₹1,023L/₹1,433L,
+₹391L/₹696L, ₹85L/₹85L — the last pair's coincidental equality double-
+checked against the unrounded values, ₹1023.4974L vs ₹1023.50L display
+artifact in an earlier hand-check, not a real ambiguity). Trends.jsx
+verified via its own chart tooltip under Month=Jul 26 (a single remaining
+data point) — ₹1,150L/₹831L, matching Overview to the rupee — plus the
+general case confirmed by the shared-array proof above. Cancel Redeem's
+own "Cancel Redeem" KPI matched hand-computed cancellation totals exactly
+(₹1,463L/₹1,209L/₹220L), and the arithmetic identity `grossPositiveRedemption
+- CancelRedeemTotal = Overview's Total Redemption` held for all 3 combos
+by hand computation. **One transient false alarm during this audit**:
+an early automated run showed Overview's combo-3 numbers off from every
+other page (and non-reproducible — different wrong numbers on a second
+run) — traced to the test script's own insufficient wait after a Month
+filter change on Overview specifically (the heaviest page, most charts to
+recompute), not an app bug; a version with `networkidle` + longer settle
+time reproduced the correct, matching numbers reliably across repeated
+runs. Documented here so this specific false trail isn't re-chased.
+
+**Root-cause consolidation, done anyway despite finding no active bug**:
+`physicalCancelWinnerMap(redemptionRowsAllMonths)` was independently
+computed via three separate `useMemo` call sites — one each in
+`Overview.jsx`, `RedemptionBoxOffice.jsx`, `RedemptionFnb.jsx` — genuinely
+duplicated logic per the request's own definition, even though it happened
+to be numerically harmless (proven: a Region+Month winner decision depends
+only on rows matching that exact key, and removing the Month restriction
+only *adds* keys for other months, never changes the rows behind a key
+already present — so self-deriving the winner map from whichever pool
+`netHeadRows()` is given always agrees with an externally-pinned one, for
+any key that computation could actually look up). Removed all three
+`useMemo`/`physicalCancelWinnerMap` call sites and the explicit `winnerMap`
+argument threaded through every `netHeadRows(...)` call in favor of
+letting `netHeadRows()` self-derive one from whatever rows it's given
+(already its documented fallback — `winnerMap || physicalCancelWinnerMap
+(redemptionRows)` in `lib/aggregate.js`) — deleting the duplication rather
+than relocating it to a new shared wrapper, since the existing shared
+function already had the self-sufficient default. `Summary.jsx` (added
+2026-08-11) was already written this way from the start, so it needed no
+change — only the 3 older call sites had the redundant explicit-map
+pattern. Re-ran the full 3-combo audit *after* this change and confirmed
+every figure is byte-identical to before — the consolidation is provably
+behavior-preserving, not just assumed so.
+
+**Broader architecture note**: most of the aggregation surface this
+request was worried about was already consolidated by prior work this
+session — `lib/aggregate.js` (`sumBy`, `groupSum`, `netHeadRows`,
+`netRedemptionHeads`, `weekSlotBreakdown`, `splitByCardType`,
+`groupByModeTable`, `topNWithOther`, `netCinemaRedemption`), `lib/
+comparisons.js` (`computeComparisons`, `computeBucketComparisons`,
+`computeFYSeries`), `lib/activationSource.js`/`lib/redemptionMode.js`
+(the two Source bucket models), `lib/regionBuckets.js` (Region bucket
+definitions, extracted 2026-08-11), and `FilterContext.jsx`'s exported
+`ticketFnbBucket()`. Every page's own computations are thin, page-specific
+compositions of these shared primitives (e.g. Activation.jsx's regional
+split just filters to `ActivationModeFinal==='Physical'` then calls the
+shared `groupSum`) — not independently reimplemented aggregation
+algorithms. The one real duplication this audit found (the winner-map
+call sites above) is now gone.
+
+**Verify explicitly, as requested — which pages don't match**: none.
+Every one of Activation, Redemption · Box Office, Redemption · F&B,
+Trends, and Cancel Redeem matched Overview exactly, for all 3 filter
+combinations, both before and after the consolidation. Zero console
+errors throughout; clean production build (714.38 kB JS, 206.85 kB
+gzipped — smaller than before, net code removed).
+
+## 2026-08-12 — Chart-parity pass: Activation vs. both Redemption pages + Denomination bucket update
+
+**Checklist built first, before writing any chart code** — every chart on
+Activation.jsx / RedemptionBoxOffice.jsx / RedemptionFnb.jsx, categorized
+against the request's 4 named "general-purpose" types (weekday trend,
+regional split, mode/source split, denomination split) vs. page-specific
+ones (Format, Category, Hero Products, Heads Breakdown, Month-wise trend —
+none of which were in the request's named list, left untouched):
+
+| Chart type | Activation | Box Office | F&B |
+|---|---|---|---|
+| Weekday/Week-slot trend | had it | **had it already** (see below) | missing → added |
+| Regional split | had it | had it | had it |
+| Mode/Source split | had it | had it | missing, deliberately (see below) |
+| Denomination split | missing → added | missing → added | missing → added |
+
+**The request's own premise was half right**: it named "Week-slot
+Activation Trend... missing from the Redemption pages" (plural) as the
+motivating example. Checked before adding anything — RedemptionBoxOffice.jsx
+already had this exact chart, just under the name "Weekday Trend" (same
+`groupSum(netBoxOfficeRows, 'Weekday', ...)` shape, same `categoricalColor`
+cycling, same convention as Activation's). Only RedemptionFnb.jsx was
+genuinely missing it. Rather than add a redundant second weekday chart to
+Box Office, renamed its existing one to **"Week-slot Redemption Trend"**
+(pure rename, zero calculation change) so the same concept carries the
+same name on all 3 pages, and added the matching chart to F&B for the
+first time, same shape/colors.
+
+**F&B "by Source" — considered and deliberately skipped, not an
+oversight**: this chart existed briefly earlier in this project's history
+and was removed (2026-08-05 "Fix structurally-empty by-Source charts"
+entry) because `Head='F&B'` rows are 100% `RedemptionModeFinal='Physical'`
+— nothing is ever bought via F&B through PVR Inox Online — so the chart
+would always be exactly 100% Cinema / 0% Online, structurally, not just
+usually. Box Office solved the analogous problem by widening its own
+chart's scope to combine Box Office + Online (both "ticket-type"
+redemptions); no such second head exists for F&B to combine with. Treated
+as the same category of exception the request itself named for Format/
+Category (fields that "genuinely don't apply" to a page) rather than
+force-adding a chart that would always convey zero information — flagged
+explicitly in a code comment and here, not silently dropped.
+
+**Denomination**: genuinely missing as a *page-scoped* chart on all 3 —
+only existed as one combined Activation-vs-Redemption chart on
+Overview.jsx. Added "Activation by Denomination" / "Box Office Redemption
+by Denomination" / "F&B Redemption by Denomination" to each page
+respectively (`ActivationAmount` for Activation, `RedemptionAmount`
+scoped to that page's own net rows — `netBoxOfficeRows`/`netFnbRows` — for
+the two Redemption pages, consistent with every other breakdown chart
+already on those pages being net-scoped). All 3 use the exact same
+11-bucket `DENOM_ORDER` list (see below), angled X-axis labels
+(`-45°`/`height 60`) matching the established crowding-avoidance pattern
+from the Region charts, `categoricalColor()` cycling for bar fills.
+
+**Denomination bucket set narrowed to exactly 11, per explicit request**:
+`DENOM_ORDER` (`lib/constants.js`) dropped `'Other'` (was a 12th bucket,
+added 2026-08-11) — now exactly `0-299, 300, 301-499, 500, 501-999, 1000,
+1001-1999, 2000, 2000+, 5000+, 10000+`, in that order. `'Other'` is a real
+Denom value (confirmed still present in the data, ~₹0.04L, negligible)
+but is no longer offered as a pickable filter option or its own chart
+bucket — same "not pickable, but real rows still pass through untouched
+when the filter is unrestricted" treatment `'N/A'` already had. Two call
+sites changed as a result:
+  - `FilterContext.jsx`'s `options.denominations` — was data-derived
+    (every non-'N/A' value actually present in the cubes, which included
+    'Other'); now just `DENOM_ORDER` directly, a fixed enumeration, same
+    pattern already used for `activationSources`/`redemptionSources`
+    (bucket models aren't data-derived field lists). `FilterBar.jsx`'s
+    now-redundant `orderBy(options.denominations, DENOM_ORDER)` simplified
+    to use `options.denominations` directly, since it's already in the
+    right order by construction.
+  - Overview.jsx's "Activation vs. Redemption by Denomination" chart
+    changed from deriving-then-`orderBy()`-ing the set of values actually
+    present (which let 'Other' slip back in via `orderBy`'s "unknown,
+    append alphabetically" fallback — the exact bug class the 2026-08-11
+    entry already flagged once for a different reason) to iterating
+    `DENOM_ORDER` directly and filtering rows to
+    `DENOM_ORDER.includes(r.Denom)` — structurally can't include a value
+    outside the fixed list anymore, not just correct today. Subtitle
+    updated to drop "/ Other". `Summary.jsx`'s own Denomination cards
+    needed no change — already built as `DENOM_ORDER.map(...)`, so the
+    bucket-set narrowing propagated automatically.
+
+**Verified against the raw cubes by hand first, then live in the app**:
+unfiltered Activation by Denomination — 0-299 ₹242L, 300 ₹958L, 301-499
+₹247L, 500 ₹2,131L, 501-999 ₹565L, 1000 ₹1,926L, 1001-1999 ₹740L, 2000
+₹614L, 2000+ ₹798L, 5000+ ₹23L, 10000+ ₹103L — all 11 matched the app
+exactly. Noted (not a bug): summing these 11 buckets (₹8,347L) exceeds
+the page's own Total Activation (₹8,267L) by exactly the excluded `Denom
+='N/A'` rows' amount (−₹80.65L, real negative correction/adjustment
+entries) — same "gap equals the excluded rows' amount, not a leak"
+pattern already documented for Overview's version of this chart. Box
+Office and F&B's Week-slot Redemption Trend charts matched the exact
+per-weekday figures already verified earlier this session (₹109L/₹104L/
+.../₹182L for Box Office). Denomination filter dropdown confirmed to show
+exactly the 11 buckets in the correct order (Playwright, read from actual
+rendered `<option>` DOM text, not assumed). Zero console errors across
+all 3 pages; clean production build (719.08 kB JS, 207.22 kB gzipped).
+
+## 2026-08-12 — Compacted the sticky header + filter bar
+
+Target was 30-40% less combined vertical height, verified by measuring
+actual rendered pixel heights (Playwright `boundingBox()`), not just
+eyeballing smaller-looking numbers.
+
+**Header** (`Layout.jsx`): logo `h-14 md:h-16` → `h-8 md:h-10`, header
+padding `py-2` → `py-1`, nav-pill padding `px-3 py-2` → `px-2.5 py-1`,
+"Gift Card/Analytics" label text sizes trimmed one step (`text-sm`→`text-xs`,
+`text-[11px]`→`text-[10px]`). Logo height dominates the header's total
+height (nav pills are shorter), so shrinking it is what actually moves
+the number — measured 80px → 48px, a 40% reduction on its own.
+
+**Filter bar** (`Layout.jsx`'s wrapper + `FilterBar.jsx` + `Select.jsx`):
+wrapper padding `py-2`→`py-0.5`, `FilterBar.jsx`'s own card `px-3 py-2`→
+`px-2.5 py-0.5`, grid gap `gap-1.5`→`gap-1`, react-select control
+`minHeight` `32`→`24`, `Select.jsx`'s label text `text-[10px]`→`text-[9px]`
+with its gap to the control trimmed to 0. First pass only got to ~68px
+(from an analytical ~80px baseline, computed from the exact pre-change
+Tailwind values read before editing — not guessed) — short of the target
+range, so trimmed padding further in a second pass down to 60px measured.
+
+**Combined sticky height: 160px (analytical baseline) → 108px (measured),
+a 32.3% reduction** — inside the requested 30-40% range. `Select.jsx`'s
+disabled/focus states, the Day filter's greyed-out treatment, and the
+"Select All" checkbox toggle were all re-verified working after the
+resize (none of the edits touched interaction logic, only `styles`
+dimensions) — confirmed live via Playwright reading actual DOM checkbox
+`checked` state through two Select-All clicks (0/6 → 6/6), not just that
+the dropdown opens.
+
+**Verified the actual goal, not just the pixel math**: screenshotted
+Overview at a common 1600×900 viewport with all filters cleared — the
+full 4-card KPI ribbon *and* the entire Activation/Redemption flow
+diagram tree (down to the Digital/Physical sub-boxes) are visible above
+the fold, which was not the case at the previous header/filter-bar
+height. Mobile (390px) re-checked too — nav still wraps cleanly across
+multiple rows, filter grid stays 2-column, "Gift Card/Analytics" label
+still correctly hidden below `sm` (unrelated to this change, already
+existing behavior) — nothing overflows or overlaps at the smaller sizes.
+Zero console errors; clean production build (719.09 kB JS, 207.23 kB
+gzipped — unchanged from before this pass, pure styling).
+
+**Near-miss during verification, caught before it mattered**: attempted
+to measure the "before" baseline by `git stash`-ing this change and
+rebuilding — `git stash` reverted the *entire* session's accumulated
+uncommitted work (every page/feature built across this whole session is
+still uncommitted), not just this one edit, since it was all one
+undifferentiated working-tree diff. Caught immediately from the tool
+output listing far more changed files than expected, and `git stash pop`
+restored everything before any further action — confirmed via `grep` that
+the compacting edits were back in place, then rebuilt. Used the
+already-known pre-edit Tailwind values (read directly before making any
+changes, further up this same entry) as the "before" baseline instead of
+re-attempting a stash-based comparison.
+
+## 2026-08-13 — Card Journey rebuilt on a real cohort cube, redemption side replaced entirely
+
+The 2026-08-11 build of this page paired "Activated Cards" (activationRows,
+period-filtered) with "Redeemed Cards (this period)" (redemptionRows,
+period-filtered) — structurally the *same* "two independent per-period
+totals" question Overview already answers on its own KPI ribbon, just
+under different labels. The explicit complaint: this doesn't track cards
+forward through time at all — a card activated in April 2026 but redeemed
+in October 2026 would count in April's activation total and October's
+redemption total, never showing up as "this April cohort has since been
+70% redeemed." Fixed by replacing the redemption side entirely, not
+patching the labels.
+
+**New data source**: `cohortCube.json` (`ActivationYearMonth`/
+`Region_Clean`/`RedemptionModeFinal`/`Head` dims, `RedemptionAmount`/
+`RedemptionCount`/`Uptake` measures) — pre-aggregated by the card's
+*original activation month*, not by when the redemption transaction
+happened (that field doesn't exist on this cube at all, by design — there
+is no way to additionally slice it by redemption date, which is the whole
+point: it can't be filtered into "the same wrong shape" the old page had).
+
+**`FilterContext.jsx#filterCohort()`**: applies FY/Month against
+`ActivationYearMonth` (not the row's own event date — this cube has no
+other date field), plus Region, Redemption Source, and Ticket/F&B — the
+four dimensions that actually exist on this cube. Deliberately does *not*
+attempt CardType/Denomination/Activation Source (fields don't exist here,
+same reasoning as the Day filter's daily-cube limitation from 2026-08-10 —
+not maximizing what's technically combinable, just what's actually
+present). One data-reality wrinkle handled without a special case: a
+minority of rows carry `ActivationYearMonth = 'Pre-existing (activated
+before Apr 2024)'`, not a real `'YYYY-MM'` string — confirmed `fyOf()`
+doesn't throw on it (produces a nonsense `'FYNaN-NaN'` that simply never
+matches a real FY selection), so these rows correctly count only when
+FY/Month are both unrestricted and drop out cleanly the moment either
+narrows to a specific period, with no extra guard code needed.
+
+**`CardJourney.jsx`**: the KPI-ribbon-plus-callout layout from 2026-08-11
+was replaced with a visually distinct horizontal funnel (Activated → an
+arrow annotated "tracked forward through time, even after this period
+ends" → Redeemed to Date (Cohort) → "=" → a highlighted Cohort Redemption
+Rate box), inside a gold-double-bordered card with its own explicit
+"a different question from Overview" label — deliberately *not* reusing
+`FlowBox`/`FlowBranch` (Overview's own Activation-vs-Redemption diagram
+component), specifically so the two pages can't be visually mistaken for
+the same comparison at a glance, per the request's explicit "make it
+visually explicit these are two different concepts" requirement. The old
+"by Original Activation Cohort" breakdown chart (built on the *main*
+redemption cube's own `ActivationCohort` field, a different pre-existing
+per-row bucket, unrelated to the new `cohortCube.json`) was removed along
+with the rest of the old redemption side — keeping it would have
+reintroduced the exact "redemptions happening in this period" framing the
+whole page was just corrected away from. Replaced with a new "Redeemed to
+Date (Cohort) — by Head" chart, using `cohortRows` grouped by `Head` (the
+same `HEAD_COLORS`/`HEAD_ORDER` every other Heads-breakdown chart in the
+app already uses), so the page isn't just three bare numbers.
+`COHORT_ORDER`/`cohortLabel` (`lib/constants.js`) are now unused anywhere
+in `src/` — left in place rather than chased for deletion, same "leave
+the dead export" precedent as `donutLabel` earlier in this file, since
+they still correctly describe a real field that still exists in the data
+(`redemptionCube.json`'s own `ActivationCohort`), just not surfaced on
+this particular page anymore.
+
+**Verified against the raw cube by hand first, then live in the app**:
+FY2026-27 — Activated ₹2,464.50L / 3,58,012 cards (unchanged from every
+prior verification of this exact figure in this file), Redeemed to Date
+(Cohort) ₹1,727.78L / 4,20,802 redemptions, Cohort Redemption Rate 70.1%
+— all three matched the request's own target numbers exactly, both by
+hand computation against `cohortCube.json` directly and live in the app.
+The "by Head" breakdown (Online ₹1,567L, Box Office ₹300L, F&B ₹257L,
+Cancellation −₹396L) sums to the same ₹1,727.78L, confirmed by hand before
+checking the UI. Sanity-checked the unfiltered (all-time) case too: Cohort
+Redemption Rate comes out to 81.0% — matching Overview's own "% of total
+activation" figure exactly, which is the expected identity when every
+activation cohort and every redemption are both included with no period
+restriction (the cohort cube's un-filtered total must reconcile with the
+main cubes' un-filtered totals, and does). Zero console errors; clean
+production build (720.54 kB JS, 207.35 kB gzipped).
+
+## 2026-08-13 — Fix: Summary page headline totals silently collapsed to the latest month
+
+**The bug**: FY2026-27 + Month=All showed "Total Activation ₹1,150L /
+1,63,878 cards" on the Summary page — that's July 2026 alone (the FY's
+latest month), not the FY total (₹2,464.50L / 3,58,012 cards, confirmed
+against the raw cube and matching every other page's FY figures for the
+same period). The "Activation by Source" breakdown had the identical bug
+one level down (its 3 rows summed to the same wrong ₹1,150L).
+
+**Root cause**: `lib/comparisons.js#computeBucketComparisons()` computed
+its `amount`/`count` (the headline figure shown on each Summary card, and
+each row of its breakdown table) via `sumForMonths(bucketRows, field,
+comparisonMonths)` — the same single-latest-month "anchor" used for the
+MoM/YoY *delta* math. That anchor is deliberately narrow for deltas (it's
+what lets "this month vs. the same month last year" work), but reusing it
+for the headline total itself meant the total silently collapsed to just
+that one anchor month whenever Month was left unrestricted — every other
+page's headline KPI is a plain `sumBy(fully-filtered-rows, field)` with no
+such anchoring (confirmed by re-reading Overview.jsx/Activation.jsx's own
+KPI computations), so this was a real, Summary-page-specific bug
+introduced when the page was first built (2026-08-11), not a pre-existing
+app-wide pattern being correctly followed.
+
+**The fix**: `computeBucketComparisons()` now takes two separate row
+pools — `currentRows` (the ordinary, Month-respecting filtered pool, same
+shape as `activationRows`/`redemptionRows` every other page already sums)
+for the headline `amount`/`count` via a plain `sumBy()`, and
+`rowsAllMonths` (Month-unrestricted) only for the MoM/YoY delta lookups,
+which still genuinely need to reach adjacent months beyond the Month
+filter. `MetricComparisonCard.jsx` gained a new `rows` prop threaded
+through from `Summary.jsx` (`activationRows`/`redemptionRows`, plus
+Month-respecting `netHeadRows(redemptionRows, 'Box Office'|'F&B')` pools
+for those two net cards) alongside the existing `rowsAllMonths`/`rowsAllFY`
+props. `computeFYSeries()` (the FY Comparison row at the bottom of each
+card) was **not** part of this bug — it already does a plain per-row
+accumulation with no month-anchoring, confirmed by re-reading it before
+touching anything, which is exactly why the user's own report singled out
+the *headline* number as wrong while pointing at "any other page's FY
+comparison table" as already correct: that FY table was this page's own
+FY row, already right.
+
+**Also fixed — YoY badges missing when a specific FY is active**:
+verified this is *not* a bug, before assuming it needed a fix.
+`activationRowsAllMonths` (which the MoM/YoY deltas read) lifts the Month
+restriction but deliberately keeps FY applied (see the 2026-08-05 "Decided
+against reaching across an active FY filter" entry) — so a YoY badge
+needing July 2025 data can't find it while FY is pinned to 2026-27 alone.
+Confirmed Overview.jsx shows the *exact same* MoM/QoQ-only, no-YoY pattern
+under an identical FY2026-27 filter — this is the established, deliberate,
+app-wide convention working correctly, not a regression from this fix.
+
+**Clarity improvement**: "Activation by Source" (and every other bucketed
+card) gained a one-line `subtitle` explaining what its rows mean — e.g.
+"Each row is that channel's own activation amount for the selected period
+— Aggregators / Corporate (merges Corporate + Online) / Cinema" — instead
+of a bare 3-row table with no framing text, per the request.
+
+**Styling audit against the rest of the dashboard**: `MetricComparisonCard`
+was visually generic (plain `text-2xl` unaccented number, unbordered FY
+mini-blocks) compared to every other page's KPI language. Restyled to
+match `Kpi.jsx`'s established visual system directly: `text-3xl
+font-serif font-extrabold` value (was `text-2xl`), colored via the same
+gold/teal accent map Kpi.jsx uses (`accent` prop, gold for every
+Activation-section card, teal for every Redemption-section card — the
+same color coding every other page already uses for these two cubes), and
+a matching `border-l-[6px] border-l-{accent}` colored left border on the
+whole card (via `Card.jsx`'s existing `className` passthrough — the exact
+`border border-warmgray-border border-l-[6px]` combination Kpi.jsx already
+uses, confirmed reused verbatim rather than approximated). Breakdown table
+rows gained a hover state and slightly more padding; FY Comparison entries
+changed from bare text blocks to bordered `bg-cream/70` chips, consistent
+with the small-bordered-block pattern used elsewhere in the app (e.g.
+Kpi.jsx's own `breakdown` prop).
+
+**Verified against the raw cube by hand first, then live in the app**:
+FY2026-27 + Month=All — Total Activation ₹2,464.50L / 3,58,012 cards
+(rounds to the app's displayed ₹2,465L) — matches exactly. Activation by
+Source — Aggregators ₹2,019.51L, Corporate ₹199.96L, Cinema ₹245.03L,
+summing to the same ₹2,464.50L — all three matched the app to the rupee
+(displayed, rounded: ₹2,020L/₹200L/₹245L). Re-verified every other
+Summary card (by Region, by Card Type, by Denomination, and the full
+Redemption section) under the same filter — every bucket table's rows now
+sum back to its own card's headline total, confirmed by eye across all 13
+cards in the screenshot used for this fix's own review. Zero console
+errors; clean production build (721.86 kB JS, 207.65 kB gzipped).
+
+## 2026-08-13 — Card Journey rebuilt again: cohortCube gained RedemptionYearMonth, "to-date" replaced with "same-period"
+
+Same day as the previous cohort rewrite — `cohortCube.json` was replaced
+again, this time adding a second date field (`RedemptionYearMonth`
+alongside the existing `ActivationYearMonth`), which changes the question
+this page can answer. The "to-date" version (redeem the cohort whenever,
+no matter how much later) is exactly what the earlier rewrite built — this
+pass narrows it further: "of cards activated in this period, how much got
+redeemed within that *same* period" (both conditions true simultaneously),
+with the old "to-date" question demoted to a bonus spillover chart now
+that the cube can answer both from one dataset.
+
+**`FilterContext.jsx`**: `filterCohort()` now requires BOTH
+`ActivationYearMonth` and `RedemptionYearMonth` to independently satisfy
+the current FY/Month selection — a row activated inside the period but
+redeemed outside it (before or after) is excluded, which is the entire
+point of this narrower question versus the "to-date" one. A new sibling,
+`filterCohortByActivation()`, keeps only the activation-side restriction
+(no restriction on `RedemptionYearMonth` at all) — this is structurally
+identical to the *previous* `filterCohort()` from earlier the same day,
+kept alive under a new name since the wider cube can now answer both
+questions from the one dataset rather than needing two different cubes.
+Both exposed via `useFilters()` as `cohortRows` (same-period) and
+`cohortRowsByActivation` (activation-fixed, redemption-unbounded).
+`Region_Clean` never carries `RedemptionYearMonth`'s equivalent of the
+"Pre-existing" sentinel string — confirmed directly (`ActivationYearMonth`
+is the only field with that value) — so no second guard was needed beyond
+the one `fyOf()` already handles gracefully for `ActivationYearMonth`.
+
+**Count convention, confirmed against the request's own target numbers
+before writing any code**: the request's target amount (₹1,727.78L) is
+net across every `Head` including `Cancellation` (cancellation rows carry
+a real negative `RedemptionAmount` and net in automatically, same
+convention as everywhere else in this app) — but the target *count*
+(3,46,853) is **not** `sum(RedemptionCount)` across all rows (which comes
+to 4,20,802, the number from the earlier "to-date" version, since the
+count itself doesn't change between the two schema versions for a
+same-period-restricted query — only which redemptions are *included*
+differs). Checked directly: 4,20,802 minus the Cancellation-only count
+(73,949) equals exactly 3,46,853 — so the count target deliberately
+excludes `Head='Cancellation'` rows from the count entirely while still
+netting their amount into the total, the same "amount nets cancellations
+in, count excludes them" split already on record for other pages in this
+file (e.g. the 2026-07-31/2026-08-04 Mode-filter entries). Implemented as
+`redeemedAmount = sumBy(cohortRows, 'RedemptionAmount')` (all rows) vs.
+`redeemedCount = sumBy(cohortRows.filter(r => r.Head !== 'Cancellation'),
+'RedemptionCount')`.
+
+**`CardJourney.jsx`**: same funnel visual (kept from the earlier rewrite,
+still deliberately not `FlowBox`/`FlowBranch`, per the standing "visually
+distinct from Overview" requirement) with updated labels ("Redeemed
+Within This Period" / "Same-Period Redemption Rate") and updated callout
+copy explaining the both-conditions-simultaneously rule with a concrete
+example (an April-activated, October-redeemed card doesn't count here).
+The "by Head" breakdown chart is unchanged in shape, just now built from
+the narrower `cohortRows`.
+
+**Bonus capability, implemented**: "Redemption Spillover — Cards Activated
+in This Period" — a new chart grouping `cohortRowsByActivation` (the
+activation-fixed, redemption-unbounded pool) by `RedemptionYearMonth`,
+colored two ways: teal for months inside the selected period, gold for
+months outside it. The teal/gold split is computed by checking membership
+in `cohortRows`' own set of `RedemptionYearMonth` values (`new
+Set(cohortRows.map(r => r.RedemptionYearMonth))`) rather than
+re-implementing the FY/Month matching logic a second time in the page
+component — a month is "within period" if and only if `cohortRows` itself
+already kept it, so this can't drift from the headline numbers above it.
+For the current FY (FY2026-27, the most recent period in the data with no
+room to spill into the future) every bar renders teal, correctly — there's
+nothing beyond the data's own frontier to spill into yet. Checked against
+a past FY (FY2024-25) to confirm the spillover case actually works: 12
+teal months (Apr24-Mar25) followed by 16 gold months trailing off toward
+zero through Jul 2026, a clean decaying tail, confirming the feature reads
+correctly no matter which period is selected.
+
+**Verified against the raw cube by hand first, then live in the app**:
+FY2026-27 — Activated ₹2,464.50L / 3,58,012 cards (unchanged, matches
+every prior verification of this exact figure in this file), Redeemed
+Within This Period ₹1,727.78L / **3,46,853** redemptions (the corrected
+count, not the earlier 4,20,802 "to-date" figure), rate 70.1% — all three
+matched the request's own target numbers exactly, both by hand
+computation against the new `cohortCube.json` directly and live in the
+app. Sum of the 4 spillover bars for FY2026-27 (₹240L + ₹320L + ₹373L +
+₹795L = ₹1,728L) matches "Redeemed Within This Period" exactly, confirming
+the spillover chart's own total reconciles with the headline figure. Zero
+console errors; clean production build (724.17 kB JS, 208.09 kB gzipped).
+
+## 2026-08-13 — Card Journey: verified no regression, wording cleanup
+
+**Verification requested, done before any code changed**: FY2026-27 +
+Month=Jul 26 — hand-computed directly against `cohortCube.json` first
+(₹730.31L / 1,42,722 redemptions net of cancellations, vs. ₹1,149.77L /
+1,63,878 cards activated, 63.5% rate), then confirmed live in the app —
+exact match, both before touching anything and after this pass's wording
+edits. The join logic (`ActivationYearMonth`/`RedemptionYearMonth` both
+required to satisfy the same FY/Month selection) was already correct from
+the same-day rewrite that introduced it — no regression, nothing to fix
+here beyond confirming it.
+
+**Wording cleanup**: the funnel banner and the explanation block below it
+were over-explaining on every visit — a full sentence of context under
+the arrow, a permanent paragraph-length callout underneath. Trimmed to:
+  - Banner: one sentence ("Tracks the same cards from activation through
+    redemption — not two independent totals.") replacing the previous
+    uppercase kicker + quoted comparison to Overview. Dropped the
+    uppercase/tracking-wide treatment too — that styling suits a short
+    kicker label, not a full sentence, which reads better in normal case.
+  - Under the arrow: "redeemed in the same period" (four words) replacing
+    a two-line explanation.
+  - The full explanation (the Overview-comparison paragraph, the April/
+    October example) moved into a native `<details>/<summary>` disclosure
+    — "What does this mean?", collapsed by default, custom rotating
+    triangle marker (native disclosure markers are inconsistent across
+    browsers, suppressed via `list-none` + a `[&::-webkit-details-marker]`
+    override, replaced with one arrow character that rotates via a
+    `group-open:` variant). No new component or JS state needed — native
+    HTML handles the toggle, keeping the same "no framework beyond what's
+    already used" footprint as the rest of the app. The core distinction
+    (a card activated outside the period never counts, even if its
+    redemption lands inside it) is still on the page, just opt-in to read
+    rather than forced on every load.
+  - Spillover chart's own caption trimmed the same way: "Teal = within the
+    selected period. Gold = same cohort, redeemed outside it." replacing a
+    two-clause sentence repeating the funnel's own numbers back.
+
+**Verified**: re-confirmed the FY2026-27/Month=Jul 26 numbers are
+unchanged after the wording edit (pure copy/markup change, no calculation
+touched) — ₹730L / 1,42,722 redemptions, 63.5% rate, byte-identical to
+the pre-edit numbers. Clicked the "What does this mean?" disclosure live
+(Playwright) and confirmed it expands to show the full explanation and
+the arrow rotates — collapsed by default on page load. Zero console
+errors; clean production build (723.86 kB JS, 207.98 kB gzipped).
+
+## 2026-08-13 — Card Journey: copy + visual polish, zero calculation changes
+
+Explicitly copy/styling-only per the request — no filter, aggregation, or
+data logic touched. Verified this held: re-checked FY2026-27 + Month=Jul 26
+after every edit (₹1,150L / 1,63,878 cards activated, ₹730L / 1,42,722
+redeemed, 63.5% rate) — byte-identical to the pre-edit numbers, confirming
+the pass was purely presentational.
+
+**Copy, card-first not period-first**: "Activated in This Period" → "Cards
+Activated"; "Redeemed Within This Period" → "Of Those, Redeemed";
+"Same-Period Redemption Rate" → "Redemption Rate"; arrow microcopy
+"redeemed in the same period" → "same cards, redeemed" — the selected FY/
+Month already reads at the top of the page via the filter bar, so the KPI
+labels no longer repeat "period" on every line. Banner tagline replaced
+("Tracks the same cards... — not two independent totals." → "Follows
+individual cards from activation to redemption.") — states what the page
+does rather than what it isn't. "Redeemed Within This Period — by Head"
+chart title shortened to "Redemption by Head" (subtitle untouched, already
+fine per the request). The "What does this mean?" disclosure's prose
+tightened from 4 dense sentences to 3 short ones — same collapsed-by-
+default `<details>` behavior, content only.
+
+**Visual consistency pass**: the funnel banner previously used a one-off
+`border-2 border-gold` (uniform 2px border) with `p-5 md:p-6` padding —
+neither matches `Card.jsx`'s actual pattern (`border border-warmgray-border`
+at 1px, `p-4 md:p-5`). Fixed by switching to the *same* accent treatment
+`Kpi.jsx`'s own `accent="gold"` cards already use elsewhere in this app —
+`border border-warmgray-border border-l-[6px] border-l-gold` — rather than
+inventing a second "this card is gold-themed" pattern. Padding now matches
+`Card.jsx` exactly. KPI sub-lines (`{count} cards`/`{count} redemptions`)
+gained the `font-medium` weight `Kpi.jsx`'s own `sub` text always has —
+was missing here, a small but real typographic drift from every other
+KPI's sub-line in the app. The Rate box's value dropped from `text-4xl` to
+`text-3xl`, matching the Activated/Redeemed values exactly instead of
+reading disproportionately larger next to them — all three numbers in the
+funnel are now the same size, weight, and font (`font-serif
+font-extrabold`), matching `Kpi.jsx`'s default `valueClassName` used
+everywhere else in the app.
+
+**Visual hierarchy**: banner tagline demoted from `font-semibold` to
+`font-medium` (reads as a caption, not competing prose) with its bottom
+margin increased (`mb-4`→`mb-5`); the KPI row's internal gap widened
+(`gap-3 md:gap-5`→`gap-4 md:gap-8`) so Activated/arrow/Redeemed/=/Rate
+have more breathing room and read as the card's clear headline rather than
+a cramped inline group under a paragraph-weight tagline.
+
+**Verified**: re-ran the FY2026-27/Month=Jul 26 check after every edit
+(numbers unchanged throughout, confirmed above); screenshotted the
+unfiltered and filtered states to confirm layout/spacing renders as
+intended at 1500px width; zero console errors; clean production build
+(723.76 kB JS, 207.93 kB gzipped — smaller than before, net markup
+simplification).
+
+## 2026-08-14 — Redemption pages audit: KPI/chart mismatch, Avg formatting bug, and a subtler app-wide reconciliation bug found along the way
+
+**1. Removed "Redemption Heads Breakdown" from RedemptionBoxOffice.jsx** —
+it showed all 4 heads (Online/Box Office/F&B/Cancellation), a straight
+duplicate of Overview's own head-split, and didn't belong on a page
+scoped to one head. `RedemptionFnb.jsx` never had this chart, nothing to
+remove there. Page-specific breakdowns to replace it with ("by Format" for
+Box Office, "by Category" for F&B) **already existed on both pages** —
+built during the 2026-08-12 chart-parity pass — so no new chart needed
+building, just deleting the dead one (plus its now-orphaned
+`headsBreakdown`/`boxOfficeRows`/`hasData` computations and `HEAD_ORDER`/
+`HEAD_COLORS` imports).
+
+**This directly fixed the reported KPI mismatch**: "Box Office Redemption"
+showed ₹1,023L (net, via `netHeadRows()`, correct since the 2026-08-06
+rewire) while the Heads Breakdown chart's own Box Office bar showed
+₹1,119L (gross — that chart intentionally never nets, so cancellations
+stay visible as their own bar, which is right for a *heads* comparison but
+wrong to have sitting on a page whose own headline KPI is net). Removing
+the chart removes the second, gross figure entirely — nothing left on the
+page to disagree with the KPI.
+
+**2. Fixed "Avg per Redemption"/"Avg Ticket Size" showing ₹0 L** — these
+are genuinely sub-Lac values (a few hundred rupees per unit), so running
+them through `fmtLacs` (÷100,000) rounded every one to "₹0 L" — a
+formatting bug, not a real zero, exactly as reported. New
+`lib/format.js#fmtRupees()` — whole rupees, comma-grouped, no Lacs
+conversion — applied to `Activation.jsx`'s "Avg Ticket Size" (now "₹618"),
+`RedemptionBoxOffice.jsx`'s and `RedemptionFnb.jsx`'s "Avg per Redemption"
+(now "₹434" / "₹271"). This reverses a call made two entries ago (2026-08-11
+"no exceptions" decimal-removal pass, which explicitly rounded these to
+"₹0 L" per the request's own literal wording at the time) — this time with
+the *right* fix (a unit-appropriate formatter) rather than either extreme
+(decimals on a Lacs formatter, or a misleading whole-Lac zero).
+
+**3. Found a real, previously-undetected bug while investigating #1's root
+cause — the "by Format"/"by Category"/"by Denomination" breakdown charts
+on Box Office and F&B were *also* silently showing gross, not net**, for a
+subtler reason than the removed Heads Breakdown chart: they pre-filtered
+out rows with `Format`/`Category`/`Denom = 'N/A'` before summing (a
+reasonable-looking "exclude the meaningless bucket" filter) — but checked
+directly against the cube: **every Cancel Redeem row `netHeadRows()`
+attributes to Box Office or F&B carries exactly that 'N/A' value** on all
+three fields (a cancellation transaction has no seating-tier Format, F&B
+Category, or Denom of its own). So the filter was silently deleting 100%
+of the netting correction, not just genuinely-missing metadata — Box
+Office's "by Format"/"by Denomination" charts summed to ₹1,119-1,120L (the
+gross figure) against the KPI's correct ₹1,023.50L net; F&B's "by
+Category"/"by Denomination" summed to ₹1,748.29L gross against ₹1,432.74L
+net. Same root cause as #1 (gross leaking back in through a second code
+path), different mechanism (a metadata-cleanliness filter that
+coincidentally erases the one correction that mattered).
+
+**Checked whether this same pattern existed anywhere else before calling
+it fixed** — grepped every page for `'N/A'`-filtering: found the identical
+bug on **`Activation.jsx`'s own "by Denomination" chart** too (₹8,347.19L
+shown vs. the page's real ₹8,266.57L Total Activation — a ₹80.61L gap,
+this time from ~134 real correction/adjustment rows carrying
+`Denom='N/A'`, not cancellation-attribution, but the identical class of
+"exclude N/A, silently drop a real negative amount" bug). Also found the
+same gap on **`Summary.jsx`'s shared `MetricComparisonCard`** for both its
+Denomination *and* Card Type breakdown tables (Card Type buckets only
+cover 'Digital'/'Physical', excluding the same 'N/A' correction rows).
+Confirmed via direct grep that Region/Source/Head bucket sets never have
+this problem — each is a complete partition of its field's raw values
+(every row matches exactly one bucket), so there's no "N/A" case for those
+dimensions to begin with.
+
+**Fixed at two levels**: the 3 pages' own Format/Category/Denomination
+charts (`Activation.jsx`, `RedemptionBoxOffice.jsx`, `RedemptionFnb.jsx`)
+stopped pre-filtering — for `topNWithOther`-based charts (Format,
+Category), simply not excluding 'N/A' lets it sort to the bottom (large
+negative value) and fold into the existing "Other" bucket naturally, same
+"real Other value + synthetic overflow both correctly land on the same
+gray color" pattern already documented for `RedemptionFnb.jsx`'s Category
+chart; for the fixed-11-bucket Denomination charts (no built-in "Other"),
+added one explicitly. **`MetricComparisonCard.jsx` got the fix at the
+component level instead of per-card**: appends a synthetic
+`{key: 'Other', predicate: (r) => !buckets.some(b => b.predicate(r))}`
+bucket to whatever `buckets` the caller passes, before running
+`computeBucketComparisons()` — captures the gap generically for *any*
+bucket set (not just Denomination/CardType), and
+`computeBucketComparisons()`'s existing zero-amount filter means "Other"
+silently doesn't render for the bucket sets that never needed it (Region/
+Source/Head), no per-dimension special-casing required. This is the
+"route through the shared calculation utility" fix the request explicitly
+asked for, applied at the one place it could fix all 13 Summary cards
+(and any future ones) at once.
+
+**Verified against the raw cubes by hand first, then live in the app, for
+every fix**: Box Office — KPI ₹1,023L, by Region/Format/Weekday/Denomination
+all now sum to ₹1,023-1,024L (rounding noise only). F&B — KPI ₹1,433L, all
+4 breakdown charts sum to ₹1,432-1,433L. Activation — KPI ₹8,267L,
+Aggregators+Corporate+Cinema = ₹8,267L exactly, Denomination chart (with
+new "Other" row, −₹81L) sums to ₹8,266L. Summary — Activation by
+Denomination and Activation by Card Type breakdown tables both now include
+an "Other" row (−₹81L) and both sum to the card's own ₹8,267L headline
+exactly. Cancel Redeem — KPI ₹1,463L, "by Source"/"by Weekday" both sum to
+₹1,462-1,463L; "by Region" intentionally doesn't (Cinema-only, Online
+cancellations excluded, per its own subtitle — a documented scope
+difference, not a bug). Card Journey — "Of Those, Redeemed" ₹6,695L
+matches its own "by Head" chart (₹6,694L). Overview — Total Redemption
+(net) ₹6,695L = Online ₹4,239L + Cinema ₹2,456L exactly, and Cinema
+₹2,456L = Box Office ₹1,023L + F&B ₹1,433L exactly (an early check here
+briefly looked broken — the Overview flow diagram has *two* "Cinema"
+nodes, one on the Activation side's 3-source breakdown and one on the
+Redemption side, and the first verification attempt's text match grabbed
+the wrong one; re-scoped to the Redemption column specifically and
+confirmed it reconciles perfectly — a test-script targeting mistake, not
+an app bug, noted here so it isn't re-flagged). Overview's own combined
+"Activation vs. Redemption by Denomination" chart still has a similar gap
+by design (documented since 2026-08-03, doesn't correspond 1:1 to any
+single KPI on that page — a cross-cube comparison, not a per-KPI
+breakdown) — left untouched, flagged here rather than silently
+reconciled to a fix it was never asking for. Zero console errors across
+every page checked; clean production build (723.06 kB JS, 208.06 kB
+gzipped).
+
+## 2026-08-14 — Removed all chart captions app-wide; split Overview's region
+charts into 4; on-bar totals for the two stacked "by Source" charts
+
+Three-part request, verified against exact hand-supplied figures before
+touching the UI.
+
+**Chart captions removed app-wide**: every `<Card subtitle="...">` prop and
+every post-chart italic caption `<p>` across all 8 pages (Overview,
+Activation, Redemption · Box Office, Redemption · F&B, Trends, Cancel
+Redeem, Card Journey, Summary) — ~30 `subtitle` occurrences plus 4 explicit
+caption paragraphs (Box Office's "Combines Head='Box Office' with
+Head='Online'..." note, Card Journey's "Teal = within the selected
+period..." legend line, and F&B's Hero Products "No unit-count field..."
+and "Static list..." notes). `MetricComparisonCard.jsx` (Summary's shared
+card component) had its own `subtitle` prop and pass-through to `Card`
+removed too, since every call site had already stopped passing one.
+`Card.jsx` itself keeps the `subtitle` prop supported (harmless, unused) —
+no call site anywhere in `src/` passes it anymore, confirmed by a
+post-change repo-wide grep. Two small dead-code cleanups fell out of this:
+Overview's `dayLabel`-driven daily-trend subtitle string and Card Journey's
+`spilloverMonthsBeyond` counter both had no remaining use once their
+subtitle strings were deleted, so removed rather than left dangling.
+Deliberately **not** touched: `FilterBar.jsx`'s day-unavailable note and
+`EmptyState.jsx`'s "no data" text — functional state messages, not
+descriptive chart captions.
+
+**Overview's "Activation by Region"/"Redemption by Region" split into 4
+charts**, each answering exactly one question instead of mixing geography
+with channel totals in one 6/8-bucket chart:
+  - "Activation by Region" (5 bars, `ActivationModeFinal='Physical'` only)
+    and "Redemption by Region" (6 bars, `RedemptionModeFinal='Physical'`
+    only, including a real `NO_SITE` bucket) now use
+    `ACTIVATION_REGION_BUCKETS`/`REDEMPTION_REGION_BUCKETS` sliced to just
+    their first 6 (region-only) entries — reusing `lib/regionBuckets.js`'s
+    existing predicates rather than a second hand-written copy.
+  - New "Activation by Source" (3 bars: raw `ActivationModeFinal` values
+    Aggregator/Corporate/Online, i.e. everything *except* Physical) and new
+    "Redemption by Head" (4 bars: gross `Head` groupby, Online/Box
+    Office/F&B/Cancellation — Cancellation stays negative, netting shown
+    not hidden, same convention as the since-removed "Redemption Heads
+    Breakdown" chart this now effectively relocates to Overview). Placed
+    side by side in a new row directly below the region-charts row.
+  - **`NO_SITE` relabel**: `lib/regionBuckets.js#redemptionRegionLabel()`
+    changed from `"Director's Cut"` to `'Other/Unmapped'`. The prior label
+    was an inferred identity (a Format-vocabulary pattern, documented in
+    the file's own history) this repo has no outlet-level data to actually
+    confirm — flagged as a placeholder that should say what the data says,
+    not a guessed name. This function is shared with `Summary.jsx`'s
+    "Redemption by Region" comparison table, so the fix applies there too
+    with no separate edit.
+  - Verified all 4 sets of figures against the raw cubes before touching
+    the UI, then confirmed live, byte-for-byte: Activation by Region NORTH
+    997/SOUTH 280/EAST 214/WEST 447/CENTRAL 2, sum ₹1,940L (target
+    ₹1,939.97L); Redemption by Region adds Other/Unmapped ₹11L (target
+    ₹10.94L), sum ₹2,456L (target ₹2,456.23L); Activation by Source
+    Aggregator ₹4,255L/Corporate ₹1,958L/Online ₹114L, sum ₹6,327L (target
+    4,254.87+1,957.53+114.2=6,326.6, and together with the region chart's
+    ₹1,939.97L sums to the full ₹8,266.57L per the request's own check);
+    Redemption by Head Online ₹5,290L/Box Office ₹1,119L/F&B ₹1,748L/
+    Cancellation −₹1,463L, sum ₹8,157L gross-minus-cancellation nets to the
+    target ₹6,695.32L. Zero console errors, no horizontal overflow on any
+    of the 8 pages.
+
+**On-bar total labels for stacked bar charts**: new
+`ChartLabels.jsx#stackTotalLabel(data, keys)` factory — sums the named
+stack keys for the row at `props.index` (same index-lookup pattern
+`regionDeltaLabel` already used, since Recharts' `LabelList` strips
+non-SVG props before calling a custom `content` renderer, so the row data
+can't ride along as an extra prop) and renders the combined total above
+the bar. Attached via `<LabelList content={stackTotalLabel(sourceChartData,
+['digitalAmount', 'physicalAmount'])} />` on the **last-declared** `<Bar>`
+in each stack (`physicalAmount`, which renders visually on top, so its own
+`x`/`y`/`width` correspond to the top of the whole stack) — the Activation
+page's "Activation by Source" chart (Aggregators ₹4,255L / Corporate
+₹2,072L / Cinema ₹1,940L) and the Redemption · Box Office page's "Box
+Office Redemption by Source" chart (Online ₹4,239L / Cinema ₹1,023L), both
+confirmed live to show the bar's true combined total, not one segment,
+alongside the existing legend/tooltip.
+
+**Bug found and fixed while verifying "Redemption by Head" live, not
+assumed from a code read**: the Cancellation bar (negative-valued) had its
+label rendering directly on top of the bar and, at first, on top of the
+X-axis category text too — `regionDeltaLabel` (`ChartLabels.jsx`) had only
+ever been exercised against positive-valued bars before this chart existed.
+Checked the actual rendered SVG (not assumed): for a negative-valued bar,
+Recharts passes `y` as the bar's *bottom* edge already (further down the
+screen) together with a *negative* `height` — so the existing `y - 6`
+above-bar placement sat inside the bar, and a first fix attempt using
+`y + height` walked back *up* to the zero line instead of down past the
+bar (exactly backwards) since adding a negative height moves up, not down.
+Fixed by branching on `value < 0`: negative bars anchor label position off
+`y` directly (already the bottom edge) instead of `y + height`. Getting
+enough clearance from the X-axis category labels below took a second
+correction to the "Redemption by Head" chart's own layout (not the shared
+label function) — `margin.bottom` 0 → 60, container `height` 280 → 320,
+and `tickMargin={36}` on the XAxis — verified via 3 iterative screenshots
+until the amount label, MoM label, and "Cancellation" axis tick text all
+sat clear of each other with no overlap. `regionDeltaLabel` is shared by
+several other charts (Activation/Redemption region and weekday charts) —
+confirmed via a positive-value spot-check (Activation by Source's own
+region chart) that the `value < 0` branch is additive, not a behavior
+change for the positive case those charts all use.
+
+Zero console errors across all 8 pages both before and after the label
+fix; clean production build (722.01 kB JS, 207.21 kB gzipped).
+
+## 2026-08-14 — Follow-up: moved the NO_SITE bucket from "Redemption by
+Region" to "Redemption by Head" as "Director's Cut"; dropped Cancellation
+
+Same-day follow-up to the region/head chart split above. Two bucket
+constants in `Overview.jsx` changed, both still built on top of the same
+shared `lib/regionBuckets.js` predicates rather than new hand-written ones:
+
+- **`REDEMPTION_REGION_ONLY_BUCKETS`**: `REDEMPTION_REGION_BUCKETS.slice(0,
+  6)` → `.slice(0, 5)` — drops the 6th (NO_SITE) entry, leaving just the 5
+  named regions. "Redemption by Region" now reads NORTH/SOUTH/EAST/WEST/
+  CENTRAL only, ₹2,445L (was ₹2,456L with NO_SITE included).
+- **`REDEMPTION_HEAD_BUCKETS`**: rewritten from a plain `HEAD_ORDER.map()`
+  passthrough (4 buckets: Online/Box Office/F&B/Cancellation) to an
+  explicit 4-bucket list that (a) drops Cancellation entirely — this chart
+  no longer shows the netting, gross-only heads — and (b) adds a
+  `"Director's Cut"` bucket carrying the NO_SITE rows just removed from the
+  region chart, so the same data moved rather than being duplicated or
+  dropped. To avoid double-counting, Box Office/F&B's own predicates now
+  explicitly exclude `Region_Clean='NO_SITE'` (`r.Head === 'Box Office' &&
+  r.Region_Clean !== 'NO_SITE'`, same for F&B), with Director's Cut picking
+  up exactly those excluded rows (`(Head='Box Office' || Head='F&B') &&
+  Region_Clean='NO_SITE'`) — the 4 buckets still partition Head ∈ {Online,
+  Box Office, F&B} exactly, Cancellation rows are simply excluded from
+  every bucket now, by design.
+- **Naming**: the request explicitly asked for the label "Director's Cut"
+  here — a reversal, on this one bucket, of the earlier same-day decision
+  to rename this exact NO_SITE identity to "Other/Unmapped" on the region
+  chart (that entry's own reasoning — no outlet-level data in this repo to
+  independently confirm the identity — still stands as a documented
+  caveat, but the user directly specified the label to use this time, so
+  implemented as asked rather than re-litigated).
+- **Color**: `HEAD_COLORS` has no entry for `"Director's Cut"` (it's not a
+  real `Head` value), so the chart's `<Cell>` fallback changed from
+  `categoricalColor(0)` (gold — which would have collided with the
+  adjacent Box Office bar's own gold) to `HEAD_COLORS.Cinema` (plum) — the
+  existing "not a real Head value" rollup color already used for the
+  Overview flow diagram's own Cinema node, and not otherwise in use among
+  Online(blue)/Box Office(gold)/F&B(teal) on this chart.
+- **Layout reverted**: the extra `margin.bottom`/`tickMargin`/container
+  `height` bump added earlier the same day specifically to clear the
+  negative Cancellation bar's label from the X-axis text is no longer
+  needed — every bucket on this chart is positive again — so
+  `margin={{ top: 36, right: 8, left: 0, bottom: 0 }}` and `height={280}`
+  were reverted to match every sibling chart on the page.
+- **Dead import cleanup**: `HEAD_ORDER` (`lib/constants.js`) was only used
+  by the old bucket definition; removed from `Overview.jsx`'s import line
+  since nothing else in the file references it.
+
+**Verified against the raw cube by hand first** (a discrepancy was
+expected and confirmed, not a bug): the region chart's old NO_SITE figure
+(₹10.94L) was the *whole* Physical+NO_SITE slice of the cube, including
+Cancellation's own NO_SITE rows (a real −₹3.90L, confirmed directly);
+Director's Cut, scoped to Head='Box Office'/'F&B' only per the request,
+correctly excludes those and comes out to **₹14.84L** instead (₹6.66L
+Box Office + ₹8.18L F&B), a different, larger, and equally correct number
+now that Cancellation is out of scope for this bucket entirely — checked
+by hand against `redemptionCube.json` directly, not assumed from the old
+figure. Region chart: 5 regions sum to ₹2,445.30L (2,456.23 − 10.94, i.e.
+exactly the removed NO_SITE amount). Head chart: Online ₹5,290.38L + Box
+Office (NO_SITE-excluded) ₹1,112.57L + F&B (NO_SITE-excluded) ₹1,740.12L +
+Director's Cut ₹14.84L = ₹8,157.91L — confirmed live in the app to the
+rupee (displayed, rounded: ₹5,290L/₹1,113L/₹1,740L/₹15L). Screenshotted
+both charts: region chart shows exactly 5 bars with no "Other/Unmapped";
+head chart shows exactly 4 positive bars (Online/Box Office/F&B/Director's
+Cut) with no Cancellation bar and no negative axis range. Zero console
+errors across all 8 pages; clean production build (722.26 kB JS, 207.25 kB
+gzipped).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

@@ -42,7 +42,7 @@ export default function Trends() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Card title="Monthly Trend — Amount" subtitle="Activation vs. Redemption, ₹ Lacs">
+      <Card title="Monthly Trend — Amount">
         {!hasData ? (
           <EmptyState />
         ) : (
@@ -74,7 +74,7 @@ export default function Trends() {
         )}
       </Card>
 
-      <Card title="Monthly Trend — Card Count" subtitle="Activation vs. Redemption transaction counts">
+      <Card title="Monthly Trend — Card Count">
         {!hasData ? (
           <EmptyState />
         ) : (
@@ -92,7 +92,7 @@ export default function Trends() {
         )}
       </Card>
 
-      <Card title="Week-slot Overview" subtitle="Weekday vs. Weekend — Activation and Redemption amount, ₹ Lacs">
+      <Card title="Week-slot Overview">
         {!hasData ? (
           <EmptyState />
         ) : (

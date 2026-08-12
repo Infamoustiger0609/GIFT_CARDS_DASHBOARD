@@ -14,12 +14,13 @@ import {
   LabelList
 } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
-import { sumBy, groupSum, weekSlotBreakdown, netCinemaRedemption, netRedemptionHeads, netHeadRows, physicalCancelWinnerMap } from '../lib/aggregate'
+import { sumBy, groupSum, weekSlotBreakdown, netCinemaRedemption, netRedemptionHeads, netHeadRows } from '../lib/aggregate'
 import { computeComparisons } from '../lib/comparisons'
-import { orderBy, REGION_ORDER, DENOM_ORDER, fyOf, regionLabel } from '../lib/constants'
+import { DENOM_ORDER, HEAD_ORDER, fyOf, regionLabel } from '../lib/constants'
 import { COLORS, REGION_COLORS, HEAD_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS, categoricalColor } from '../lib/theme'
-import { groupByActivationSource } from '../lib/activationSource'
+import { groupByActivationSource, sourceOf } from '../lib/activationSource'
 import { redemptionModeOf } from '../lib/redemptionMode'
+import { ACTIVATION_REGION_BUCKETS, REDEMPTION_REGION_BUCKETS, redemptionRegionLabel } from '../lib/regionBuckets'
 import { fmtLacs, fmtPct, fmtNumber, fmtLacsAxis, monthLabel } from '../lib/format'
 import Card from '../components/Card'
 import Kpi from '../components/Kpi'
@@ -27,86 +28,6 @@ import EmptyState from '../components/EmptyState'
 import ChartTooltip from '../components/ChartTooltip'
 import { FlowBox, FlowBranch } from '../components/FlowBox'
 import { AmountLabel, regionDeltaLabel } from '../components/ChartLabels'
-
-// ---- "Activation by Region" / "Redemption by Region" bucket definitions ----
-// Deliberately different from every other "by Region" chart in the app:
-// those are all naturally cinema-only already (Head='Box Office'/'F&B' rows
-// are 100% RedemptionModeFinal='Physical'; Activation.jsx's own regional
-// chart is already scoped to ActivationModeFinal='Physical'). This pair of
-// charts is the one place that used to group ALL activation rows by
-// Region_Clean regardless of channel — silently mixing Corporate/
-// Aggregator/Online rows (some of which do carry a real region value) into
-// the 5 physical-cinema regional bars. Fixed by explicitly separating "real
-// regional cinema activity" from "channel totals that aren't meaningfully
-// regional," rather than grouping by the raw field.
-const ACTIVATION_REGION_BUCKETS = [
-  ...REGION_ORDER.map((region) => ({
-    key: region,
-    predicate: (r) => r.ActivationModeFinal === 'Physical' && r.Region_Clean === region
-  })),
-  { key: 'Aggregators', predicate: (r) => r.ActivationModeFinal === 'Aggregator' },
-  { key: 'Corporate', predicate: (r) => r.ActivationModeFinal === 'Corporate' },
-  { key: 'Online', predicate: (r) => r.ActivationModeFinal === 'Online' }
-]
-
-// Redemption side has only 2 real RedemptionModeFinal values, bucketed via
-// redemptionModeOf() (lib/redemptionMode.js) rather than a hand-rolled
-// `r.RedemptionModeFinal === 'Online'` check — reusing that function (and
-// its 'Online'/'Cinema' key strings) directly is what keeps this chart from
-// drifting out of sync with the canonical redemption-source labels again
-// (see the fix note below). 5 "Cinema" bars from Region_Clean, plus one
-// combined **Online** bar, never split by region — PVR Inox Online is
-// always tagged Region_Clean='NORTH' regardless of the customer's actual
-// location (confirmed directly against the cube), so a regional split of
-// it would misattribute real redemptions to NORTH. No Aggregator bucket —
-// aggregator-activated cards have no redemption channel of their own.
-//
-// 2026-08-05 fix: this bucket was previously hand-labeled 'Corporate' —
-// stale terminology from before the "Final consolidated Source-filter
-// model" phase (same day, earlier), which renamed the redemption-side
-// Online bucket from 'Corporate' back to 'Online' everywhere else in the
-// app (lib/redemptionMode.js#REDEMPTION_MODES). This chart was written
-// after that rename but didn't reuse REDEMPTION_MODES/redemptionModeOf(),
-// so it silently reintroduced the old label instead of inheriting the
-// current one. Routing through redemptionModeOf() here, instead of a
-// second hand-written predicate, is specifically to prevent this class of
-// drift from happening a third time.
-const REDEMPTION_REGION_BUCKETS = [
-  ...REGION_ORDER.map((region) => ({
-    key: region,
-    predicate: (r) => redemptionModeOf(r.RedemptionModeFinal) === 'Cinema' && r.Region_Clean === region
-  })),
-  { key: 'Online', predicate: (r) => redemptionModeOf(r.RedemptionModeFinal) === 'Online' }
-]
-
-// A small number of physical-cinema redemption rows carry Region_Clean=
-// 'NO_SITE' (confirmed against the cube: ~₹10.94L, real data, not an
-// artifact). regionLabel() would normally render that as "Online" (the
-// established app-wide rename for the *activation*-side NO_SITE meaning —
-// see lib/constants.js), but that would sit a bar labeled "Online" right
-// next to this chart's own real "Online" bucket above, which is a
-// different, unrelated NO_SITE cause on this cube (see the investigation
-// note below) — so this chart needs its own distinct local label, not
-// the shared one every other chart in the app correctly keeps using.
-//
-// 2026-08-05 investigation: confirmed against the redemption cube's own
-// fields (no separate outlet-level export exists in this repo — the app
-// only ever consumes the pre-aggregated cube, never raw per-transaction
-// data, so an outlet name can't be read directly). These NO_SITE rows are
-// real F&B (824) and Box Office (613) redemptions, not junk/placeholder
-// rows, and their Format values on the Box Office side are a visibly
-// different, boutique/premium vocabulary (Platinum, Sofa Slider, Lounger,
-// Picture Perfect, P. Superior, Cla Superior) than the standard regional
-// Box Office tiers (Prime, Classic, Recliner, Club, Executive) — consistent
-// with a distinct premium-format cinema whose outlet never got a region
-// mapping, rather than contradicting it. Confirmed as PVR Director's Cut
-// per direct confirmation. Labeled accordingly, chart-local only — the
-// activation-side NO_SITE meaning (aggregator-fulfilled cards with no
-// physical site) is a different underlying cause on a different cube and
-// keeps its own "Online" label everywhere else, untouched.
-function redemptionRegionLabel(key) {
-  return key === 'NO_SITE' ? "Director's Cut" : regionLabel(key)
-}
 
 // Shared by both charts: sums each bucket's own predicate-filtered rows
 // (current + Month-unrestricted, for the MoM delta), dropping any bucket
@@ -128,6 +49,62 @@ function bucketRegionData(rows, rowsAllMonths, buckets, amountField, countField,
     .filter((r) => r[amountField] !== 0)
 }
 
+// 2026-08-14 split: "Activation by Region"/"Redemption by Region" used to
+// mix pure geography with non-regional channel totals (Aggregators/
+// Corporate/Online on the activation side) in one 8/6-bucket chart. Split
+// into 4 charts instead — two pure-geography ones (Physical/Cinema rows
+// only) and two pure-channel ones, so each chart answers exactly one
+// question. The region-only charts reuse the exact region predicates from
+// `lib/regionBuckets.js` (sliced to just the 6 REGION_ORDER entries, before
+// each array's own trailing channel-total buckets) rather than a second
+// hand-written copy — same "extract instead of duplicate" discipline this
+// file already used once when those buckets were pulled out to
+// regionBuckets.js in the first place.
+const ACTIVATION_REGION_ONLY_BUCKETS = ACTIVATION_REGION_BUCKETS.slice(0, 6)
+// 2026-08-15 reverted (see the 2026-08-14 follow-up entry in CLAUDE.md for
+// the prior "5 named regions" version this undoes): NO_SITE belongs on this
+// chart, not on "Redemption by Head" — it's a Region_Clean value, not a
+// Head value, and mixing it into the Head breakdown was itself the bug this
+// reversion fixes (see REDEMPTION_HEAD_BUCKETS below). Back to all 6
+// REGION_ORDER entries (5 named regions + NO_SITE).
+const REDEMPTION_REGION_ONLY_BUCKETS = REDEMPTION_REGION_BUCKETS.slice(0, 6)
+
+// 2026-08-15: all 3 real activation sources (Aggregator, Corporate, Cinema),
+// bucketed via the shared `sourceOf()` mapping (lib/activationSource.js) —
+// not a raw-value passthrough — so 'Online' (legacy, pre-Aug-2024 activation
+// through the "PVR Inox Online" outlet, ~₹114.2L, before it was shut down
+// for fraud) folds into 'Corporate' here exactly like it already does on the
+// flow diagram above (`activationBySource`, via `groupByActivationSource`).
+// This is now the complete, self-reconciling activation-source breakdown —
+// all 3 bars sum exactly to Total Activation on their own (Aggregator +
+// Corporate + Cinema), independent of "Activation by Region" beside it,
+// which answers a different question (Cinema's own rows split by
+// geography) and deliberately overlaps this chart's Cinema bar rather than
+// needing to partition against it.
+const ACTIVATION_SOURCE_ONLY_BUCKETS = [
+  { key: 'Aggregators', predicate: (r) => sourceOf(r.ActivationModeFinal) === 'Aggregators' },
+  { key: 'Corporate', predicate: (r) => sourceOf(r.ActivationModeFinal) === 'Corporate' },
+  { key: 'Cinema', predicate: (r) => sourceOf(r.ActivationModeFinal) === 'Cinema' }
+]
+
+// 2026-08-15: strictly Head-scoped, real-redemption heads only (Online/Box
+// Office/F&B) — HEAD_ORDER minus 'Cancellation'. Cancellation deliberately
+// does NOT appear on this chart: it has its own dedicated page
+// (/cancel-redeem) and its own "by Source"/"by Weekday"/"by Region" charts
+// there, so showing it a second time here would be redundant. This is a
+// gross, per-head breakdown — with Cancellation excluded, the 3 bars sum to
+// the gross total (₹8,157.90L in the baseline dataset), NOT to "Total
+// Redemption (net)" above (₹6,695.32L) — cancellations are the only thing
+// that nets the two figures apart, and removing the one bar that carried
+// them here means this chart no longer reconciles to that KPI. That's
+// intentional, not a bug — don't add Cancellation back just to make the sum
+// match; the "Total Redemption (net)" reconciliation is Redemption by
+// Head's own no-longer-a-goal, not something to re-engineer around.
+const REDEMPTION_HEAD_BUCKETS = HEAD_ORDER.filter((head) => head !== 'Cancellation').map((head) => ({
+  key: head,
+  predicate: (r) => r.Head === head
+}))
+
 export default function Overview() {
   const {
     activationRows,
@@ -136,7 +113,10 @@ export default function Overview() {
     redemptionRowsAllMonths,
     activationRowsAllFY,
     redemptionRowsAllFY,
-    comparisonMonths
+    comparisonMonths,
+    dailyTrendAvailable,
+    dailyMonthActivationRows,
+    dailyMonthRedemptionRows
   } = useFilters()
 
   const totalActivation = sumBy(activationRows, 'ActivationAmount')
@@ -211,7 +191,6 @@ export default function Overview() {
   // RedemptionBoxOffice.jsx/RedemptionFnb.jsx can compute the exact same
   // net Box Office/F&B figures instead of their own gross sums (the bug
   // that motivated centralizing this — see the 2026-08-06 CLAUDE.md entry).
-  const physicalCancelWinner = useMemo(() => physicalCancelWinnerMap(redemptionRows), [redemptionRows])
   const positiveHeads = useMemo(() => netRedemptionHeads(redemptionRows), [redemptionRows])
 
   // ---- Uptake bifurcation for the Uptake KPI card: Ticket (Head='Box
@@ -223,16 +202,27 @@ export default function Overview() {
   // (checked directly), so this nets to exactly Box Office + F&B Uptake
   // today — but the netting is still real, not hardcoded, so a future data
   // refresh that populates Uptake on those heads is handled correctly
-  // without a code change. ----
+  // without a code change.
+  //
+  // 2026-08-12 cross-page audit: no longer threads an explicit winner map
+  // through — netHeadRows() already self-derives one from whatever rows
+  // it's given when none is passed. Passing an externally-computed map here
+  // was never wrong (the winner decision for any Region+Month key is
+  // invariant to what else is in the array it's computed from — proven and
+  // spot-checked live across 3 filter combinations, see the 2026-08-12
+  // CLAUDE.md entry), just an unnecessary second `physicalCancelWinnerMap`
+  // call site duplicating what RedemptionBoxOffice.jsx/RedemptionFnb.jsx
+  // each also computed independently. Removed from all three rather than
+  // left as harmless-but-duplicated. ----
   const uptakeTicketFnb = useMemo(() => {
-    const netBoxOffice = netHeadRows(redemptionRows, 'Box Office', physicalCancelWinner)
-    const netOnline = netHeadRows(redemptionRows, 'Online', physicalCancelWinner)
-    const netFnb = netHeadRows(redemptionRows, 'F&B', physicalCancelWinner)
+    const netBoxOffice = netHeadRows(redemptionRows, 'Box Office')
+    const netOnline = netHeadRows(redemptionRows, 'Online')
+    const netFnb = netHeadRows(redemptionRows, 'F&B')
     return {
       ticket: sumBy(netBoxOffice, 'Uptake') + sumBy(netOnline, 'Uptake'),
       fnb: sumBy(netFnb, 'Uptake')
     }
-  }, [redemptionRows, physicalCancelWinner])
+  }, [redemptionRows])
 
   // ---- Cinema flow node (Box Office + F&B combined) for the redemption
   // flow diagram's new intermediate layer — Total Redemption -> (Online,
@@ -249,20 +239,36 @@ export default function Overview() {
   // rather than re-filtering the array at each flow-diagram node.
   const [onlineHead, boxOfficeHead, fnbHead] = positiveHeads
 
-  // ---- Activation by Region (5 physical-cinema regions + Aggregators/
-  // Corporate/Online channel totals) and Redemption by Region (5
-  // physical-cinema regions + one Online total) — see the
-  // ACTIVATION_REGION_BUCKETS/REDEMPTION_REGION_BUCKETS doc comments above
-  // for why these are bucketed this way instead of a raw Region_Clean
-  // groupby. Each bar's MoM delta is computed the same way the KPI deltas
-  // are (computeComparisons against the Month-unrestricted pool), just
-  // further filtered down to each bucket's own predicate first. ----
+  // ---- Activation by Region (5 physical-cinema regions, pure geography)
+  // and Redemption by Region (5 regions + NO_SITE, pure geography) — see
+  // the module-level bucket definitions above for why these are bucketed
+  // this way instead of a raw Region_Clean groupby. Each bar's MoM delta is
+  // computed the same way the KPI deltas are (computeComparisons against
+  // the Month-unrestricted pool), just further filtered down to each
+  // bucket's own predicate first. ----
   const activationByRegion = useMemo(
-    () => bucketRegionData(activationRows, activationRowsAllMonths, ACTIVATION_REGION_BUCKETS, 'ActivationAmount', 'ActivationCount', comparisonMonths),
+    () => bucketRegionData(activationRows, activationRowsAllMonths, ACTIVATION_REGION_ONLY_BUCKETS, 'ActivationAmount', 'ActivationCount', comparisonMonths),
     [activationRows, activationRowsAllMonths, comparisonMonths]
   )
   const redemptionByRegion = useMemo(
-    () => bucketRegionData(redemptionRows, redemptionRowsAllMonths, REDEMPTION_REGION_BUCKETS, 'RedemptionAmount', 'RedemptionCount', comparisonMonths),
+    () => bucketRegionData(redemptionRows, redemptionRowsAllMonths, REDEMPTION_REGION_ONLY_BUCKETS, 'RedemptionAmount', 'RedemptionCount', comparisonMonths),
+    [redemptionRows, redemptionRowsAllMonths, comparisonMonths]
+  )
+
+  // ---- Activation by Source (Aggregators/Corporate [Corporate+Online
+  // merged]/Cinema — all 3 real sources, self-reconciling to Total
+  // Activation) and Redemption by Head (Online/Box Office/F&B only, gross —
+  // Cancellation deliberately excluded, see REDEMPTION_HEAD_BUCKETS above,
+  // so this one does NOT reconcile to "Total Redemption (net)", by design)
+  // — "Activation by Region"/"Redemption by Region" beside them answer a
+  // different (geography-only) question and aren't meant to partition
+  // against these. ----
+  const activationBySourceRaw = useMemo(
+    () => bucketRegionData(activationRows, activationRowsAllMonths, ACTIVATION_SOURCE_ONLY_BUCKETS, 'ActivationAmount', 'ActivationCount', comparisonMonths),
+    [activationRows, activationRowsAllMonths, comparisonMonths]
+  )
+  const redemptionByHead = useMemo(
+    () => bucketRegionData(redemptionRows, redemptionRowsAllMonths, REDEMPTION_HEAD_BUCKETS, 'RedemptionAmount', 'RedemptionCount', comparisonMonths),
     [redemptionRows, redemptionRowsAllMonths, comparisonMonths]
   )
 
@@ -293,23 +299,28 @@ export default function Overview() {
   // weekend. ----
   const weekSlot = useMemo(() => weekSlotBreakdown(activationRows, redemptionRows), [activationRows, redemptionRows])
 
-  // ---- Activation vs. Redemption amount by Denomination tier. 'N/A' rows
-  // (cancellation-side entries, same pattern as SourceFlag/CardType's N/A)
-  // are excluded here the same way they're excluded from the filter's own
-  // dropdown options — they aren't a real Denom tier. ----
+  // ---- Activation vs. Redemption amount by Denomination tier. 'N/A'
+  // (cancellation-side entries) and 'Other' are both excluded here the same
+  // way they're excluded from the filter's own dropdown options — neither
+  // is one of the 11 fixed DENOM_ORDER buckets (2026-08-12: 'Other' is a
+  // real Denom value but is no longer offered as its own bucket/option, per
+  // an explicit request — same treatment 'N/A' already had). Iterates
+  // DENOM_ORDER directly (fixed 11 buckets) rather than deriving-then-
+  // ordering the set of values actually present, so a value outside this
+  // list can't slip back in via orderBy()'s "unknown, append alphabetically"
+  // fallback the way 'Other' used to before this fix. ----
   const denominationSplit = useMemo(() => {
     const act = groupSum(
-      activationRows.filter((r) => r.Denom && r.Denom !== 'N/A'),
+      activationRows.filter((r) => DENOM_ORDER.includes(r.Denom)),
       'Denom',
       ['ActivationAmount', 'ActivationCount']
     )
     const red = groupSum(
-      redemptionRows.filter((r) => r.Denom && r.Denom !== 'N/A'),
+      redemptionRows.filter((r) => DENOM_ORDER.includes(r.Denom)),
       'Denom',
       ['RedemptionAmount', 'RedemptionCount']
     )
-    const denoms = orderBy([...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])], DENOM_ORDER)
-    return denoms.map((d) => ({
+    return DENOM_ORDER.map((d) => ({
       denom: d,
       Activation: act.find((r) => r.key === d)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === d)?.ActivationCount || 0,
@@ -332,6 +343,32 @@ export default function Overview() {
       RedemptionCount: red.find((r) => r.key === m)?.RedemptionCount || 0
     }))
   }, [activationRows, redemptionRows])
+
+  // ---- Day-by-day breakdown (2026-08-10) — only meaningful, and only
+  // rendered, when exactly one month is selected and no field the daily
+  // cubes lack (CardType/Denomination/either Source) is active — see
+  // FilterContext.jsx's "Daily Activation & Redemption Trend chart
+  // availability" doc comment. Always covers every day of the selected
+  // month. 2026-08-15: this chart itself is unchanged (still backed by the
+  // daily cubes, still day-of-month analysis) — only the highlight-one-
+  // specific-day layer is gone, since that was driven by the old numeric
+  // "Day" global filter, which no longer exists (replaced by "Weekday" on
+  // the main cubes — see FilterBar.jsx). Every bar now renders at full
+  // opacity; there's no narrower "selection" than the whole month anymore. ----
+  const dailyTrend = useMemo(() => {
+    if (!dailyTrendAvailable) return []
+    const act = groupSum(dailyMonthActivationRows, 'DateStr', ['ActivationAmount', 'ActivationCount'])
+    const red = groupSum(dailyMonthRedemptionRows, 'DateStr', ['RedemptionAmount', 'RedemptionCount'])
+    const dates = [...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])].sort()
+    return dates.map((d) => ({
+      date: d,
+      day: Number(d.slice(8, 10)),
+      Activation: act.find((r) => r.key === d)?.ActivationAmount || 0,
+      ActivationCount: act.find((r) => r.key === d)?.ActivationCount || 0,
+      Redemption: red.find((r) => r.key === d)?.RedemptionAmount || 0,
+      RedemptionCount: red.find((r) => r.key === d)?.RedemptionCount || 0
+    }))
+  }, [dailyTrendAvailable, dailyMonthActivationRows, dailyMonthRedemptionRows])
 
   const hasData = activationRows.length > 0 || redemptionRows.length > 0
 
@@ -388,6 +425,42 @@ export default function Overview() {
           ]}
         />
       </div>
+
+      {dailyTrendAvailable && (
+        <Card title="Daily Activation & Redemption Trend">
+          {dailyTrend.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={dailyTrend} margin={{ top: 20, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                <XAxis dataKey="day" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} />
+                <YAxis
+                  tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={64}
+                  tickFormatter={fmtLacsAxis}
+                  label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                />
+                <Tooltip
+                  content={
+                    <ChartTooltip
+                      countField={(p) => (p.dataKey === 'Activation' ? 'ActivationCount' : 'RedemptionCount')}
+                      countUnit={(p) => (p.dataKey === 'Activation' ? 'cards' : 'redemptions')}
+                    />
+                  }
+                  labelFormatter={(day) => `Day ${day}`}
+                  cursor={{ fill: 'rgba(27,36,48,0.04)' }}
+                />
+                <Legend formatter={(value) => <span className="text-xs text-navy">{value}</span>} />
+                <Bar dataKey="Activation" fill={COLORS.activationDark} radius={[3, 3, 0, 0]} maxBarSize={18} />
+                <Bar dataKey="Redemption" fill={COLORS.redemption} radius={[3, 3, 0, 0]} maxBarSize={18} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+      )}
 
       <Card title="Gift Card Activation vs. Redemption">
         {!hasData ? (
@@ -490,7 +563,7 @@ export default function Overview() {
       </Card>
 
       <div className="grid md:grid-cols-2 gap-6">
-        <Card title="Activation by Region" subtitle="Cinema (Physical) regions + Aggregators/Corporate/Online, with MoM change">
+        <Card title="Activation by Region">
           {activationByRegion.length === 0 ? (
             <EmptyState />
           ) : (
@@ -532,7 +605,7 @@ export default function Overview() {
           )}
         </Card>
 
-        <Card title="Redemption by Region" subtitle="Cinema (Physical) regions + Online (not region-split), with MoM change">
+        <Card title="Redemption by Region">
           {redemptionByRegion.length === 0 ? (
             <EmptyState />
           ) : (
@@ -576,7 +649,83 @@ export default function Overview() {
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
-        <Card title="Year-on-Year" subtitle="Activation vs. Redemption by Financial Year, ₹ Lacs">
+        <Card title="Activation by Source">
+          {activationBySourceRaw.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={activationBySourceRaw} margin={{ top: 36, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                <XAxis
+                  dataKey="key"
+                  tick={{ fontSize: 10, fill: COLORS.inkMuted }}
+                  axisLine={{ stroke: COLORS.border }}
+                  tickLine={false}
+                  interval={0}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={64}
+                  tickFormatter={fmtLacsAxis}
+                  label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                />
+                <Tooltip
+                  content={<ChartTooltip countField="ActivationCount" countUnit="cards" />}
+                  cursor={{ fill: 'rgba(27,36,48,0.04)' }}
+                />
+                <Bar dataKey="ActivationAmount" name="Activation" radius={[4, 4, 0, 0]} maxBarSize={64}>
+                  <LabelList dataKey="ActivationAmount" content={regionDeltaLabel(activationBySourceRaw)} />
+                  {activationBySourceRaw.map((r) => (
+                    <Cell key={r.key} fill={ACTIVATION_SOURCE_COLORS[r.key]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+
+        <Card title="Redemption by Head">
+          {redemptionByHead.length === 0 ? (
+            <EmptyState />
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={redemptionByHead} margin={{ top: 36, right: 8, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                <XAxis
+                  dataKey="key"
+                  tick={{ fontSize: 10, fill: COLORS.inkMuted }}
+                  axisLine={{ stroke: COLORS.border }}
+                  tickLine={false}
+                  interval={0}
+                />
+                <YAxis
+                  tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                  axisLine={false}
+                  tickLine={false}
+                  width={64}
+                  tickFormatter={fmtLacsAxis}
+                  label={{ value: '₹ in Lakhs', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                />
+                <Tooltip
+                  content={<ChartTooltip countField="RedemptionCount" countUnit="redemptions" />}
+                  cursor={{ fill: 'rgba(27,36,48,0.04)' }}
+                />
+                <Bar dataKey="RedemptionAmount" name="Redemption" radius={[4, 4, 0, 0]} maxBarSize={64}>
+                  <LabelList dataKey="RedemptionAmount" content={regionDeltaLabel(redemptionByHead)} />
+                  {redemptionByHead.map((r) => (
+                    <Cell key={r.key} fill={HEAD_COLORS[r.key] || HEAD_COLORS.Cinema} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        <Card title="Year-on-Year">
           {yoyByFY.length === 0 ? (
             <EmptyState />
           ) : (
@@ -613,7 +762,7 @@ export default function Overview() {
           )}
         </Card>
 
-        <Card title="Redemption Trend" subtitle="Weekday vs. Weekend — Redemption amount, ₹ Lacs">
+        <Card title="Redemption Trend">
           {weekSlot.every((s) => s.Redemption === 0) ? (
             <EmptyState />
           ) : (
@@ -639,7 +788,7 @@ export default function Overview() {
         </Card>
       </div>
 
-      <Card title="Activation vs. Redemption by Denomination" subtitle="₹300 / 500 / 1000 / 2000 / 2000+ / 5000+ / 10000+ / Other-Custom, ₹ Lacs">
+      <Card title="Activation vs. Redemption by Denomination">
         {denominationSplit.length === 0 ? (
           <EmptyState />
         ) : (
@@ -676,7 +825,7 @@ export default function Overview() {
         )}
       </Card>
 
-      <Card title="Pan-India Monthly Trend" subtitle="Activation vs. Redemption, ₹ Lacs">
+      <Card title="Pan-India Monthly Trend">
         {monthTrend.length === 0 ? (
           <EmptyState />
         ) : (

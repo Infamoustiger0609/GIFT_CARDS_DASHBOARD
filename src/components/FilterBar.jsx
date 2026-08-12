@@ -2,7 +2,7 @@ import React from 'react'
 import Select from './Select'
 import { useFilters } from '../lib/FilterContext'
 import { monthLabel } from '../lib/format'
-import { orderBy, DENOM_ORDER, regionLabel } from '../lib/constants'
+import { regionLabel } from '../lib/constants'
 
 const WEEK_OPTIONS = [
   { value: 'Weekday', label: 'Weekday' },
@@ -17,11 +17,10 @@ export default function FilterBar() {
   // resetFilters is still provided by FilterContext (functionality intact) —
   // just not wired to a visible control right now, per request.
   const { filters, setFilter, options } = useFilters()
-  const denomOptions = orderBy(options.denominations, DENOM_ORDER)
 
   return (
-    <div className="bg-card border border-warmgray-border rounded-lg px-3 py-2 relative">
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-9 gap-1.5 items-end">
+    <div className="bg-card border border-warmgray-border rounded-lg px-2.5 py-0.5 relative">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-10 gap-1 items-end">
         <Select label="Financial Year" value={filters.fy} options={options.fys} onChange={(v) => setFilter('fy', v)} />
         <Select
           label="Month"
@@ -30,6 +29,19 @@ export default function FilterBar() {
           onChange={(v) => setFilter('month', v)}
           />
         <Select label="Week" value={filters.week} options={WEEK_OPTIONS} onChange={(v) => setFilter('week', v)} />
+        {/* 2026-08-15: replaces the old numeric "Day" (1-31) filter, which
+            was powered by the lighter "daily" cubes and had to grey out
+            CardType/Denomination/ActivationSource/RedemptionSource whenever
+            active. Weekday is a real field on both MAIN cubes already, so
+            it needs no such restriction and no `disabled` state — every
+            page that reads activationRows/redemptionRows respects it like
+            any other filter. */}
+        <Select
+          label="Weekday"
+          value={filters.weekday}
+          options={options.weekdays.map((w) => ({ value: w, label: w }))}
+          onChange={(v) => setFilter('weekday', v)}
+        />
         <Select
           label="Region"
           value={filters.region}
@@ -59,7 +71,7 @@ export default function FilterBar() {
         />
         <Select label="Card Type" value={filters.cardType} options={options.cardTypes} onChange={(v) => setFilter('cardType', v)} />
         <Select label="Ticket / F&B" value={filters.ticketFnb} options={TICKET_FNB_OPTIONS} onChange={(v) => setFilter('ticketFnb', v)} />
-        <Select label="Denomination" value={filters.denomination} options={denomOptions} onChange={(v) => setFilter('denomination', v)} />
+        <Select label="Denomination" value={filters.denomination} options={options.denominations} onChange={(v) => setFilter('denomination', v)} />
       </div>
     </div>
   )

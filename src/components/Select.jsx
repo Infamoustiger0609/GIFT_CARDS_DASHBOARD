@@ -10,10 +10,12 @@ const styles = {
     borderRadius: 6,
     borderColor: state.isFocused ? '#c8952e' : '#e2ddd3',
     boxShadow: state.isFocused ? '0 0 0 1px #c8952e' : 'none',
-    minHeight: 32,
+    minHeight: 24,
     fontSize: 12,
-    backgroundColor: '#ffffff',
-    '&:hover': { borderColor: '#c8952e' }
+    backgroundColor: state.isDisabled ? '#f1efe8' : '#ffffff',
+    opacity: state.isDisabled ? 0.6 : 1,
+    cursor: state.isDisabled ? 'not-allowed' : 'default',
+    '&:hover': { borderColor: state.isDisabled ? '#e2ddd3' : '#c8952e' }
   }),
   menu: (base) => ({ ...base, zIndex: 50, fontSize: 13, minWidth: 180 }),
   option: (base, state) => ({
@@ -27,9 +29,9 @@ const styles = {
   }),
   valueContainer: (base) => ({ ...base, flexWrap: 'nowrap', overflow: 'hidden', padding: '0 6px' }),
   singleValue: (base) => ({ ...base, color: '#1b2430' }),
-  dropdownIndicator: (base) => ({ ...base, padding: 4 }),
+  dropdownIndicator: (base) => ({ ...base, padding: 3 }),
   indicatorSeparator: () => ({ display: 'none' }),
-  clearIndicator: (base) => ({ ...base, padding: 4 })
+  clearIndicator: (base) => ({ ...base, padding: 3 })
 }
 
 // Selected values render as a compact summary ("All" / one label / "N
@@ -96,7 +98,7 @@ function Option(props) {
 // sync with — this is what was broken before: a fully-explicit "every
 // value" array silently excluded rows whose field is "N/A", which isn't in
 // any dropdown's option list, while true [] correctly matched them).
-export default function Select({ label, value, options, onChange }) {
+export default function Select({ label, value, options, onChange, disabled = false, disabledReason }) {
   const rsOptions = options.map((o) => ({ value: o.value ?? o, label: o.label ?? o }))
   const menuOptions = [{ value: ALL_VALUE, label: 'Select All' }, ...rsOptions]
   // Both "true unrestricted" ([]) and "every option explicitly deselected"
@@ -115,11 +117,12 @@ export default function Select({ label, value, options, onChange }) {
   }
 
   return (
-    <div className="flex flex-col gap-0.5 w-full min-w-0">
-      <label className="text-[10px] leading-tight font-semibold uppercase tracking-wide text-warmgray-muted">{label}</label>
+    <div className="flex flex-col gap-0 w-full min-w-0" title={disabled ? disabledReason : undefined}>
+      <label className="text-[9px] leading-tight font-semibold uppercase tracking-wide text-warmgray-muted">{label}</label>
       <RSelect
         classNamePrefix="rs"
         isMulti
+        isDisabled={disabled}
         isClearable={false}
         closeMenuOnSelect={false}
         hideSelectedOptions={false}

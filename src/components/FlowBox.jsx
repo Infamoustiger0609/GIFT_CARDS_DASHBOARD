@@ -10,7 +10,7 @@ export function FlowBox({ label, amount, count, countUnit = 'cards', pct, color 
     >
       <div className={`font-bold text-navy ${big ? 'text-sm' : 'text-xs'}`}>{label}</div>
       <div className={`font-serif font-extrabold ${big ? 'text-2xl' : 'text-lg'}`} style={{ color }}>
-        {fmtLacs(amount, big ? 2 : 2)}
+        {fmtLacs(amount)}
       </div>
       {count !== undefined && (
         <div className="text-[11px] text-warmgray-muted">

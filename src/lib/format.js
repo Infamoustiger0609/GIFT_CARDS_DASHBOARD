@@ -2,12 +2,23 @@ export function toLacs(rupees) {
   return rupees / 100000
 }
 
-export function fmtLacs(rupees, decimals = 2) {
+export function fmtLacs(rupees, decimals = 0) {
   const lacs = toLacs(rupees)
   return `₹${lacs.toLocaleString('en-IN', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals
   })} L`
+}
+
+// Absolute-rupee formatter for per-unit/average metrics (e.g. "Avg per
+// Redemption", "Avg Ticket Size") — these are typically only a few hundred
+// rupees, so running them through fmtLacs (divide by 100000) rounds every
+// one of them to "₹0 L" at the 0-decimal precision the rest of this app's
+// currency figures use. Not a Lacs conversion at all — whole rupees,
+// comma-grouped, same 0-decimal-by-default convention as fmtLacs, just at
+// the unit the number actually lives at.
+export function fmtRupees(rupees) {
+  return `₹${Math.round(rupees).toLocaleString('en-IN')}`
 }
 
 export function fmtNumber(n) {
