@@ -90,6 +90,30 @@ export function regionLabel(key) {
   return REGION_LABELS[key] || key
 }
 
+// Channel Performance page (2026-08-21): the 4 raw field names on
+// channelTransactions.json, plus 'Gift Card' as the 5th, directly-comparable
+// line built from the redemption cube (see FilterContext.jsx). Fixed order,
+// not data-derived — channelTransactions.json's own field names are the
+// enumeration, there's nothing to discover from the data itself.
+export const CHANNEL_ORDER = ['BMS', 'PVRINOX', 'PaytmDistrict', 'BoxOffice', 'Gift Card']
+// Display-only relabeling (same "raw key stays raw, only what's drawn
+// changes" pattern as regionLabel()/cohortLabel() above) — the raw field
+// names are compact identifiers, not the channel's real name.
+const CHANNEL_LABELS = { PVRINOX: 'PVR INOX', PaytmDistrict: 'Paytm/District', BoxOffice: 'Box Office' }
+export function channelLabel(key) {
+  return CHANNEL_LABELS[key] || key
+}
+
+// Bounds of the lighter "daily" cubes (dailyActivationCube.json/
+// dailyRedemptionCube.json, public/data/) that back the Date Range filter —
+// hardcoded rather than derived from the cube contents so the filter
+// control can render its min/max attributes immediately on every page,
+// without waiting for (or forcing) a fetch of those cubes on pages that
+// never read them. Confirmed against the actual files directly (2026-08-21):
+// both span exactly 2024-04-01 to 2026-07-31.
+export const DAILY_CUBE_MIN_DATE = '2024-04-01'
+export const DAILY_CUBE_MAX_DATE = '2026-07-31'
+
 // Sentinel stored as the sole element of a filter's value array to mean
 // "every option explicitly deselected" — distinct from the true empty array
 // `[]`, which means "unrestricted" (the old 'All'). Never a real option

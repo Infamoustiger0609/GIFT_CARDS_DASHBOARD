@@ -15,7 +15,7 @@ import {
 } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum } from '../lib/aggregate'
-import { computeComparisons } from '../lib/comparisons'
+import { computeComparisons, computeCustomWindowComparison, usePresetWindow, kpiDeltas } from '../lib/comparisons'
 import { ACTIVATION_SOURCES, groupByActivationSource, pivotByActivationSource, sourceOf } from '../lib/activationSource'
 import { orderBy, REGION_ORDER, WEEKDAY_ORDER, DENOM_ORDER, regionLabel } from '../lib/constants'
 import { COLORS, REGION_COLORS, ACTIVATION_SOURCE_COLORS, CARD_TYPE_COLORS, categoricalColor } from '../lib/theme'
@@ -32,13 +32,43 @@ import { AmountLabel, stackTotalLabel } from '../components/ChartLabels'
 const SOURCE_ACCENT = { Corporate: 'teal', Aggregators: 'blue', Cinema: 'gold' }
 
 export default function Activation() {
-  const { activationRows, activationRowsAllMonths, comparisonMonths } = useFilters()
+  const { activationRows, activationRowsForComparison, comparisonMonths } = useFilters()
+
+  // 2026-08-29: MTD/QTD(Q1-Q4 dropdown)/YTD preset control, via the same
+  // shared usePresetWindow() hook Overview.jsx/CardJourney.jsx already use
+  // — no page-local reimplementation of the anchor/window logic.
+  const {
+    selectedMonths,
+    quarterOptions,
+    activePreset,
+    activeQuarter,
+    qtdMenuOpen,
+    setQtdMenuOpen,
+    qtdMenuRef,
+    applyPreset,
+    applyQuarter,
+    windowDateRangeLabel
+  } = usePresetWindow()
 
   const total = sumBy(activationRows, 'ActivationAmount')
   const totalCount = sumBy(activationRows, 'ActivationCount')
+  // 2026-08-25 bug fix: sums over activationRowsForComparison (Month AND
+  // FY unrestricted) instead of the old activationRowsAllMonths (Month
+  // only) — a specific FY selection used to zero out every delta whose
+  // prior-year window fell in a different FY. See FilterContext.jsx's own
+  // doc comment and the CLAUDE.md entry for the full root cause.
   const deltas = useMemo(
-    () => computeComparisons(activationRowsAllMonths, 'ActivationAmount', comparisonMonths),
-    [activationRowsAllMonths, comparisonMonths]
+    () => computeComparisons(activationRowsForComparison, 'ActivationAmount', comparisonMonths),
+    [activationRowsForComparison, comparisonMonths]
+  )
+  // 2026-08-29: "custom window" (no MTD/QTD/YTD preset active) badge — same
+  // activationRowsForComparison pool the anchor-based `deltas` above
+  // already reads, just summed over the literal `selectedMonths` window
+  // instead of an anchor-derived sub-window (same pattern Overview.jsx's
+  // own KPIs use).
+  const totalCustomPct = useMemo(
+    () => computeCustomWindowComparison(activationRowsForComparison, 'ActivationAmount', selectedMonths),
+    [activationRowsForComparison, selectedMonths]
   )
 
   // ---- 3-source split (Aggregators / Corporate / Cinema), each by CardType ----
@@ -47,18 +77,27 @@ export default function Activation() {
     [activationRows]
   )
 
-  // Per-source MoM/QoQ/YoY deltas, same "AllMonths" pool the headline KPI's
-  // own deltas use, just further split by sourceOf() first — bringing
-  // these up to the same info-parity level as the headline KPI (which
-  // already had deltas) and every other "% but no deltas" KPI on this page.
+  // Per-source deltas, same "AllMonths" pool the headline KPI's own deltas
+  // use, just further split by sourceOf() first — bringing these up to the
+  // same info-parity level as the headline KPI (which already had deltas)
+  // and every other "% but no deltas" KPI on this page. `sourceCustomPct`
+  // is the same source-filtered pool's custom-window counterpart.
   const sourceDeltas = useMemo(() => {
     const map = {}
     for (const s of ACTIVATION_SOURCES) {
-      const rows = activationRowsAllMonths.filter((r) => sourceOf(r.ActivationModeFinal) === s.key)
+      const rows = activationRowsForComparison.filter((r) => sourceOf(r.ActivationModeFinal) === s.key)
       map[s.key] = computeComparisons(rows, 'ActivationAmount', comparisonMonths)
     }
     return map
-  }, [activationRowsAllMonths, comparisonMonths])
+  }, [activationRowsForComparison, comparisonMonths])
+  const sourceCustomPct = useMemo(() => {
+    const map = {}
+    for (const s of ACTIVATION_SOURCES) {
+      const rows = activationRowsForComparison.filter((r) => sourceOf(r.ActivationModeFinal) === s.key)
+      map[s.key] = computeCustomWindowComparison(rows, 'ActivationAmount', selectedMonths)
+    }
+    return map
+  }, [activationRowsForComparison, selectedMonths])
   const sourceChartData = useMemo(
     () =>
       bySource.map((s) => ({
@@ -133,30 +172,84 @@ export default function Activation() {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* 2026-08-29: MTD/QTD(Q1-Q4 dropdown)/YTD control row + single
+          top-left comparison-date line — copied verbatim from Overview.jsx/
+          CardJourney.jsx's own render (same classes/structure, same
+          usePresetWindow() state), not a re-styled approximation. */}
+      <div className="flex justify-between items-center gap-2 -mb-2 flex-wrap">
+        <p className="text-xs italic text-warmgray-muted">{windowDateRangeLabel}</p>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => applyPreset('mtd')}
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+              activePreset === 'mtd' ? 'bg-gold text-navy' : 'bg-card border border-warmgray-border text-warmgray-muted hover:border-gold hover:text-navy'
+            }`}
+          >
+            MTD
+          </button>
+          <div className="relative" ref={qtdMenuRef}>
+            <button
+              type="button"
+              onClick={() => setQtdMenuOpen((o) => !o)}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                activePreset === 'qtd' ? 'bg-gold text-navy' : 'bg-card border border-warmgray-border text-warmgray-muted hover:border-gold hover:text-navy'
+              }`}
+            >
+              {activePreset === 'qtd' && activeQuarter ? `Q${activeQuarter}` : 'QTD'} ▾
+            </button>
+            {qtdMenuOpen && (
+              <div className="absolute z-50 top-full right-0 mt-1 bg-card border border-warmgray-border rounded-md shadow-lg py-1 w-28">
+                {quarterOptions.map((q) => (
+                  <button
+                    key={q.key}
+                    type="button"
+                    disabled={q.disabled}
+                    onClick={() => applyQuarter(q)}
+                    title={q.disabled ? 'No data yet for this quarter' : q.months.join(', ')}
+                    className={`w-full text-left px-3 py-1.5 text-xs font-medium ${
+                      q.disabled
+                        ? 'text-warmgray-muted/50 cursor-not-allowed'
+                        : activePreset === 'qtd' && activeQuarter === q.key
+                          ? 'bg-gold-light text-navy font-semibold'
+                          : 'text-navy hover:bg-cream cursor-pointer'
+                    }`}
+                  >
+                    {q.label}
+                    {!q.disabled && q.months.length < 3 && <span className="text-[10px] text-warmgray-muted ml-1">(to date)</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => applyPreset('ytd')}
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+              activePreset === 'ytd' ? 'bg-gold text-navy' : 'bg-card border border-warmgray-border text-warmgray-muted hover:border-gold hover:text-navy'
+            }`}
+          >
+            YTD
+          </button>
+        </div>
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <Kpi
           label="Total Activation"
           value={fmtLacs(total)}
-          sub={`${fmtNumber(totalCount)} cards`}
+          subCount={`${fmtNumber(totalCount)} cards`}
           accent="gold"
-          deltas={[
-            { label: 'MoM', pct: deltas.mom },
-            { label: 'QoQ', pct: deltas.qoq },
-            { label: 'YoY', pct: deltas.yoy }
-          ]}
+          deltas={kpiDeltas(activePreset, deltas, totalCustomPct)}
         />
         {bySource.map((s) => (
           <Kpi
             key={s.key}
             label={s.key}
             value={fmtLacs(s.amount)}
-            sub={`${fmtNumber(s.count)} cards · ${fmtPct(total ? (s.amount / total) * 100 : 0)}`}
+            sub={fmtPct(total ? (s.amount / total) * 100 : 0)}
+            subCount={`${fmtNumber(s.count)} cards`}
             accent={SOURCE_ACCENT[s.key]}
-            deltas={[
-              { label: 'MoM', pct: sourceDeltas[s.key]?.mom },
-              { label: 'QoQ', pct: sourceDeltas[s.key]?.qoq },
-              { label: 'YoY', pct: sourceDeltas[s.key]?.yoy }
-            ]}
+            deltas={kpiDeltas(activePreset, sourceDeltas[s.key] || {}, sourceCustomPct[s.key])}
           />
         ))}
         <Kpi label="Avg Ticket Size" value={totalCount ? fmtRupees(total / totalCount) : '—'} sub="per card" accent="navy" />

@@ -24,7 +24,15 @@ export const DEFAULT_FILTERS = {
   week: [],
   weekday: [],
   ticketFnb: [],
-  denomination: []
+  denomination: [],
+  // 2026-08-21: not an array like every other filter above — a single day
+  // or range, `{ start, end }` ('YYYY-MM-DD' strings or null). `start: null`
+  // means unrestricted/no selection; `end: null` with a real `start` means a
+  // single day. Set via its own `setDateRange()`, not the generic
+  // `setFilter()`, since setFilter's `value || []` fallback assumes an
+  // array. See the Date Range section below for why this needs its own
+  // (much smaller) pair of "daily" cubes rather than reading the main ones.
+  dateRange: { start: null, end: null }
 }
 
 function isWeekend(weekday) {
@@ -102,6 +110,34 @@ function filterRedemption(cube, filters, opts) {
   })
 }
 
+// ---- Universal cube (2026-08-22) ----
+// Universal.json — 28 monthly rows, whole-company transaction data (every
+// payment method, not just gift cards): YearMonth/TotalTransactions/
+// TotalRevenue/TotalTicketRevenue/TotalFnbRevenue. Powers Overview.jsx's
+// ATV KPI card only. Deliberately narrower than passesCommon() above: this
+// cube has no Region/CardType/ActivationSource/RedemptionSource/Weekday/
+// DateStr field at all (confirmed directly against the file), so it must
+// ONLY ever be narrowed by FY and Month — applying any of the others would
+// either throw (no such field) or, worse, silently do nothing while
+// looking like it should narrow the pool. `matches()` is reused as-is
+// (same OR-within-dimension/AND-across-dimensions semantics), just against
+// this cube's own two applicable fields.
+function filterUniversal(cube, filters, { skipMonth = false, skipFY = false } = {}) {
+  return cube.filter((row) => {
+    if (!skipFY && !matches(filters.fy, fyOf(row.YearMonth))) return false
+    if (!skipMonth && !matches(filters.month, row.YearMonth)) return false
+    return true
+  })
+}
+
+// Sentinel ActivationModeFinal/ActivationYearMonth value for cohortCube.json
+// rows whose card was activated before this dataset's Apr 2024 start (no
+// real activation month to report). See passesCohortCommon()'s own
+// 2026-08-20 bug-fix comment below for why this needs a hard, unconditional
+// exclusion rather than relying on FY/Month/Activation Source to filter it
+// out incidentally.
+const PRE_EXISTING_ACTIVATION = 'Pre-existing (activated before Apr 2024)'
+
 // ---- Cohort cube (2026-08-13, schema replaced same day) ----
 // A third, differently-shaped cube — `ActivationYearMonth`/
 // `RedemptionYearMonth`/`Region_Clean`/`RedemptionModeFinal`/`Head` dims,
@@ -124,22 +160,27 @@ function filterRedemption(cube, filters, opts) {
 // Ticket/F&B — every global filter this page's own data can support.
 // Activation Source is bucketed via the shared sourceOf() mapping, exactly
 // like the main activation cube's own filter (see filterActivation above) —
-// not a second hand-rolled mapping. A minority of rows carry
-// ActivationModeFinal = 'Pre-existing (activated before Apr 2024)' (a value
-// that doesn't exist on the main activationCube at all) — sourceOf() returns
-// undefined for it, same as any other unmapped value, so matches() correctly
-// excludes those rows whenever a specific Activation Source is selected and
-// includes them when the filter is unrestricted; no special-case needed.
+// not a second hand-rolled mapping.
 //
-// A minority of rows carry `ActivationYearMonth = 'Pre-existing (activated
-// before Apr 2024)'` (never `RedemptionYearMonth` — confirmed directly,
-// that field is always a real 'YYYY-MM'). `fyOf()` on that string doesn't
-// throw (splits to one NaN-derived component, produces a nonsense
-// 'FYNaN-NaN' that just never matches a real FY selection) — confirmed
-// rather than assumed, so no special-case guard is needed: these rows
-// count only when FY/Month are both unrestricted, and drop out cleanly
-// the moment either narrows to a specific real period.
+// 2026-08-20 bug fix: a minority of rows carry ActivationModeFinal (and the
+// matching ActivationYearMonth) equal to PRE_EXISTING_ACTIVATION — cards
+// activated before this dataset's Apr 2024 start, with no real activation
+// month to report. The reasoning used to be "no special-case guard needed"
+// because fyOf() on that sentinel string produces a nonsense 'FYNaN-NaN'
+// that never matches a *specific* FY/Month selection, and sourceOf()
+// returns undefined for it, which a *specific* Activation Source selection
+// also correctly excludes. That reasoning missed the "All" case: matches([],
+// x) is unconditionally true regardless of what x is (empty selection means
+// unrestricted), so with FY/Month/Activation Source all left at "All" — the
+// page's own default state — every one of these checks was a no-op and
+// Pre-existing rows leaked straight into cohortRowsByActivation (inflating
+// the spillover chart's Redemption series and, before RedemptionYearMonth
+// existed on this cube, would have leaked into cohortRows the same way).
+// These cards were never "activated in this period" under any FY/Month
+// selection, so they must never appear on this page at all — fixed with a
+// hard, unconditional exclusion below, independent of any filter's state.
 function passesCohortCommon(row, filters) {
+  if (row.ActivationModeFinal === PRE_EXISTING_ACTIVATION) return false
   if (!matches(filters.region, row.Region_Clean)) return false
   if (!matches(filters.redemptionSource, redemptionModeOf(row.RedemptionModeFinal))) return false
   if (!matches(filters.ticketFnb, ticketFnbBucket(row.Head))) return false
@@ -159,12 +200,12 @@ function passesCohortCommon(row, filters) {
 // requirement). A row activated inside the period but redeemed outside it
 // (before or after) is excluded here — that's the entire point of this
 // cube existing, versus the simpler "to-date" version this replaced.
-function filterCohort(cube, filters) {
+function filterCohort(cube, filters, { skipMonth = false, skipFY = false } = {}) {
   return cube.filter((row) => {
-    if (!matches(filters.fy, fyOf(row.ActivationYearMonth))) return false
-    if (!matches(filters.month, row.ActivationYearMonth)) return false
-    if (!matches(filters.fy, fyOf(row.RedemptionYearMonth))) return false
-    if (!matches(filters.month, row.RedemptionYearMonth)) return false
+    if (!skipFY && !matches(filters.fy, fyOf(row.ActivationYearMonth))) return false
+    if (!skipMonth && !matches(filters.month, row.ActivationYearMonth)) return false
+    if (!skipFY && !matches(filters.fy, fyOf(row.RedemptionYearMonth))) return false
+    if (!skipMonth && !matches(filters.month, row.RedemptionYearMonth)) return false
     return passesCohortCommon(row, filters)
   })
 }
@@ -185,6 +226,48 @@ function filterCohortByActivation(cube, filters) {
     if (!matches(filters.month, row.ActivationYearMonth)) return false
     return passesCohortCommon(row, filters)
   })
+}
+
+// ---- Date Range (2026-08-21), backed by a 4th pair of cubes ----
+// `dailyActivationCube.json`/`dailyRedemptionCube.json` are day-level
+// (`DateStr`, not `YearMonth`) but otherwise much thinner than the main
+// cubes — no CardType/Denom/ActivationSource/RedemptionSource dimension at
+// all (confirmed directly against both files: DateStr/Region_Clean/
+// ActivationModeFinal/ActivationAmount/ActivationCount on the activation
+// side, DateStr/Region_Clean/RedemptionModeFinal/Head/RedemptionAmount/
+// RedemptionCount/Uptake on the redemption side) — so a Date Range
+// selection can only ever combine with FY/Month (both derivable from
+// `DateStr`'s own 'YYYY-MM' prefix) and Region (a real field on both daily
+// cubes). Only Overview.jsx reads the two row pools this produces; every
+// other page's data is completely untouched by this filter, by
+// construction — nothing here ever reads `activationCube`/`redemptionCube`.
+//
+// `dateRangeAvailable` is a hard gate, same "don't silently show wrong
+// numbers" pattern the 2026-08-10 Day filter used for the same reason (and
+// the reason that Day filter was removed for on 2026-08-15 was unrelated —
+// it was replaced by the Weekday filter, a real field on the *main* cubes;
+// this Date Range filter is a different feature, reusing the daily cubes
+// that Day filter also used, for a different question: an arbitrary
+// day/range instead of a day-of-month number).
+function dateRangeAvailable(filters) {
+  return (
+    filters.cardType.length === 0 &&
+    filters.denomination.length === 0 &&
+    filters.activationSource.length === 0 &&
+    filters.redemptionSource.length === 0
+  )
+}
+
+function passesDailyCommon(row, filters) {
+  if (!matches(filters.region, row.Region_Clean)) return false
+  const ym = row.DateStr.slice(0, 7)
+  if (!matches(filters.fy, fyOf(ym))) return false
+  if (!matches(filters.month, ym)) return false
+  return true
+}
+
+function filterDaily(cube, filters, start, end) {
+  return cube.filter((row) => row.DateStr >= start && row.DateStr <= end && passesDailyCommon(row, filters))
 }
 
 // The cubes are ~26MB combined — bundling them as JS imports would inline
@@ -220,9 +303,26 @@ export function FilterProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false
-    Promise.all([loadCube('/data/activationCube.json'), loadCube('/data/redemptionCube.json'), loadCube('/data/heroProducts.json')])
-      .then(([activationCube, redemptionCube, heroProducts]) => {
-        if (!cancelled) setData({ activationCube, redemptionCube, heroProducts })
+    // 2026-08-22: Universal.json (28 monthly rows, whole-company transaction
+    // data — every payment method, not just gift cards) joins the eager
+    // load here rather than getting cohortCube.json's lazy-on-visit
+    // treatment above — it's tiny (28 rows, a few KB) and every page that
+    // reads it (currently just Overview.jsx's ATV card) would gain nothing
+    // from deferring a fetch this small.
+    // 2026-08-21: channelTransactions.json (28 monthly rows — BMS/PVRINOX/
+    // PaytmDistrict/BoxOffice/Total, a whole-company booking-channel split)
+    // joins the same eager load as Universal.json, for the same reason —
+    // tiny (28 rows), and ChannelPerformance.jsx would gain nothing from
+    // deferring a fetch this small.
+    Promise.all([
+      loadCube('/data/activationCube.json'),
+      loadCube('/data/redemptionCube.json'),
+      loadCube('/data/heroProducts.json'),
+      loadCube('/data/Universal.json'),
+      loadCube('/data/channelTransactions.json')
+    ])
+      .then(([activationCube, redemptionCube, heroProducts, universalCube, channelTransactionsCube]) => {
+        if (!cancelled) setData({ activationCube, redemptionCube, heroProducts, universalCube, channelTransactionsCube })
       })
       .catch((err) => {
         if (!cancelled) setError(err)
@@ -248,6 +348,26 @@ export function FilterProvider({ children }) {
       .then((cube) => setCohortCube(cube))
       .catch((err) => setCohortError(err))
       .finally(() => setCohortLoading(false))
+  }, [])
+
+  // Same lazy-load-on-first-use pattern as cohortCube above, for the same
+  // reason: only Overview.jsx's Date Range summary panel reads these, and
+  // they're irrelevant (indeed never fetched) on every other page. Small
+  // combined (~3.2MB, vs. cohortCube's ~18.6MB) so this is mostly about
+  // keeping the other 7 pages' load profile exactly as it was, not a
+  // meaningful payload saving on its own.
+  const [dailyCubes, setDailyCubes] = useState(null)
+  const [dailyLoading, setDailyLoading] = useState(false)
+  const [dailyError, setDailyError] = useState(null)
+  const dailyFetchStarted = useRef(false)
+  const loadDailyCubes = useCallback(() => {
+    if (dailyFetchStarted.current) return
+    dailyFetchStarted.current = true
+    setDailyLoading(true)
+    Promise.all([loadCube('/data/dailyActivationCube.json'), loadCube('/data/dailyRedemptionCube.json')])
+      .then(([dailyActivationCube, dailyRedemptionCube]) => setDailyCubes({ dailyActivationCube, dailyRedemptionCube }))
+      .catch((err) => setDailyError(err))
+      .finally(() => setDailyLoading(false))
   }, [])
 
   // value is always an array here (react-select isMulti onChange).
@@ -283,19 +403,111 @@ export function FilterProvider({ children }) {
     })
   }, [])
 
+  // Its own setter, not routed through setFilter() above — dateRange is an
+  // `{ start, end }` object, not an array, so setFilter's `value || []`
+  // fallback (built for the multi-select filters) doesn't apply here.
+  // Deliberately does NOT get cleared when Card Type/Denomination/
+  // Activation Source/Redemption Source turn on — same "grey out and hide,
+  // don't force-clear" precedent the old Day filter used for the identical
+  // gating (see dateRangeAvailable()'s own doc comment above): the stored
+  // selection stays inert and picks back up once the conflicting filter
+  // clears, rather than being silently lost.
+  const setDateRange = useCallback((range) => {
+    setFilters((prev) => ({ ...prev, dateRange: range || { start: null, end: null } }))
+  }, [])
+
   const resetFilters = useCallback(() => setFilters(DEFAULT_FILTERS), [])
 
   const filteredActivation = useMemo(() => (data ? filterActivation(data.activationCube, filters) : []), [data, filters])
   const filteredRedemption = useMemo(() => (data ? filterRedemption(data.redemptionCube, filters) : []), [data, filters])
+  // FY/Month-only — see filterUniversal()'s own doc comment above for why
+  // every other filter dimension is deliberately not applied here.
+  const universalRows = useMemo(() => (data ? filterUniversal(data.universalCube, filters) : []), [data, filters])
 
-  // "All months" pools for the MoM/QoQ/YoY comparison badges — same filters,
-  // Month restriction lifted (see passesCommon's skipMonth doc above).
+  // ---- Channel Transactions cube (ChannelPerformance.jsx, 2026-08-21) ----
+  // channelTransactions.json — 28 monthly rows (YearMonth/BMS/PVRINOX/
+  // PaytmDistrict/BoxOffice/Total), a whole-company BOOKING-CHANNEL split
+  // (how a ticket was purchased — BookMyShow, the PVR INOX app/site, Paytm
+  // Insider/District, or the physical Box Office window). A different
+  // question from Universal.json's payment-method split, and from this
+  // page's own added "Gift Card" line below (a payment method riding on
+  // top of these 4 booking channels, not a 5th channel of the same kind —
+  // a deliberate simplification the page itself documents, not an error).
+  //
+  // Exposed UNFILTERED, deliberately — not run through filterUniversal()
+  // (even though it's cube-agnostic and would work) because
+  // ChannelPerformance.jsx's own comparison table needs to sum two
+  // arbitrary, independently-chosen month sets (the current period AND the
+  // same months one year earlier — see comparisonMonths/oneYearEarlier),
+  // which by construction reach on both sides of whatever FY/Month happens
+  // to be selected. A single "respects the current FY/Month selection"
+  // pool (this cube's equivalent of universalRows) couldn't answer that on
+  // its own; the page does its own month-set filtering against this raw
+  // 28-row array instead, the same "small enough that a page can just slice
+  // it directly" treatment heroProducts already gets below.
+  const channelTransactionsRows = data?.channelTransactionsCube || []
+
+  // Gift Card is added to the Channel Performance page as a 5th, directly
+  // comparable line using net (non-cancelled) RedemptionCount from the
+  // redemption cube. It needs its own pool, not redemptionRows/
+  // redemptionRowsForComparison, for the same reason channelTransactionsRows
+  // above is exposed unfiltered: Region/CardType/Denomination/
+  // ActivationSource/RedemptionSource/Week/Weekday don't exist on
+  // channelTransactions.json at all, so ChannelPerformance.jsx greys out
+  // those controls entirely (see FilterBar.jsx) — but if this pool still
+  // silently applied whatever those filters happened to be set to from a
+  // page visited earlier in the session, the Gift Card line would be on a
+  // different footing than the 4 channel columns beside it (which can
+  // never be narrowed by them) without any visible indication why. Only
+  // the Head='Cancellation' exclusion applies here — FY/Month are handled
+  // exactly like channelTransactionsRows above (the page filters this raw
+  // pool by whichever explicit month set it needs), not via `filters`.
+  const giftCardTransactionRows = useMemo(() => (data ? data.redemptionCube.filter((r) => r.Head !== 'Cancellation') : []), [data])
+
+  // "All months" pools — Month restriction lifted, FY still applied (see
+  // passesCommon's skipMonth doc above). Used for exactly one thing:
+  // resolving `comparisonMonths`' own default anchor month below (the
+  // latest month present *within whichever FY is currently selected* —
+  // this needs to stay FY-aware, since the anchor for "FY2024-25 selected,
+  // Month=All" must be Mar 2025, not the dataset's true latest month).
+  // Do NOT reuse these as the row pool an actual comparison sums over —
+  // see activationRowsForComparison/redemptionRowsForComparison below for
+  // why, and the 2026-08-25 bug-fix entry in CLAUDE.md.
   const activationRowsAllMonths = useMemo(
     () => (data ? filterActivation(data.activationCube, filters, { skipMonth: true }) : []),
     [data, filters]
   )
   const redemptionRowsAllMonths = useMemo(
     () => (data ? filterRedemption(data.redemptionCube, filters, { skipMonth: true }) : []),
+    [data, filters]
+  )
+
+  // 2026-08-25 bug fix: the MoM/QoQ/YoY comparison engine (lib/comparisons.js)
+  // needs to actually find a prior-year window's rows regardless of which
+  // FY is currently selected — e.g. FY2026-27 selected alone, comparing
+  // against FY2025-26 data that was never itself ticked. `activationRowsAllMonths`
+  // above still applies the FY filter (only Month is lifted), so a specific
+  // FY selection silently zeroed out every comparison whose prior-year
+  // window fell outside that FY — the delta badges just went blank with no
+  // error, since `sumForMonths()` correctly (from its own point of view)
+  // found no rows for a month excluded by the FY filter. These pools lift
+  // BOTH the Month and FY restrictions — every other active filter (Region,
+  // CardType, Source, etc.) still applies — so a comparison window can
+  // always be found regardless of which FY/Month happens to be selected.
+  // The *anchor* month itself is still resolved from the FY-aware
+  // `comparisonMonths` above — only the actual amount lookups for the
+  // current/prior-year windows use these. Every existing call site that
+  // fed `activationRowsAllMonths`/`redemptionRowsAllMonths` into a
+  // computeComparisons()-family function (Overview/Activation/Redemption
+  // pages/CancelRedeem/Summary's MetricComparisonCard) switched to these
+  // instead; nothing else ever read those two pools for anything other
+  // than a delta lookup, confirmed by grep before making this change.
+  const activationRowsForComparison = useMemo(
+    () => (data ? filterActivation(data.activationCube, filters, { skipMonth: true, skipFY: true }) : []),
+    [data, filters]
+  )
+  const redemptionRowsForComparison = useMemo(
+    () => (data ? filterRedemption(data.redemptionCube, filters, { skipMonth: true, skipFY: true }) : []),
     [data, filters]
   )
 
@@ -320,6 +532,55 @@ export function FilterProvider({ children }) {
   // Cards activated in the current period, redeemed whenever (the
   // "spillover" pool) — see filterCohortByActivation()'s doc comment above.
   const cohortRowsByActivation = useMemo(() => (cohortCube ? filterCohortByActivation(cohortCube, filters) : []), [cohortCube, filters])
+  // 2026-08-25: Month AND FY both unrestricted (every other active filter —
+  // Region, CardType, Activation/Redemption Source, Denomination, Week,
+  // Weekday — still applies), for CardJourney.jsx's own MoM/QoQ/YoY
+  // comparison badges. Same reasoning as activationRowsForComparison/
+  // redemptionRowsForComparison above: a specific FY selection must still
+  // be able to find a prior-year window, which a Month-only-unrestricted
+  // pool can't (see that entry's own doc comment and the CLAUDE.md entry
+  // for the bug this pattern fixes). `ActivationYearMonth`/
+  // `RedemptionYearMonth` are independently restricted-or-not by
+  // `skipMonth`/`skipFY` exactly like `filterCohort()`'s normal call —
+  // lifting both here just means every row in `cohortCube` that passes the
+  // *other* filters is present, so a comparison window can look up any
+  // activation-month/redemption-month pair it needs. `comparisonMonths`
+  // itself (below) is unaffected — it's derived from the main cubes' own
+  // AllMonths pools, not this one, since the anchor month is a
+  // dashboard-wide concept, not cohort-specific.
+  const cohortRowsForComparison = useMemo(
+    () => (cohortCube ? filterCohort(cohortCube, filters, { skipMonth: true, skipFY: true }) : []),
+    [cohortCube, filters]
+  )
+  // 2026-08-25: FY restriction lifted on both date fields, Month
+  // restriction (and every other filter) still applied — same shape as
+  // activationRowsAllFY/redemptionRowsAllFY above, for CardJourney.jsx's
+  // own "Year-on-Year: Activated vs. Redeemed" chart, which needs every FY
+  // present under the rest of the active filters to show up as its own
+  // bar-pair, not just whichever FY happens to be selected.
+  const cohortRowsAllFY = useMemo(() => (cohortCube ? filterCohort(cohortCube, filters, { skipFY: true }) : []), [cohortCube, filters])
+
+  // Date Range's own row pools — see the "Date Range" section above for
+  // why these read a 4th pair of cubes instead of activationCube/
+  // redemptionCube. `isDateRangeAvailable` false or no `start` picked yet
+  // both correctly yield empty pools rather than the full daily cubes —
+  // Overview.jsx's summary panel only ever renders when both are true, so
+  // there's no case where an empty pool here should read as "zero
+  // activity" instead of "not applicable."
+  const isDateRangeAvailable = dateRangeAvailable(filters)
+  const dailyRangeActive = isDateRangeAvailable && !!filters.dateRange.start
+  const dailyActivationRows = useMemo(() => {
+    if (!dailyRangeActive || !dailyCubes) return []
+    const start = filters.dateRange.start
+    const end = filters.dateRange.end || start
+    return filterDaily(dailyCubes.dailyActivationCube, filters, start, end)
+  }, [dailyCubes, filters, dailyRangeActive])
+  const dailyRedemptionRows = useMemo(() => {
+    if (!dailyRangeActive || !dailyCubes) return []
+    const start = filters.dateRange.start
+    const end = filters.dateRange.end || start
+    return filterDaily(dailyCubes.dailyRedemptionCube, filters, start, end)
+  }, [dailyCubes, filters, dailyRangeActive])
 
   // Options are derived from the full, unfiltered cubes so the dropdowns
   // never shrink based on other active filters — with one deliberate
@@ -329,7 +590,31 @@ export function FilterProvider({ children }) {
   const options = useMemo(() => {
     if (!data) return { regions: [], activationSources: [], redemptionSources: [], cardTypes: [], months: [], fys: [], denominations: [], weekdays: [] }
     const { activationCube, redemptionCube } = data
-    const regions = [...new Set(activationCube.map((r) => r.Region_Clean).concat(redemptionCube.map((r) => r.Region_Clean)))].sort()
+    // 2026-08-25: NO_SITE and "Director's Cut" are both real Region_Clean
+    // values (confirmed directly against activationCube.json/
+    // redemptionCube.json/cohortCube.json), but neither is a true
+    // geographic region — NO_SITE is a backend-logging artifact for
+    // aggregator-fulfilled cards with no physical site, and "Director's
+    // Cut" is a specific premium-format outlet with no region mapping.
+    // NO_SITE is also where the "Online" option text came from: regionLabel()
+    // (lib/constants.js) has rendered NO_SITE as "Online" everywhere in the
+    // UI, including this filter's own dropdown, since 2026-08-03 — a
+    // deliberate display-only rename, not a leaked non-Region_Clean value.
+    // Checked directly before concluding that: this line only ever maps
+    // `r.Region_Clean` (no ActivationModeFinal/RedemptionModeFinal
+    // reference, no hardcoded list, nothing left over from the old unified
+    // Mode filter), and the live dropdown's actual option set matched this
+    // computation exactly (7 entries, no duplicate/extra "Online"). Both
+    // values are excluded from this *pickable* list — same "real value,
+    // not offered as a selectable option, but still passes through
+    // untouched whenever the filter is left unrestricted" treatment
+    // Denom's/CardType's own 'N/A'/'Unknown (pre-existing)' values already
+    // get below. Every chart's own "by Region" bucketing
+    // (lib/regionBuckets.js) reads Region_Clean directly, not this option
+    // list, so nothing chart-side changes.
+    const regions = [...new Set(activationCube.map((r) => r.Region_Clean).concat(redemptionCube.map((r) => r.Region_Clean)))]
+      .filter((r) => r !== 'NO_SITE' && r !== "Director's Cut")
+      .sort()
     // Two fully independent filters, each a fixed enumeration (not a raw
     // data-derived field list) since both are bucket models, not passthrough
     // fields: `activationSources` is the 3-bucket ACTIVATION_SOURCES model
@@ -390,9 +675,22 @@ export function FilterProvider({ children }) {
   // Selecting every month via "Select All" is treated the same as selecting
   // none — both mean "no real restriction" — so the anchor logic still
   // kicks in instead of treating the whole date range as one "current period".
+  //
+  // 2026-08-25 bug fix: `isNoneSelected` (every month explicitly unticked,
+  // the NONE_SELECTED sentinel) used to fall through to the same "default
+  // to latest month" branch as the unrestricted case below it — so with an
+  // FY selected and every month explicitly deselected, every headline KPI
+  // correctly went to zero (matches([NONE_SELECTED], anyRealMonth) is
+  // always false), but the MoM/QoQ/YoY badges kept showing real
+  // percentages anchored to that FY's latest month, as if a month *was*
+  // selected. Explicit "select nothing" must mean nothing to compare
+  // either, not silently fall back to a default anchor — same "don't show
+  // numbers for a selection that matches zero rows" principle every other
+  // filter combination on this app already follows.
   const comparisonMonths = useMemo(() => {
     const isNoneSelected = filters.month.length === 1 && filters.month[0] === NONE_SELECTED
-    const isRealRestriction = !isNoneSelected && filters.month.length > 0 && filters.month.length < options.months.length
+    if (isNoneSelected) return []
+    const isRealRestriction = filters.month.length > 0 && filters.month.length < options.months.length
     if (isRealRestriction) return [...filters.month].sort()
     const allMonths = [...new Set([...activationRowsAllMonths.map((r) => r.YearMonth), ...redemptionRowsAllMonths.map((r) => r.YearMonth)])].sort()
     const latest = allMonths[allMonths.length - 1]
@@ -402,11 +700,17 @@ export function FilterProvider({ children }) {
   const value = {
     filters,
     setFilter,
+    setDateRange,
     resetFilters,
     activationRows: filteredActivation,
     redemptionRows: filteredRedemption,
+    universalRows,
+    channelTransactionsRows,
+    giftCardTransactionRows,
     activationRowsAllMonths,
     redemptionRowsAllMonths,
+    activationRowsForComparison,
+    redemptionRowsForComparison,
     activationRowsAllFY,
     redemptionRowsAllFY,
     comparisonMonths,
@@ -414,9 +718,18 @@ export function FilterProvider({ children }) {
     options,
     cohortRows,
     cohortRowsByActivation,
+    cohortRowsForComparison,
+    cohortRowsAllFY,
     loadCohortCube,
     cohortLoading,
     cohortError,
+    dateRangeAvailable: isDateRangeAvailable,
+    dailyActivationRows,
+    dailyRedemptionRows,
+    loadDailyCubes,
+    dailyCubesLoaded: !!dailyCubes,
+    dailyLoading,
+    dailyError,
     isLoading: !data && !error,
     error
   }

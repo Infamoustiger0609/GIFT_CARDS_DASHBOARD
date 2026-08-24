@@ -2,7 +2,14 @@ import React from 'react'
 import Card from './Card'
 import DeltaBadge from './DeltaBadge'
 import EmptyState from './EmptyState'
-import { computeBucketComparisons, computeFYSeries, computeBucketFYSeries, computeNettedBucketComparisons, computeNettedBucketFYSeries } from '../lib/comparisons'
+import {
+  computeBucketComparisons,
+  computeFYSeries,
+  computeBucketFYSeries,
+  computeNettedBucketComparisons,
+  computeNettedBucketFYSeries,
+  kpiDeltas
+} from '../lib/comparisons'
 import { fmtLacs, fmtNumber } from '../lib/format'
 
 const TOTAL_BUCKET = [{ key: 'Total', predicate: () => true }]
@@ -32,13 +39,23 @@ const ACCENTS = {
 //
 // 2026-08-13: takes both `rows` (the ordinary, Month-respecting filtered
 // pool — same shape as activationRows/redemptionRows every other page's
-// headline KPI sums) and `rowsAllMonths` (Month-unrestricted, only for the
-// MoM/YoY delta lookups) — see comparisons.js#computeBucketComparisons's
-// doc comment for the bug this split fixes (the headline total used to
-// silently collapse to just the latest month whenever Month was left
-// unrestricted). Also visually restyled to match the app's established
-// KPI language — colored left-border accent + text-3xl serif value, same
-// as Kpi.jsx — rather than a plain unaccented number.
+// headline KPI sums) and `rowsAllMonths` (only for the MoM/YoY delta
+// lookups) — see comparisons.js#computeBucketComparisons's doc comment for
+// the bug this split fixes (the headline total used to silently collapse
+// to just the latest month whenever Month was left unrestricted). Also
+// visually restyled to match the app's established KPI language — colored
+// left-border accent + text-3xl serif value, same as Kpi.jsx — rather than
+// a plain unaccented number.
+//
+// 2026-08-25 bug fix: despite the name, `rowsAllMonths` must have BOTH the
+// Month *and* FY restrictions lifted (activationRowsForComparison/
+// redemptionRowsForComparison from FilterContext.jsx, not
+// activationRowsAllMonths/redemptionRowsAllMonths, which only lift Month) —
+// a specific FY selection used to zero out any delta whose prior-year
+// window fell in a different FY, since the old Month-only pool never had
+// that other FY's rows to find. The prop kept its original name rather
+// than being renamed dashboard-wide for a one-word precision gain; every
+// caller now passes the correctly-unrestricted pool as its value.
 // 2026-08-19: `nestedBreakdowns` — an optional `{ [parentBucketKey]:
 // { buckets, cancelPredicate? } }` map — lets one top-level bucket (e.g.
 // "Redemption by Source"'s Cinema row) expand into its own indented
@@ -53,16 +70,33 @@ const ACCENTS = {
 // whatever pool it's given; here that pool is the parent's own rows, not
 // the whole card's). Only one level of nesting is supported — this isn't a
 // general tree, just enough to fold two overlapping "by X" cards into one.
-function computeNestedBreakdown(nested, parentRows, parentRowsAllMonths, parentRowsAllFY, amountField, countField, comparisonMonths, fys) {
+function computeNestedBreakdown(nested, parentRows, parentRowsAllMonths, parentRowsAllFY, amountField, countField, comparisonMonths, fys, selectedMonths) {
   const current = nested.cancelPredicate
-    ? computeNettedBucketComparisons(parentRows, parentRowsAllMonths, nested.buckets, nested.cancelPredicate, amountField, countField, comparisonMonths)
-    : computeBucketComparisons(parentRows, parentRowsAllMonths, nested.buckets, amountField, countField, comparisonMonths)
+    ? computeNettedBucketComparisons(
+        parentRows,
+        parentRowsAllMonths,
+        nested.buckets,
+        nested.cancelPredicate,
+        amountField,
+        countField,
+        comparisonMonths,
+        selectedMonths
+      )
+    : computeBucketComparisons(parentRows, parentRowsAllMonths, nested.buckets, amountField, countField, comparisonMonths, selectedMonths)
   const byYear = nested.cancelPredicate
     ? computeNettedBucketFYSeries(parentRowsAllFY, nested.buckets, nested.cancelPredicate, amountField, countField, fys)
     : computeBucketFYSeries(parentRowsAllFY, nested.buckets, amountField, countField, fys)
   return { current, byYear }
 }
 
+// 2026-08-29 — `activePreset`/`selectedMonths`: the MTD/QTD/YTD preset
+// control lives ONCE at the page level (Summary.jsx's own single
+// usePresetWindow() call), never per-card — every instance of this
+// component just receives the resulting `activePreset`/`selectedMonths` as
+// props and feeds them straight into kpiDeltas()/computeBucketComparisons()
+// below, so all 13+ cards on the page stay in lockstep with the one shared
+// selection by construction, not by each card independently reading
+// useFilters() and risking drift.
 export default function MetricComparisonCard({
   title,
   rows,
@@ -76,11 +110,13 @@ export default function MetricComparisonCard({
   bucketLabelFn,
   cancelPredicate,
   nestedBreakdowns,
-  accent = 'navy'
+  accent = 'navy',
+  activePreset,
+  selectedMonths
 }) {
   const accentClasses = ACCENTS[accent] || { border: 'border-l-navy', text: 'text-navy' }
-  const [totalRow] = computeBucketComparisons(rows, rowsAllMonths, TOTAL_BUCKET, amountField, countField, comparisonMonths)
-  const total = totalRow || { amount: 0, count: 0, mom: null, yoy: null }
+  const [totalRow] = computeBucketComparisons(rows, rowsAllMonths, TOTAL_BUCKET, amountField, countField, comparisonMonths, selectedMonths)
+  const total = totalRow || { amount: 0, count: 0, mom: null, qoq: null, yoy: null, customPct: null }
   // 2026-08-14 fix: some bucket sets (Denomination, Card Type at the time)
   // don't partition every row — a row with Denom/CardType='N/A' (a real,
   // typically negative correction/adjustment amount, not junk) matched
@@ -132,9 +168,9 @@ export default function MetricComparisonCard({
   // real correction-row bucket, not Cancellation).
   const bucketsWithOther = buckets && !cancelPredicate ? [...buckets, { key: 'Other', predicate: (r) => !buckets.some((b) => b.predicate(r)) }] : null
   const bucketRows = cancelPredicate
-    ? computeNettedBucketComparisons(rows, rowsAllMonths, buckets, cancelPredicate, amountField, countField, comparisonMonths)
+    ? computeNettedBucketComparisons(rows, rowsAllMonths, buckets, cancelPredicate, amountField, countField, comparisonMonths, selectedMonths)
     : bucketsWithOther
-      ? computeBucketComparisons(rows, rowsAllMonths, bucketsWithOther, amountField, countField, comparisonMonths)
+      ? computeBucketComparisons(rows, rowsAllMonths, bucketsWithOther, amountField, countField, comparisonMonths, selectedMonths)
       : []
   const fySeries = computeFYSeries(rowsAllFY, amountField, countField)
   // Same bucket partition as the current-period table above, just crossed
@@ -165,7 +201,8 @@ export default function MetricComparisonCard({
         amountField,
         countField,
         comparisonMonths,
-        fys
+        fys,
+        selectedMonths
       )
     }
   }
@@ -181,13 +218,20 @@ export default function MetricComparisonCard({
           <div className="flex items-start justify-between flex-wrap gap-2 mb-4">
             <div>
               <div className={`text-3xl font-serif font-extrabold tracking-tight ${accentClasses.text}`}>{fmtLacs(total.amount)}</div>
-              <div className="text-xs font-medium text-warmgray-muted mt-1">
+              <div className="text-xs font-medium text-warmgray-muted mt-1 count-ghost">
                 {fmtNumber(total.count)} {unit}
               </div>
             </div>
+            {/* 2026-08-29: collapsed from 2 always-shown badges (MoM+YoY) to
+                the single preset-aware badge every other page's KPI ribbon
+                now renders via kpiDeltas() — `activePreset`/`selectedMonths`
+                come from Summary.jsx's own single, page-level
+                usePresetWindow() call (passed down as props), not a
+                per-card control of this component's own. */}
             <div className="flex gap-1.5 pt-1">
-              <DeltaBadge pct={total.mom} label="MoM" />
-              <DeltaBadge pct={total.yoy} label="YoY" />
+              {kpiDeltas(activePreset, total, total.customPct).map((d) => (
+                <DeltaBadge key={d.label || 'delta'} pct={d.pct} label={d.label} />
+              ))}
             </div>
           </div>
 
@@ -198,8 +242,7 @@ export default function MetricComparisonCard({
                   <tr className="text-[10px] uppercase tracking-wide text-warmgray-muted">
                     <th className="text-left font-semibold pb-1.5">{title.replace(/^(Activation|Redemption) by /, '')}</th>
                     <th className="text-right font-semibold pb-1.5">Amount</th>
-                    <th className="text-right font-semibold pb-1.5">MoM</th>
-                    <th className="text-right font-semibold pb-1.5">YoY</th>
+                    <th className="text-right font-semibold pb-1.5">Δ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -209,15 +252,12 @@ export default function MetricComparisonCard({
                         <td className="py-1.5 text-navy font-medium whitespace-nowrap">{bucketLabelFn ? bucketLabelFn(r.key) : r.key}</td>
                         <td className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">
                           {fmtLacs(r.amount)}
-                          <span className="block font-normal text-[10px] text-warmgray-muted">
+                          <span className="block font-normal text-[10px] text-warmgray-muted count-ghost">
                             ({fmtNumber(r.count)} {unit})
                           </span>
                         </td>
                         <td className="py-1.5 text-right">
-                          <DeltaBadge pct={r.mom} label="" />
-                        </td>
-                        <td className="py-1.5 text-right">
-                          <DeltaBadge pct={r.yoy} label="" />
+                          <DeltaBadge pct={kpiDeltas(activePreset, r, r.customPct)[0].pct} label="" />
                         </td>
                       </tr>
                       {nestedByParentKey[r.key]?.current.map((nr) => (
@@ -225,15 +265,12 @@ export default function MetricComparisonCard({
                           <td className="py-1 pl-4 text-warmgray-muted font-normal whitespace-nowrap text-[11px]">↳ {nr.key}</td>
                           <td className="py-1 text-right text-warmgray-muted tabular-nums whitespace-nowrap text-[11px]">
                             {fmtLacs(nr.amount)}
-                            <span className="block font-normal text-[9px] text-warmgray-muted">
+                            <span className="block font-normal text-[9px] text-warmgray-muted count-ghost">
                               ({fmtNumber(nr.count)} {unit})
                             </span>
                           </td>
                           <td className="py-1 text-right">
-                            <DeltaBadge pct={nr.mom} label="" />
-                          </td>
-                          <td className="py-1 text-right">
-                            <DeltaBadge pct={nr.yoy} label="" />
+                            <DeltaBadge pct={kpiDeltas(activePreset, nr, nr.customPct)[0].pct} label="" />
                           </td>
                         </tr>
                       ))}
@@ -276,7 +313,7 @@ export default function MetricComparisonCard({
                         {fySeries.map((f) => (
                           <td key={f.fy} className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">
                             {fmtLacs(r.byFY[f.fy].amount)}
-                            <span className="block font-normal text-[10px] text-warmgray-muted">
+                            <span className="block font-normal text-[10px] text-warmgray-muted count-ghost">
                               ({fmtNumber(r.byFY[f.fy].count)} {unit})
                             </span>
                           </td>
@@ -288,7 +325,7 @@ export default function MetricComparisonCard({
                           {fySeries.map((f) => (
                             <td key={f.fy} className="py-1 text-right text-warmgray-muted tabular-nums whitespace-nowrap text-[11px]">
                               {fmtLacs(nr.byFY[f.fy].amount)}
-                              <span className="block font-normal text-[9px] text-warmgray-muted">
+                              <span className="block font-normal text-[9px] text-warmgray-muted count-ghost">
                                 ({fmtNumber(nr.byFY[f.fy].count)} {unit})
                               </span>
                             </td>
@@ -302,7 +339,7 @@ export default function MetricComparisonCard({
                     {fySeries.map((f) => (
                       <td key={f.fy} className="py-1.5 text-right text-navy tabular-nums whitespace-nowrap">
                         {fmtLacs(f.amount)}
-                        <span className="block font-normal text-[10px] text-warmgray-muted">
+                        <span className="block font-normal text-[10px] text-warmgray-muted count-ghost">
                           ({fmtNumber(f.count)} {unit})
                         </span>
                       </td>
@@ -321,7 +358,7 @@ export default function MetricComparisonCard({
                     <div key={f.fy} className="min-w-[112px] bg-cream/70 border border-warmgray-border rounded-md px-3 py-2">
                       <div className="text-[11px] font-bold text-navy">{f.fy}</div>
                       <div className="text-sm font-semibold text-navy tabular-nums mt-0.5">{fmtLacs(f.amount)}</div>
-                      <div className="text-[10px] text-warmgray-muted">
+                      <div className="text-[10px] text-warmgray-muted count-ghost">
                         {fmtNumber(f.count)} {unit}
                       </div>
                       {f.isPartial && <div className="text-[9px] text-gold font-semibold italic mt-0.5">Partial — {f.monthsPresent}/12 months (YTD)</div>}

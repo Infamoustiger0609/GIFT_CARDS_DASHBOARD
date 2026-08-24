@@ -29,6 +29,41 @@ h1, h2, h3, h4, .font-serif {
   background: transparent;
 }
 
+/* 2026-08-28: shared "present but invisible" treatment for the small card/
+   redemption/cancellation COUNT annotations sprinkled across KPI cards,
+   FlowBox nodes, and MetricComparisonCard tables (e.g. "13,37,018 cards").
+   Not display:none (removes the node from layout, collapsing its reserved
+   space) and not visibility:hidden (also removes it from the
+   accessibility/hit-testing tree in most browsers, which blocks
+   click-drag/triple-click selection) — keeps the text fully selectable and
+   copyable while painting nothing by default.
+
+   2026-08-25: switched from opacity:0 to color:transparent, specifically
+   so a reader can select the text (click-drag or double-click) to reveal
+   it on demand, highlighted, instead of it staying invisible even while
+   selected. opacity:0 couldn't support this: opacity applies to an
+   element's entire rendered output as one compositing group, including
+   its own ::selection styling, so the highlight itself washed out to
+   nothing right along with the text — selecting produced no visible
+   feedback at all. color:transparent has no such compositing side effect
+   (each glyph is just fully transparent ink), so the ::selection override
+   below can freely repaint the selected run in a real, visible color
+   against a highlight background. Still works uniformly across every
+   background this text sits on (white cards, cream page background, navy
+   tooltips) — transparent is transparent regardless of what's behind it,
+   same benefit opacity:0 had. */
+.count-ghost {
+  color: transparent;
+}
+.count-ghost::selection {
+  color: #1b2430;
+  background: #f4e6c8;
+}
+.count-ghost::-moz-selection {
+  color: #1b2430;
+  background: #f4e6c8;
+}
+
 /* react-select minimal theming to match card/border system */
 .rs__control {
   border-color: #e2ddd3 !important;

@@ -12,8 +12,10 @@ export function FlowBox({ label, amount, count, countUnit = 'cards', pct, color 
       <div className={`font-serif font-extrabold ${big ? 'text-2xl' : 'text-lg'}`} style={{ color }}>
         {fmtLacs(amount)}
       </div>
+      {/* 2026-08-28: count-ghost — present/selectable, painted invisible.
+          See index.css's own comment for why opacity, not display/visibility. */}
       {count !== undefined && (
-        <div className="text-[11px] text-warmgray-muted">
+        <div className="text-[11px] text-warmgray-muted count-ghost">
           {fmtNumber(count)} {countUnit}
         </div>
       )}

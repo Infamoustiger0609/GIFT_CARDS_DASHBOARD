@@ -2,7 +2,7 @@ import React, { useMemo } from 'react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LabelList } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
 import { sumBy, groupSum, topNWithOther, netHeadRows } from '../lib/aggregate'
-import { computeComparisons } from '../lib/comparisons'
+import { computeComparisons, computeCustomWindowComparison, usePresetWindow, kpiDeltas } from '../lib/comparisons'
 import { groupByRedemptionMode } from '../lib/redemptionMode'
 import { orderBy, REGION_ORDER, WEEKDAY_ORDER, DENOM_ORDER, regionLabel } from '../lib/constants'
 import { COLORS, REGION_COLORS, CARD_TYPE_COLORS, categoricalColor } from '../lib/theme'
@@ -14,7 +14,23 @@ import ChartTooltip from '../components/ChartTooltip'
 import { AmountLabel, HorizontalAmountLabel, stackTotalLabel } from '../components/ChartLabels'
 
 export default function RedemptionBoxOffice() {
-  const { redemptionRows, redemptionRowsAllMonths, comparisonMonths } = useFilters()
+  const { redemptionRows, redemptionRowsForComparison, comparisonMonths } = useFilters()
+
+  // 2026-08-29: MTD/QTD(Q1-Q4 dropdown)/YTD preset control, via the same
+  // shared usePresetWindow() hook Overview.jsx/CardJourney.jsx/Activation.jsx
+  // already use — no page-local reimplementation of the anchor/window logic.
+  const {
+    selectedMonths,
+    quarterOptions,
+    activePreset,
+    activeQuarter,
+    qtdMenuOpen,
+    setQtdMenuOpen,
+    qtdMenuRef,
+    applyPreset,
+    applyQuarter,
+    windowDateRangeLabel
+  } = usePresetWindow()
 
   // 2026-08-06 fix: this page's own "Box Office Redemption" KPI (and every
   // chart derived from it below) used to be gross (Head='Box Office' rows
@@ -38,7 +54,12 @@ export default function RedemptionBoxOffice() {
   // (verified live across 3 filter combinations first — see CLAUDE.md).
   // Removed rather than left as harmless-but-duplicated.
   const netBoxOfficeRows = useMemo(() => netHeadRows(redemptionRows, 'Box Office'), [redemptionRows])
-  const netBoxOfficeRowsAllMonths = useMemo(() => netHeadRows(redemptionRowsAllMonths, 'Box Office'), [redemptionRowsAllMonths])
+  // 2026-08-25 bug fix: was netHeadRows(redemptionRowsAllMonths, ...) —
+  // Month-unrestricted but still FY-restricted, so a specific FY selection
+  // zeroed out any delta whose prior-year window fell in a different FY.
+  // redemptionRowsForComparison lifts both restrictions (see
+  // FilterContext.jsx's own doc comment).
+  const netBoxOfficeRowsForComparison = useMemo(() => netHeadRows(redemptionRowsForComparison, 'Box Office'), [redemptionRowsForComparison])
   const total = sumBy(netBoxOfficeRows, 'RedemptionAmount')
   // 2026-08-20: kept distinct from the new card-based count below —
   // RedemptionCount is a transaction count, needed as-is for "Avg per
@@ -47,16 +68,31 @@ export default function RedemptionBoxOffice() {
   const totalCount = sumBy(netBoxOfficeRows, 'RedemptionCount')
   const totalCardCount = sumBy(netBoxOfficeRows, 'UniqueCardCount')
   const deltas = useMemo(
-    () => computeComparisons(netBoxOfficeRowsAllMonths, 'RedemptionAmount', comparisonMonths),
-    [netBoxOfficeRowsAllMonths, comparisonMonths]
+    () => computeComparisons(netBoxOfficeRowsForComparison, 'RedemptionAmount', comparisonMonths),
+    [netBoxOfficeRowsForComparison, comparisonMonths]
+  )
+  // 2026-08-29: "custom window" (no MTD/QTD/YTD preset active) badge — same
+  // netBoxOfficeRowsForComparison/digitalRowsForComparison pools the
+  // anchor-based deltas above already read, just summed over the literal
+  // `selectedMonths` window instead of an anchor-derived sub-window.
+  const totalCustomPct = useMemo(
+    () => computeCustomWindowComparison(netBoxOfficeRowsForComparison, 'RedemptionAmount', selectedMonths),
+    [netBoxOfficeRowsForComparison, selectedMonths]
   )
   const digitalRows = netBoxOfficeRows.filter((r) => r.CardType === 'Digital')
   const digitalAmt = sumBy(digitalRows, 'RedemptionAmount')
   const digitalCardCount = sumBy(digitalRows, 'UniqueCardCount')
-  const digitalRowsAllMonths = useMemo(() => netBoxOfficeRowsAllMonths.filter((r) => r.CardType === 'Digital'), [netBoxOfficeRowsAllMonths])
+  const digitalRowsForComparison = useMemo(
+    () => netBoxOfficeRowsForComparison.filter((r) => r.CardType === 'Digital'),
+    [netBoxOfficeRowsForComparison]
+  )
   const digitalDeltas = useMemo(
-    () => computeComparisons(digitalRowsAllMonths, 'RedemptionAmount', comparisonMonths),
-    [digitalRowsAllMonths, comparisonMonths]
+    () => computeComparisons(digitalRowsForComparison, 'RedemptionAmount', comparisonMonths),
+    [digitalRowsForComparison, comparisonMonths]
+  )
+  const digitalCustomPct = useMemo(
+    () => computeCustomWindowComparison(digitalRowsForComparison, 'RedemptionAmount', selectedMonths),
+    [digitalRowsForComparison, selectedMonths]
   )
 
   // "Box Office Redemption" KPI's own "% of..." sub-line — its share of all
@@ -154,28 +190,83 @@ export default function RedemptionBoxOffice() {
 
   return (
     <div className="flex flex-col gap-6">
+      {/* 2026-08-29: MTD/QTD(Q1-Q4 dropdown)/YTD control row + single
+          top-left comparison-date line — copied verbatim from Overview.jsx/
+          CardJourney.jsx/Activation.jsx's own render, not a re-styled
+          approximation. */}
+      <div className="flex justify-between items-center gap-2 -mb-2 flex-wrap">
+        <p className="text-xs italic text-warmgray-muted">{windowDateRangeLabel}</p>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={() => applyPreset('mtd')}
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+              activePreset === 'mtd' ? 'bg-gold text-navy' : 'bg-card border border-warmgray-border text-warmgray-muted hover:border-gold hover:text-navy'
+            }`}
+          >
+            MTD
+          </button>
+          <div className="relative" ref={qtdMenuRef}>
+            <button
+              type="button"
+              onClick={() => setQtdMenuOpen((o) => !o)}
+              className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                activePreset === 'qtd' ? 'bg-gold text-navy' : 'bg-card border border-warmgray-border text-warmgray-muted hover:border-gold hover:text-navy'
+              }`}
+            >
+              {activePreset === 'qtd' && activeQuarter ? `Q${activeQuarter}` : 'QTD'} ▾
+            </button>
+            {qtdMenuOpen && (
+              <div className="absolute z-50 top-full right-0 mt-1 bg-card border border-warmgray-border rounded-md shadow-lg py-1 w-28">
+                {quarterOptions.map((q) => (
+                  <button
+                    key={q.key}
+                    type="button"
+                    disabled={q.disabled}
+                    onClick={() => applyQuarter(q)}
+                    title={q.disabled ? 'No data yet for this quarter' : q.months.join(', ')}
+                    className={`w-full text-left px-3 py-1.5 text-xs font-medium ${
+                      q.disabled
+                        ? 'text-warmgray-muted/50 cursor-not-allowed'
+                        : activePreset === 'qtd' && activeQuarter === q.key
+                          ? 'bg-gold-light text-navy font-semibold'
+                          : 'text-navy hover:bg-cream cursor-pointer'
+                    }`}
+                  >
+                    {q.label}
+                    {!q.disabled && q.months.length < 3 && <span className="text-[10px] text-warmgray-muted ml-1">(to date)</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => applyPreset('ytd')}
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+              activePreset === 'ytd' ? 'bg-gold text-navy' : 'bg-card border border-warmgray-border text-warmgray-muted hover:border-gold hover:text-navy'
+            }`}
+          >
+            YTD
+          </button>
+        </div>
+      </div>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <Kpi
           label="Box Office Redemption"
           value={fmtLacs(total)}
-          sub={`${fmtNumber(totalCardCount)} cards · ${fmtPct(totalPct, 0)} of total redemption`}
+          sub={`${fmtPct(totalPct, 0)} of total redemption`}
+          subCount={`${fmtNumber(totalCardCount)} cards`}
           accent="teal"
-          deltas={[
-            { label: 'MoM', pct: deltas.mom },
-            { label: 'QoQ', pct: deltas.qoq },
-            { label: 'YoY', pct: deltas.yoy }
-          ]}
+          deltas={kpiDeltas(activePreset, deltas, totalCustomPct)}
         />
         <Kpi
           label="Digital Card Redemption"
           value={fmtLacs(digitalAmt)}
-          sub={`${fmtNumber(digitalCardCount)} cards · ${fmtPct(total ? (digitalAmt / total) * 100 : 0)}`}
+          sub={fmtPct(total ? (digitalAmt / total) * 100 : 0)}
+          subCount={`${fmtNumber(digitalCardCount)} cards`}
           accent="blue"
-          deltas={[
-            { label: 'MoM', pct: digitalDeltas.mom },
-            { label: 'QoQ', pct: digitalDeltas.qoq },
-            { label: 'YoY', pct: digitalDeltas.yoy }
-          ]}
+          deltas={kpiDeltas(activePreset, digitalDeltas, digitalCustomPct)}
         />
         <Kpi label="Avg per Redemption" value={totalCount ? fmtRupees(total / totalCount) : '—'} accent="navy" />
       </div>

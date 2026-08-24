@@ -10,6 +10,7 @@ import Trends from './pages/Trends'
 import CancelRedeem from './pages/CancelRedeem'
 import CardJourney from './pages/CardJourney'
 import Summary from './pages/Summary'
+import ChannelPerformance from './pages/ChannelPerformance'
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/cancel-redeem" element={<CancelRedeem />} />
           <Route path="/card-journey" element={<CardJourney />} />
           <Route path="/summary" element={<Summary />} />
+          <Route path="/channel-performance" element={<ChannelPerformance />} />
         </Route>
       </Routes>
     </FilterProvider>

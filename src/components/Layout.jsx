@@ -3,15 +3,22 @@ import { NavLink, Outlet } from 'react-router-dom'
 import FilterBar from './FilterBar'
 import { useFilters } from '../lib/FilterContext'
 
+// `disabled: true` on any tab renders it as a plain non-clickable label
+// with a "Under development" tooltip instead of a working nav link — set
+// here per-tab, nowhere else in the codebase, so removing the restriction
+// is a one-line edit: delete the `disabled: true` key (or set it to
+// `false`) on the tab below. The page/route itself is untouched either
+// way — this only ever disables the nav tab, not `/summary` itself.
 const TABS = [
-  { to: '/summary', label: 'Summary' },
+  { to: '/summary', label: 'Summary', disabled: true },
   { to: '/', label: 'Overview', end: true },
+  { to: '/channel-performance', label: 'Channel Performance' },
+  { to: '/card-journey', label: 'Card Journey' },
   { to: '/activation', label: 'Activation' },
   { to: '/redemption/box-office', label: 'Redemption · Box Office' },
   { to: '/redemption/fnb', label: 'Redemption · F&B' },
   { to: '/trends', label: 'Trends' },
-  { to: '/cancel-redeem', label: 'Cancel Redeem' },
-  { to: '/card-journey', label: 'Card Journey' }
+  { to: '/cancel-redeem', label: 'Cancel Redeem' }
 ]
 
 function DataStatus({ isLoading, error }) {
@@ -58,20 +65,30 @@ export default function Layout() {
               </div>
             </div>
             <nav className="flex flex-wrap gap-1 text-sm">
-              {TABS.map((t) => (
-                <NavLink
-                  key={t.to}
-                  to={t.to}
-                  end={t.end}
-                  className={({ isActive }) =>
-                    `px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
-                      isActive ? 'bg-gold text-navy' : 'text-white/75 hover:bg-white/10 hover:text-white'
-                    }`
-                  }
-                >
-                  {t.label}
-                </NavLink>
-              ))}
+              {TABS.map((t) =>
+                t.disabled ? (
+                  <span
+                    key={t.to}
+                    title="Under development"
+                    className="px-2.5 py-1 rounded-md font-medium whitespace-nowrap text-white/40 cursor-not-allowed"
+                  >
+                    {t.label}
+                  </span>
+                ) : (
+                  <NavLink
+                    key={t.to}
+                    to={t.to}
+                    end={t.end}
+                    className={({ isActive }) =>
+                      `px-2.5 py-1 rounded-md font-medium transition-colors whitespace-nowrap ${
+                        isActive ? 'bg-gold text-navy' : 'text-white/75 hover:bg-white/10 hover:text-white'
+                      }`
+                    }
+                  >
+                    {t.label}
+                  </NavLink>
+                )
+              )}
             </nav>
           </div>
         </header>
@@ -85,7 +102,11 @@ export default function Layout() {
         )}
       </div>
 
-      <main className="max-w-[1400px] mx-auto px-4 md:px-6 py-6">
+      {/* 2026-08-25: top padding trimmed (py-6 -> pt-3, bottom kept at
+          pb-6) — the sticky filter bar and the page content below it read
+          as one continuous block otherwise, more gap than the 2026-08-12
+          "compacted filter bar" pass was aiming for. */}
+      <main className="max-w-[1400px] mx-auto px-4 md:px-6 pt-3 pb-6">
         <DataStatus isLoading={isLoading} error={error} />
         {!isLoading && !error && <Outlet />}
       </main>

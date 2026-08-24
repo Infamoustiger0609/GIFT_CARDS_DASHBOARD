@@ -3751,6 +3751,324 @@ Cut) with no Cancellation bar and no negative axis range. Zero console
 errors across all 8 pages; clean production build (722.26 kB JS, 207.25 kB
 gzipped).
 
+## Backfilled history: 2026-08-15 through 2026-08-19
+
+**Note on the 8 entries below**: this file jumped straight from the
+2026-08-14 entries above to 2026-08-20 with nothing logged in between, even
+though `Overview.jsx`, `CardJourney.jsx`, `FilterContext.jsx`,
+`Summary.jsx`, `MetricComparisonCard.jsx`, `RedemptionBoxOffice.jsx`,
+`RedemptionFnb.jsx`, and `CancelRedeem.jsx` all carry extensive inline
+comments dated across those five days describing real, already-shipped
+changes. These 8 entries reconstruct that gap from those comments —
+confirmed by reading the actual current code each comment sits next to
+(not just the comment text), same as this file's live-session entries
+require — rather than from a session transcript, since none exists for
+this window. Where the file's usual convention is a live Playwright/
+hand-computation verification pass, these instead state what the current
+code demonstrably does; no dev server was started and no data was
+re-verified against the cubes for this backfill, since nothing here changed
+the code or data, only the written record of it.
+
+## 2026-08-15 — Day filter (1-31) replaced by a Weekday filter
+
+`FilterContext.jsx`/`FilterBar.jsx`: the numeric "Day" global filter
+(introduced 2026-08-10, backed by the lighter `dailyActivationCube.json`/
+`dailyRedemptionCube.json` cubes and requiring a `disabled`/incompatibility
+state whenever Card Type/Denomination/Activation Source/Redemption Source
+was active — see that entry above) is gone from `DEFAULT_FILTERS`,
+`passesCommon()`, and the filter bar entirely. Confirmed via grep: zero
+remaining references to `daily`/`Daily`/`filters.day`/`dayFilterAvailable`
+anywhere in `FilterContext.jsx`.
+
+Replaced with a **Weekday** filter — `matches(filters.weekday, row.Weekday)`
+in `passesCommon()`, so it applies to both main cubes directly (no daily-
+cube dependency, no gating logic needed, since `Weekday` is already a real
+field on `activationCube.json`/`redemptionCube.json`). `options.weekdays` is
+the fixed `WEEKDAY_ORDER` enumeration (7 values), same "closed set, not
+data-derived" treatment already used for Activation/Redemption Source and
+Denomination. `FilterBar.jsx`'s grid is `lg:grid-cols-10` (10 controls: FY,
+Month, Week, Weekday, Region, Activation Source, Redemption Source, Card
+Type, Ticket/F&B, Denomination).
+
+**Leftover, confirmed harmless**: `public/data/dailyActivationCube.json`/
+`dailyRedemptionCube.json` are still present on disk but no longer
+referenced by any code (confirmed via grep) — an orphaned artifact of the
+removed Day filter, not cleaned up. Same "leave the dead file, don't chase
+it" precedent already applied elsewhere in this file to unused exports.
+
+## 2026-08-15 — Cancel Redeem stops leaking into "by Head"/"by Card Type"
+breakdowns via a new shared proportional-netting utility
+
+New `lib/aggregate.js` exports: `REAL_HEAD_BUCKETS` (`HEAD_ORDER` minus
+`'Cancellation'`, the 3 real heads), `isCancellationRow()` (`row.Head ===
+'Cancellation'`), and `netBucketsProportionally(rows, buckets,
+isExcludedRow, amountField, countField)` — nets an excluded, no-real-
+category subset of rows into the real buckets by each bucket's own share of
+the gross (non-excluded) total, instead of the excluded subset rendering as
+its own bar/row. `count` is left as each bucket's own gross count,
+unadjusted — the same "amount nets cancellations in, count excludes them"
+split already established dashboard-wide.
+
+Two consumers, same day: **`CardJourney.jsx`**'s "Redemption by Head" chart
+(`byHead`) changed from a plain `groupSum(cohortRows, 'Head', ...)` —
+which had Cancellation rendering as its own 4th bar — to
+`netBucketsProportionally(cohortRows, REAL_HEAD_BUCKETS, isCancellationRow,
+'RedemptionAmount', 'RedemptionCount')`, so the 3 bars now sum exactly to
+"Of Those, Redeemed" above by construction. **`Summary.jsx`**'s "Redemption
+by Card Type" gained a `cancelPredicate={isCancellationRow}` prop (consumed
+by `MetricComparisonCard.jsx` via the equivalent
+`computeNettedBucketComparisons`/`computeNettedBucketFYSeries` path in
+`lib/comparisons.js`) for the same reason — Cancel Redeem rows carry
+`CardType='N/A'` and were previously either dropped or leaking in as their
+own bucket. Summary's then-existing "Redemption by Head" card (a separate,
+now-removed top-level card — see the 2026-08-19 entry below for its
+removal) got the identical `cancelPredicate` treatment the same day, per
+its own comment: "'Redemption by Head' ... and 'Redemption by Card Type'
+both had Cancel Redeem rows leaking in as their own visible bucket."
+
+Confirmed current: `CardJourney.jsx`'s `byHead` computation and
+`Summary.jsx`'s `CARD_TYPE_BUCKETS`/`cancelPredicate={isCancellationRow}`
+wiring both match this description in the code as it stands today.
+
+## 2026-08-15 — Overview's region/source/head bucket split reworked a
+second time: Director's Cut moves back to "by Region", "by Source" becomes
+self-reconciling
+
+Reverses part of the 2026-08-14 follow-up entry above (kept for history,
+not deleted) — per `Overview.jsx`'s own comment: "2026-08-15 reverted (see
+the 2026-08-14 follow-up entry in CLAUDE.md for the prior '5 named
+regions' version this undoes): the 6th region bucket belongs on this
+chart, not on 'Redemption by Head' — it's a `Region_Clean` value, not a
+`Head` value, and mixing it into the Head breakdown was itself the bug
+this reversion fixes."
+
+- **`REDEMPTION_REGION_ONLY_BUCKETS`** goes back to
+  `REDEMPTION_REGION_BUCKETS.slice(0, 6)` (5 named regions + Director's
+  Cut) — the 08-14-follow-up version that had trimmed this to 5 (dropping
+  Director's Cut to the Head chart instead) is undone.
+- **`REDEMPTION_HEAD_BUCKETS`** goes back to a strict `HEAD_ORDER.filter(h
+  => h !== 'Cancellation')` — exactly Online/Box Office/F&B, no Director's
+  Cut bucket at all (the 08-14-follow-up's 4-bucket version, which had
+  added Director's Cut here, is undone). Per the comment: this chart is a
+  gross per-head breakdown that no longer reconciles to "Total Redemption
+  (net)" by design (Cancellation excluded) — "don't add Cancellation back
+  just to make the sum match."
+- **`ACTIVATION_SOURCE_ONLY_BUCKETS`** (new): "Activation by Source"
+  changes from the 08-14 version's raw `ActivationModeFinal` passthrough
+  (Aggregator/Corporate/Online, everything except Physical — which did
+  *not* sum to Total Activation) to the `sourceOf()`-bucketed 3-source
+  model (Aggregators/Corporate/Cinema, via `lib/activationSource.js`) —
+  the same bucketing every other "by Source" chart in the app already
+  uses. This version is self-reconciling: all 3 bars sum exactly to Total
+  Activation, independent of "Activation by Region" beside it (a
+  deliberately overlapping, different question — Cinema's own rows split
+  by geography).
+
+Confirmed current: `Overview.jsx`'s `REDEMPTION_HEAD_BUCKETS` reads
+`HEAD_ORDER.filter((head) => head !== 'Cancellation')` (3 buckets, no
+Director's Cut) and `ACTIVATION_SOURCE_ONLY_BUCKETS` reads the 3
+`sourceOf()`-keyed buckets, matching this description exactly as the code
+stands today.
+
+## 2026-08-15 — Summary page gains a bucket × FY matrix ("By Year")
+
+`lib/comparisons.js#computeBucketFYSeries()` (and its netted counterpart,
+`computeNettedBucketFYSeries()`) — crosses a bucket set (Region/Source/Card
+Type/Denomination) against every fiscal year present in the data, not just
+the current filtered period. `MetricComparisonCard.jsx` renders this as a
+new "By Year" table below the existing single-period bucket breakdown,
+replacing the flat "FY Comparison" (total per FY, no category detail) for
+any card that has `buckets` — per the component's own comment, the two
+blocks were previously "partial views of 'totals,' with no single place
+answering 'how much did each category contribute in each fiscal year.'"
+Cards with no `buckets` (Total Activation, Total Redemption, Box Office/
+F&B Redemption net) keep the flat per-FY block, since there's no category
+to break out.
+
+Confirmed current: `MetricComparisonCard.jsx` still has this exact
+"By Year" bucket × FY matrix / flat-FY-block branch, gated on whether
+`buckets` was passed.
+
+## 2026-08-16 — cohortCube.json fetch made lazy (Card Journey only)
+
+`FilterContext.jsx`: `cohortCube.json` (grown to ~17.3MB/57,726 rows the
+same day it gained `ActivationModeFinal`/`CardType`/`Weekday` — see below)
+was split out of the eager `Promise.all` that loads `activationCube.json`/
+`redemptionCube.json`/`heroProducts.json` on app mount. Only
+`CardJourney.jsx` reads it, but every other page was paying for its full
+fetch+parse on every load regardless. New `cohortLoading`/`cohortError`
+state plus an idempotent `loadCohortCube()` (guarded by a `useRef`, not
+state, so the "already started" check is synchronous on the very first
+call) — `CardJourney.jsx` calls `loadCohortCube()` in a mount-time
+`useEffect`, and the fetch only actually happens once per app session even
+across repeated visits to the page. Per the comment, a direct Playwright
+resource-timing measurement (not a wall-clock guess) showed the app's
+overall load time is actually dominated by `redemptionCube.json`'s own
+~56MB, not this file — the fix was still made since it's cleanly separable
+and 7 of 8 pages never need this file at all.
+
+Same day, `cohortCube.json` gained `ActivationModeFinal`/`CardType`/
+`Weekday` (previously absent) — `filterCohort()`/`filterCohortByActivation()`
+in `FilterContext.jsx` extended to apply Activation Source, Card Type, and
+Weekday filtering to this cube too, alongside the pre-existing FY/Month/
+Region/Redemption Source/Ticket-F&B.
+
+Confirmed current: `FilterContext.jsx` has exactly this lazy-load
+implementation (`cohortCube`/`cohortLoading`/`cohortError` state,
+`cohortFetchStarted` ref, `loadCohortCube` callback), and `CardJourney.jsx`
+calls it from a `useEffect(() => { loadCohortCube() }, [loadCohortCube])`
+on mount.
+
+## 2026-08-16 — Card Journey's spillover chart becomes a diverging up/down
+bar chart
+
+The "spillover" chart (activation period fixed, redemption period
+unbounded — added 2026-08-13) changed from a single Redemption series
+color-coded teal-within-period/gold-outside-period to a genuine diverging
+bar chart: Activation (gold, positive/up) plotted against Redemption
+(teal, negative/down via a `RedemptionDown = -redemptionAmount` field) on
+the same `ReferenceLine y={0}` axis. Per `CardJourney.jsx`'s own comment,
+this conveys the same distinction *structurally* instead of by a second
+color pair — a month with both an up bar and a down bar is within the
+activation window; a month with only a down bar is pure spillover
+(redeemed later, outside the window) — and adopts the app's dominant
+"gold = Activation, teal = Redemption" 2-series convention (Year-on-Year,
+the Denomination comparison, etc.) instead of a one-off scheme.
+
+Confirmed current: `CardJourney.jsx`'s `spillover` chart renders two
+`<Bar>`s (`Activation`, fill `COLORS.activation`; `RedemptionDown`, fill
+`COLORS.redemption`) with a `<ReferenceLine y={0}>` and `DivergingAmountLabel`
+on both.
+
+## 2026-08-17 — Overview: "Activation vs. Redemption by Weekday" chart
+added, replacing the removed day-of-month trend
+
+New `weekdayTrend` computation and "Activation vs. Redemption by Weekday"
+card on `Overview.jsx` — per its own comment, this "replaces the removed
+'Daily Activation & Redemption Trend' (day-of-month) chart" (the chart
+that had read the now-lazy-loaded-away daily cubes' `Day` (1-31) dimension,
+retired the same window the Day filter itself was removed — see the
+2026-08-15 entry above). Same concept as `Activation.jsx`'s "Week-slot
+Activation Trend" and both Redemption pages' "Week-slot Redemption Trend,"
+combined into one 2-series (Activation/Redemption) chart here instead of
+the per-page single-series versions. Redemption is `redemptionRows`
+grouped by `Weekday` directly (Online + Box Office + F&B + Cancellation,
+i.e. the exact rows `totalRedemption` sums) — not `netHeadRows()`'s
+per-head netting, since this chart never asks "how much belongs to Box
+Office vs. F&B," only "how much redeemed (net) on this weekday," which a
+plain groupBy already answers exactly. Both series are guaranteed to sum
+to the page's own Total Activation/Total Redemption (net) KPIs by
+construction.
+
+Confirmed current: `Overview.jsx` still has the `weekdayTrend` `useMemo`
+and the "Activation vs. Redemption by Weekday" `<Card>` reading from it.
+
+## 2026-08-17 — Data refresh: Activation's Card Type "N/A" leak fixed at
+the source
+
+Per `MetricComparisonCard.jsx`'s own comment: a data-level fix (not a code
+change) reclassified Cancel Activate rows on the activation cube away from
+`CardType='N/A'` into their real Digital/Physical value. Effect: Summary's
+"Activation by Card Type" bucket set (Digital/Physical) became a complete
+partition of the activation cube for the first time — its synthetic
+"Other" bucket (added 2026-08-14, for any row matching none of a card's
+named buckets) stopped rendering for this specific card, since there was
+no longer a gap for it to capture. No code changed to make this happen;
+the zero-amount-bucket filter already in `computeBucketComparisons()`
+handled it once the underlying data stopped leaking.
+
+## 2026-08-19 — Data refresh: UniqueCardCount added; Denom's honest 12th
+bucket replaces "N/A"/"Other"; redemption cube's "Director's Cut" region
+is no longer a shared NO_SITE sentinel
+
+Three related data-refresh effects, all confirmed against current code
+(not just comments):
+
+- **`UniqueCardCount`** added to `redemptionCube.json` this same day (per
+  `Overview.jsx`'s own comment on `totalUniqueCards`) — the distinct-card
+  measure this file's 2026-08-20 "UniqueCardCount replaces RedemptionCount"
+  entry above builds on. `cohortCube.json` did not gain this field until
+  the 2026-08-20 work itself.
+- **`DENOM_ORDER`** (`lib/constants.js`) grew a 12th, honestly-named
+  bucket — `'Unknown (pre-existing)'` — replacing the old generic
+  `'N/A'`/`'Other'` catch-all values on the redemption cube entirely.
+  `FilterContext.jsx#options.denominations` exposes it as a normal
+  pickable option, unlike the sentinel values it replaced. Downstream
+  effect confirmed in `RedemptionBoxOffice.jsx`/`RedemptionFnb.jsx`'s
+  "by Denomination" charts: their `otherRows`/"Other"-bucket fallback
+  (added 2026-08-14 to stop dropping Cancel Redeem's netting correction)
+  is confirmed always empty on the current cube, kept in place as "a live
+  safety net rather than dead code," not removed.
+- **`regionBuckets.js`**: the redemption cube's `Region_Clean` field
+  stopped using the shared `'NO_SITE'` sentinel for its 6th value and now
+  carries the literal string `"Director's Cut"` directly — a real,
+  intentional 6th region, not an inferred identity via a relabel anymore.
+  `redemptionRegionLabel()` is now a plain passthrough to the shared
+  `regionLabel()` (which only special-cases `'NO_SITE'`, a value that
+  never appears on this cube's `Region_Clean` anymore) — previously it did
+  real relabeling work. `REDEMPTION_REGION_BUCKETS` can no longer share
+  `REGION_ORDER`'s raw 6-entry list wholesale the way
+  `ACTIVATION_REGION_BUCKETS` still does, since the two cubes are now
+  asymmetric on this one value (activation cube: still `'NO_SITE'`,
+  relabeled "Online" via `regionLabel()`; redemption cube: literal
+  `"Director's Cut"`) — it's built from `REGION_ORDER.slice(0, 5)` (the 5
+  names common to both) plus its own explicit `"Director's Cut"` and
+  `'Online'` (channel-total) buckets instead.
+
+## 2026-08-19 — Axis-crowding fix for the 6-category region charts (Box
+Office, F&B, Cancel Redeem)
+
+`interval={0}`/`angle={-45}`/`height={60}` added to the "by Region" X-axis
+on `RedemptionBoxOffice.jsx` and `CancelRedeem.jsx` — without them,
+Recharts silently auto-skips ticks it decides won't fit, which was
+dropping CENTRAL's label off the axis below 1440px now that "Director's
+Cut" (see the data-refresh entry above) is a real 6th category on these
+charts too (5 ticks fit fine without this; 6 didn't). Confirmed reproduced
+live at 800/1024px per the comment before the fix. `RedemptionFnb.jsx` got
+the identical treatment preemptively — its own comment notes it "didn't
+reproduce the CENTRAL-tick-drop bug in testing... but relies on the same
+width-dependent Recharts auto-skip behavior that did break on those two,
+so it's fixed the same way rather than left to get lucky at untested
+widths." Same angle/height/fontSize pattern Overview's own "by Region"
+charts already used for the identical crowding problem (see the
+2026-08-05 "Redemption by Region" fixes entry above).
+
+## 2026-08-19 — Summary page: "Redemption by Head" removed, folded into
+"Redemption by Source" via a new MetricComparisonCard nestedBreakdowns prop
+
+New `MetricComparisonCard.jsx` prop: `nestedBreakdowns` — an optional
+`{ [parentBucketKey]: { buckets, cancelPredicate? } }` map that lets one
+top-level bucket row expand into its own indented sub-rows, in both the
+current-period bucket table and the "By Year" FY matrix, instead of
+needing a second, overlapping top-level card. Implemented via
+`computeNestedBreakdown()`, which reuses the exact same
+`computeBucketComparisons`/`computeNettedBucketComparisons`/
+`computeBucketFYSeries`/`computeNettedBucketFYSeries` functions the
+top-level table already calls, just re-run against rows pre-filtered to
+the parent bucket's own predicate first — so the child buckets always sum
+exactly to their parent row's own amount by construction. Only one level
+of nesting is supported (not a general tree).
+
+`Summary.jsx`'s standalone "Redemption by Head" card (Online/Box
+Office/F&B, gained the `cancelPredicate` netting fix on 2026-08-15 above)
+is removed entirely — per the comment, it "covered the same ground as
+'Redemption by Source' (Online/Cinema), just one level more granular on
+the Cinema side." Its Box Office/F&B detail moves instead to a new
+`CINEMA_HEAD_BUCKETS` nested breakdown under "Redemption by Source"'s own
+Cinema row (`nestedBreakdowns={{ Cinema: { buckets: CINEMA_HEAD_BUCKETS,
+cancelPredicate: isCancellationRow } }}`) — Online has no further split,
+Cinema does, so Box Office + F&B still sum exactly to the Cinema row
+directly above them. "Activation by Source" now pairs with "Redemption by
+Source" directly in the page's interleaved card layout (established
+2026-08-18), rather than with the now-gone "Redemption by Head."
+
+Confirmed current: `Summary.jsx` has no standalone "Redemption by Head"
+`<MetricComparisonCard>`, and its "Redemption by Source" card passes
+`nestedBreakdowns={{ Cinema: { buckets: CINEMA_HEAD_BUCKETS, cancelPredicate:
+isCancellationRow } }}`; `MetricComparisonCard.jsx` still has the
+`computeNestedBreakdown()` function and renders nested rows (prefixed
+`↳`) under both the bucket table and the "By Year" matrix.
+
 ## 2026-08-20 — UniqueCardCount (distinct cards) replaces RedemptionCount
 (transactions) everywhere dashboard-wide; new Card Journey invariant found
 and flagged, not silently patched
@@ -3864,6 +4182,3411 @@ Deleted the `<p>` explaining YoY/MoM/FY Comparison terminology and the
 gross-vs-net Activation/Redemption convention — the `<h2>` heading stays,
 nothing else on the page changed. Purely a copy removal, no computation or
 layout logic touched.
+
+## 2026-08-20 — Summary page: reordered the metric-card display sequence
+
+Display-order-only change to `Summary.jsx`'s card sequence, no computation,
+data, or layout-structure change — same `MetricComparisonCard` components,
+same `md:grid-cols-2` grids, just re-emitted in a different order (each
+Activation/Redemption pair still lands side by side by construction, same
+"emission order IS the layout" convention from the 2026-08-18 restructure
+above).
+
+New order: Total Activation / Total Redemption (unchanged, still first) →
+Activation by Source / Redemption by Source → Activation by Card Type /
+Redemption by Card Type → Activation by Region / Redemption by Region →
+Box Office Redemption (net) / F&B Redemption (net) (unchanged, own section)
+→ Activation by Denomination / Redemption by Denomination (moved from
+right after the Total pair to last on the page).
+
+## 2026-08-21 — New Date Range filter (11th control, first position),
+backed by the daily cubes; consuming panel added to Overview
+
+**What changed**: added a Date Range global filter — single day or an
+arbitrary span, crossing months/years freely — in the first slot of the
+sticky filter bar (before Financial Year), without touching any of the
+other 10 filters' behavior. `FilterBar.jsx`'s desktop grid went from
+`lg:grid-cols-10` to `lg:grid-cols-11`; the mobile/tablet grids
+(`grid-cols-2 sm:grid-cols-4`) were untouched and just wrap one more cell.
+
+**Why a new pair of cubes, not the main ones**: the main
+`activationCube.json`/`redemptionCube.json` only carry a `YearMonth` field
+(month-level), no day-level date — there is no field on them a "pick a
+day" filter could narrow against. `dailyActivationCube.json`/
+`dailyRedemptionCube.json` (`public/data/`) already existed on disk from
+the since-removed 2026-08-10 Day filter (retired 2026-08-15 for the
+Weekday filter, an unrelated change to a real field on the main cubes) —
+confirmed their schema directly rather than assumed: `DateStr`/
+`Region_Clean`/`ActivationModeFinal`/`ActivationAmount`/`ActivationCount`
+on the activation side, `DateStr`/`Region_Clean`/`RedemptionModeFinal`/
+`Head`/`RedemptionAmount`/`RedemptionCount`/`Uptake` on the redemption
+side — no `CardType`, `Denom`, `ActivationSource`, or `RedemptionSource`
+dimension on either, and both span exactly 2024-04-01 to 2026-07-31
+(confirmed directly, not assumed from an old comment).
+
+**Reconciliation, checked before writing any filter code** (same standard
+as every other cross-cube check in this file — a few rupees of float noise
+is acceptable, exact counts are not): summed every day in 4 different
+months from the daily cubes and compared to that month's row in the main
+cubes.
+
+| Month | Activation amount (daily vs. main) | Activation count | Redemption amount (daily vs. main) | Redemption count |
+|---|---|---|---|---|
+| 2024-04 | ₹1,23,93,068.30 both | 23,521 both | ₹97,67,613.49 vs. ₹97,67,613.41 (diff ₹0.08) | 32,736 both |
+| 2025-01 | ₹1,90,97,463.59 both | 34,639 both | ₹1,41,95,435.17 vs. ₹1,41,95,435.10 (diff ₹0.07) | 47,337 both |
+| 2025-12 | ₹3,29,28,294.29 both | 45,624 both | ₹3,04,87,569.78 vs. ₹3,04,87,570.03 (diff −₹0.25) | 89,988 both |
+| 2026-07 | ₹11,49,77,313.93 vs. ₹11,49,77,313.83 (diff ₹0.10) | 163,878 both | ₹8,31,41,268.76 vs. ₹8,31,41,267.96 (diff ₹0.80) | 218,083 both |
+
+Max diff ₹0.80, every count exact — the daily cubes are still in sync with
+the mains after whatever refresh most recently touched them.
+
+**Filter shape — the one filter that isn't a multi-select array**: every
+other entry in `DEFAULT_FILTERS` is an array (the "old 'All' sentinel, now
+a set" model from 2026-08-03's multi-select rollout). `dateRange` is
+`{ start, end }` (`'YYYY-MM-DD'` strings or `null`) — a contiguous span
+doesn't fit that shape, and forcing it into an array would have meant
+teaching `matches()`/`Select.jsx`'s "Select All" checkbox model to handle
+a value type they were never built for. Given its own setter,
+`setDateRange()`, rather than routed through the generic `setFilter()`
+(whose `value || []` fallback assumes an array). `resetFilters()` still
+resets it correctly for free, since it just restores the whole
+`DEFAULT_FILTERS` object.
+
+**Combines with FY/Month/Region via normal AND, gated hard against the
+other 4**: `FilterContext.jsx`'s new `passesDailyCommon()` applies Region
+directly and derives FY/Month from `DateStr`'s own `'YYYY-MM'` prefix via
+the existing `fyOf()` — no new date-arithmetic needed. `dateRangeAvailable()`
+is a hard gate — `false` whenever Card Type, Denomination, Activation
+Source, or Redemption Source is active, since none of those 4 fields exist
+on the daily cubes and there is no way to combine them accurately. Same
+"grey out and hide, don't force-clear" precedent the old 2026-08-10 Day
+filter used for its own, differently-shaped incompatibility: the control
+disables (via `Select.jsx`'s own established `disabled`/`disabledReason`
+pattern, reused as-is by the new `DateRangeFilter.jsx` component) and
+Overview's consuming panel disappears, but the stored `{start, end}`
+selection is never cleared — it picks back up the moment the conflicting
+filter clears. Confirmed live: activating Card Type mid-selection disables
+the control and hides the panel; clearing Card Type immediately
+re-disables nothing and the panel reappears showing the exact same
+previously-picked range, not a reset one.
+
+**New `DateRangeFilter.jsx` component**: a compact button (matching
+`Select.jsx`'s ~24px control height and label styling exactly, so it sits
+naturally among the other 10 controls) showing "All" or a short summary
+("15 Jul 24" for a single day, "1 Jul 24 – 7 Jul 24" for a range), which
+opens a small floating panel with two native `<input type="date">` fields
+(From/To — "To" left blank means a single day) plus a Clear link.
+Deliberately not two inline date inputs in one grid cell — verified that
+would not survive the already-narrow 11-column grid, hence the popover.
+Native date inputs, not a custom calendar widget: no new dependency, and
+the browser's own picker already handles locale/keyboard concerns this app
+has no reason to reimplement. Bounds (`min`/`max`) are the hardcoded
+`DAILY_CUBE_MIN_DATE`/`DAILY_CUBE_MAX_DATE` constants (`lib/constants.js`)
+matching the cubes' confirmed span, not derived from the cubes themselves —
+letting the control render its bounds immediately on every page without
+waiting for (or forcing) a fetch of cubes most pages never need.
+
+**Lazy-loaded exactly like `cohortCube.json`**: `FilterContext.jsx` gained
+`dailyCubes`/`dailyLoading`/`dailyError` state and an idempotent
+`loadDailyCubes()` (ref-guarded, same pattern as `loadCohortCube()` from
+2026-08-16) — `Overview.jsx` is the only page that calls it, from its own
+mount `useEffect`, so every other page's load profile is completely
+unaffected (the combined ~3.2MB daily cubes are simply never fetched on
+those 7 pages, exactly as before this change).
+
+**The one consumer, per the request's own scope limit**: a new "Selected
+Date Range" `<Card>` on `Overview.jsx`, rendered only when
+`dateRangeAvailable && filters.dateRange.start` is true — two `<Kpi>`s
+(Activation amount + `ActivationCount`, gold; Redemption amount +
+`RedemptionCount`, teal) summed from the new `dailyActivationRows`/
+`dailyRedemptionRows` pools. Labeled "cards" on the Activation side and
+"redemptions" on the Redemption side — the daily redemption cube has no
+`UniqueCardCount` field at all (confirmed directly), so calling it "cards"
+would misrepresent a measure this cube genuinely doesn't carry, same
+"honest, cube-specific unit" carve-out `CancelRedeem.jsx`'s
+`"cancellations"` unit already established. Every other KPI, chart, and
+page is untouched by construction — nothing outside this one new `<Card>`
+reads `dailyActivationRows`/`dailyRedemptionRows`, and neither pool is ever
+passed to any existing computation.
+
+**Verified live** (Playwright, dev server): single day 2024-07-15 —
+Activation ₹5.96L / 871 cards, Redemption ₹3.70L / 1,215 redemptions,
+matching a direct hand-computation against the raw daily cubes exactly
+(and matching this exact figure's own prior appearance in this file, from
+the 2026-08-10 Day filter's own verification pass — a useful cross-check
+that the underlying daily data hasn't drifted since). Range 2024-07-01 to
+2024-07-07 — Activation ₹137.13L / 22,706 cards, Redemption ₹51.68L /
+17,258 redemptions, also matching a direct hand computation exactly. Grid
+checked at 1440/1280/768/390px via Playwright — 11 labels render at every
+width with zero clipping on short values ("All", "6 selected"); the only
+truncation observed was an intentionally-extreme 13-month test range
+("15 Jul 24 – 20 Aug 25") ellipsizing in its narrow column exactly the way
+`Select.jsx`'s own long-label truncation already behaves elsewhere in this
+bar — not a bug, and now backed by a `title` attribute on the button so
+the full range is still available on hover. No `gap-1`→`gap-0.5` reduction
+or second-row wrapping was needed; the escalation ladder the request
+outlined wasn't required. Mobile (390px) and tablet (768px) both wrap
+cleanly with no horizontal overflow or overlap (confirmed via
+`document.documentElement.scrollWidth` and screenshots). Zero console
+errors across all 8 pages; clean production build (729.42 kB JS, 208.71 kB
+gzipped — a ~4.7 kB increase for the new filter, cube-loading, and panel
+code, no new build warnings beyond the pre-existing 500KB chunk-size
+notice).
+
+**Out of scope, per the request**: Parts 2–5 of the larger request this
+was carved from were explicitly not touched in this pass.
+
+## 2026-08-22 — Two additions to Overview's KPI ribbon: a new ATV card
+(Universal.json), and Ticket/F&B bifurcation of Total Transaction Value
+
+**Part A — new "Average Transaction Value (ATV)" 5th KPI card**.
+`Universal.json` (`public/data/`, 28 monthly rows — `YearMonth`/
+`TotalTransactions`/`TotalRevenue`/`TotalTicketRevenue`/`TotalFnbRevenue`,
+whole-company data across every payment method, not just gift cards) is
+now wired into `FilterContext.jsx` the same way `activationCube.json`/
+`redemptionCube.json` are — eager `Promise.all` on mount, not
+`cohortCube.json`'s lazy-on-visit treatment, since 28 rows is too small to
+bother deferring.
+
+**New `universalRows` pool, deliberately narrower than every other pool**:
+`filterUniversal()` applies only FY and Month (deriving FY from `YearMonth`
+via the existing `fyOf()`, no new date arithmetic) — this cube has no
+Region/CardType/ActivationSource/RedemptionSource/Weekday/`DateStr` field
+at all, so `passesCommon()`'s full filter set was never applied to it.
+Confirmed live (not just by code review) that Region/CardType/Source
+filters genuinely don't move this pool — see the verification below.
+
+**New KPI card**: `Overview.jsx`'s ribbon widened from `grid-cols-1
+sm:grid-cols-2 lg:grid-cols-4` to `grid-cols-1 sm:grid-cols-3 lg:grid-cols-5`
+(`lg`/`sm` match `Activation.jsx`'s own 5-card ribbon exactly, per the
+request; the base breakpoint deliberately does NOT match Activation.jsx's
+`grid-cols-2` — see the "found and fixed" note below for why). Main
+`value` is **Universal ATV** (`sum(TotalRevenue) / sum(TotalTransactions)`
+over `universalRows`) — deliberately the prominent number, not a
+`breakdown` item, specifically so the "doesn't move under most filters"
+caveat sits in `Kpi.jsx`'s own `sub` line directly under the number it
+describes: "Company-wide (all payment methods) · FY/Month only — doesn't
+follow Region/Card Type/Source filters." **Gift Card ATV**
+(`totalRedemption / sum(redemptionRows, 'RedemptionCount')`) is the card's
+one `breakdown` item — same `RedemptionCount` (transaction count, never
+`UniqueCardCount`) denominator `RedemptionBoxOffice.jsx`/
+`RedemptionFnb.jsx`'s own "Avg per Redemption" tiles already use (checked
+those two files' actual computation before writing this, not assumed), so
+none of the three figures can drift from each other. No delta badges — a
+ratio/derived tile, same established convention as "Avg Ticket Size"/"Avg
+per Redemption." Both values use `fmtRupees()` (sub-Lac per-unit figures),
+not `fmtLacs`. Checked whether `RedemptionFnb.jsx` still carries the
+"static, whole-dataset" Hero Products caveat this task's own instructions
+referenced as a possible precedent for this kind of exception — grepped
+directly and confirmed it does **not** anymore (removed in the 2026-08-14
+"chart captions removed app-wide" pass) — so this card's `sub`-line caveat
+is a fresh, narrow exception to that removal, not a revival of an old
+pattern, and is called out as such rather than silently assumed to follow
+precedent that no longer exists.
+
+**Found and fixed during verification, not requested**: widening the
+ribbon's base breakpoint to `grid-cols-2` (literally matching
+Activation.jsx's own pattern, which the request asked for) produces
+~180px-wide cards at 390px — screenshotted and confirmed this visually
+broke the pre-existing Uptake card (its `breakdown` block is absolutely
+positioned top-right; at that width its "F&B ₹2,548 L" text visually ran
+under "₹3,387"). Activation.jsx's own 5 cards never hit this because none
+of them use `breakdown`; three of Overview's five now do (Uptake, Total
+Transaction Value, ATV). Fixed by keeping the base breakpoint at
+`grid-cols-1` (full-width cards on the narrowest phones, exactly how this
+ribbon already behaved before this change) while still adopting
+`sm:grid-cols-3 lg:grid-cols-5` as asked. Verified via DOM bounding-box
+measurement (not just eyeballing) that the value/breakdown gap is a
+consistent ~23.6px at 640/1024/1280/1440px, and confirmed clean via
+screenshot at 390/768px after the grid-cols-1 fix.
+
+**Part B — Total Transaction Value bifurcated into Ticket/F&B**, identical
+treatment to the existing Uptake card's own Ticket/F&B split. New
+`totalTransactionValueTicketFnb` `useMemo`, placed directly next to
+`uptakeTicketFnb` and built the same way — `netHeadRows(redemptionRows,
+'Box Office'|'Online'|'F&B')`, no second parallel computation: Ticket =
+(net Box Office + net Online) redemption + their Uptake; F&B = net F&B
+redemption + its Uptake. Passed to the "Total Transaction Value" `<Kpi>`'s
+own `breakdown` prop, same mechanism as Uptake. Purely additive —
+`totalTransactionValue` itself and its MoM/QoQ/YoY deltas are untouched.
+
+**Verified against hand-computed targets, unfiltered, before checking the
+UI**: Universal ATV ₹1,020.46 → displays "₹1,020" (target ₹1,020,
+`₹13,853.92 Cr / 135,761,469` transactions, exact); Gift Card ATV ₹338.10
+→ "₹338" (target ₹338, `₹66,95,32,305.96 / 19,80,252`, exact). FY2024-25
+Universal ATV ₹980.73 → "₹981"; FY2025-26 ₹1,041.80 → "₹1,042"; FY2026-27
+₹1,062.83 → "₹1,063" — all 3 match exactly. Ticket TTV ₹6,101.92L → "₹6,102
+L"; F&B TTV ₹3,980.27L → "₹3,980 L" — both match, and sum to the existing
+Total Transaction Value KPI (₹10,082.19L) exactly, confirmed both by hand
+and by reading the live app's own 3 numbers off the DOM (not scraped as
+flat body text — Kpi.jsx's `breakdown` block renders *before* its own
+label in DOM order, since it's absolutely positioned; an initial
+substring-based scrape mis-attributed one card's breakdown to its neighbor
+before this was caught and the check redone per-card via `element.textContent`).
+
+**Verified the two "must stay independent" invariants live, not just at
+the unfiltered baseline**: Region=NORTH — Universal ATV held at exactly
+₹1,020 (unmoved, as required) while Gift Card ATV moved to ₹342 (correctly
+filter-responsive, confirming the two ATV figures are genuinely
+independent computations); Ticket ₹5,038L + F&B ₹2,064L = ₹7,102L, matching
+that filtered state's own Total Transaction Value exactly. FY2024-25 only —
+Universal ATV correctly moved to ₹981 (matching the FY-only target above,
+confirming FY *does* narrow `universalRows` as intended); Ticket ₹1,659L +
+F&B ₹619L = ₹2,278L against a displayed Total Transaction Value of
+₹2,277L (₹1L of pure two-number display-rounding noise, same class of
+noise already documented throughout this file, not a real discrepancy).
+
+Zero console errors across all 8 pages; clean production build (730.45 kB
+JS, 209.02 kB gzipped — a ~1 kB increase for the new cube, computations,
+and 5th card, no new build warnings beyond the pre-existing 500KB
+chunk-size notice).
+
+## 2026-08-23 — Card Journey: same-month redemption % on the spillover
+chart, plus 5 new charts reusing the page's own cohort pools
+
+Two self-contained additions to `CardJourney.jsx`, no changes to any other
+page.
+
+**Part A — same-month-redeemed % on the spillover chart**: new
+`sameMonthByActivation` (`cohortRowsByActivation` filtered to
+`RedemptionYearMonth === ActivationYearMonth`, grouped by
+`ActivationYearMonth`, summed on `RedemptionAmount`) feeds two new fields
+on the existing `spillover` array — `SameMonthRedeemed`/`SameMonthPct`
+(`SameMonthRedeemed / Activation * 100`). No change to the chart's
+diverging up/down structure, colors, or the Redemption bar's own label.
+New `amountWithPctLabel(data, pctField)` in `ChartLabels.jsx` — same
+index-lookup-via-closure pattern as `regionDeltaLabel` (LabelList strips
+non-SVG props before calling `content`, so a per-bar % can't ride along as
+an extra data-row prop), but for a plain % share rather than a
+period-over-period delta: no arrow/red-green color-coding, since a share
+isn't a "good/bad" direction. Swapped in on the Activation bar's
+`LabelList` only, replacing `DivergingAmountLabel`; the Redemption bar
+keeps `DivergingAmountLabel` untouched, per the request. The chart's
+`margin.top` (20→34) and `ResponsiveContainer` height (300→310) were both
+bumped for the new 2-line label's clearance above the tallest Activation
+bar.
+
+**Verified against hand-computed targets, FY2024-25, before checking the
+UI**: computed all 12 months directly from `cohortCube.json` first — Apr24
+123.93→51.76 (41.8%), May24 141.93→64.94 (45.8%), Jun24 234.63→122.64
+(52.3%), Jul24 337.82→174.88 (51.8%), Aug24 166.30→29.13 (17.5%), Sep24
+89.91→22.63 (25.2%), Oct24 134.16→31.08 (23.2%), Nov24 213.03→82.42
+(38.7%), Dec24 250.64→124.28 (49.6%), Jan25 190.97→74.90 (39.2%), Feb25
+238.87→123.47 (51.7%), Mar25 199.60→98.18 (49.2%) — then confirmed live in
+the app with FY filtered to FY2024-25: all 12 rendered percentages
+(41.8%/45.8%/52.3%/51.8%/17.5%/25.2%/23.2%/38.7%/49.6%/39.2%/51.7%/49.2%)
+matched exactly, read directly off the chart's own SVG label text via
+Playwright, not eyeballed from a screenshot.
+
+**Part B — 5 new charts, all following one rule**: Activation-side
+series/charts use `activationRows` (this page's own pool); Redemption-side
+series/charts use `cohortRows` — never `redemptionRows` (Overview's "all
+redemptions this period regardless of activation date," a different,
+already-answered question) and never `cohortRowsByActivation` (the
+unbounded-redemption spillover pool). New charts: "Activation by Region" /
+"Redemption by Region" (module-scope `ACTIVATION_REGION_ONLY_BUCKETS`/
+`REDEMPTION_REGION_ONLY_BUCKETS`, sliced from the shared
+`lib/regionBuckets.js` tables exactly like Overview.jsx's own local
+slices), "Activation by Source" (`ACTIVATION_SOURCE_ONLY_BUCKETS`, via
+`sourceOf()` from `lib/activationSource.js`, same 3-bucket model as
+Overview's `activationBySourceRaw`), "Redemption Trend" (`weekSlotBreakdown()`
+called with `cohortRows` as the redemption argument instead of the main
+redemption pool), and "Activation vs. Redemption by Weekday" (mirrors
+Overview's chart of the same name, Redemption series grouped from
+`cohortRows`). New local `bucketSum()` helper — Overview's own
+`bucketRegionData()` minus the MoM computation, since none of these charts
+carry delta badges (no `comparisonMonths`/`AllMonths` pool on this page to
+compute one from) — labels are plain `AmountLabel`, not
+`regionDeltaLabel`. "Redemption by Head" (`byHead`) was checked and
+confirmed to already read from `cohortRows` via `netBucketsProportionally`
+— left untouched, per the request.
+
+**Hard reconciliation, checked against the raw cubes before writing any
+chart code, unfiltered**: "Redemption by Head" (pre-existing) sums to
+₹6,696L against "Of Those, Redeemed" ₹6,695.32L (rounding) — confirmed
+still correct. "Activation by Source" sums to ₹8,267L, exactly matching
+"Cards Activated" (a complete 3-bucket partition of `activationRows`, no
+exclusions). "Redemption Trend" (Weekday ₹3,048L + Weekend ₹3,647L =
+₹6,695L) and "Activation vs. Redemption by Weekday"'s own Redemption
+series (₹6,696L) both match "Of Those, Redeemed" exactly — both are plain
+`groupBy`s over the *entirety* of `cohortRows`, so every row is counted
+exactly once by construction. **"Redemption by Region" does NOT reconcile
+to "Of Those, Redeemed" — by design, not a bug**: it excludes the Online
+channel-total bucket (mirroring Overview's own "Redemption by Region",
+which has never reconciled to Overview's Total Redemption either, for the
+identical reason). Confirmed the exact gap directly against
+`cohortCube.json`: 6-bucket sum ₹2,460.14L vs. full `cohortRows` total
+₹6,695.32L, a ₹4,235.19L gap against the Online bucket's own ₹4,239.09L
+(the small remaining ~₹3.90L difference is the same kind of
+region-attribution edge case already documented elsewhere in this file,
+not new). "Activation by Region" is the equivalent, expected exception on
+the activation side (₹1,939.97L vs. `activationRows`' full ₹8,266.57L —
+Aggregators/Corporate/Online channels excluded by design, same as
+Overview's own chart).
+
+**Verified live, unfiltered**: card presence confirmed for all 5 new
+titles plus the untouched "Redemption by Head"/spillover cards; read each
+chart's bar values directly off the rendered SVG — Redemption by Head
+Online ₹4,342L/Box Office ₹919L/F&B ₹1,435L; Activation by Source
+Aggregators ₹4,255L/Corporate ₹2,072L/Cinema ₹1,940L (sums to ₹8,267L);
+Redemption Trend Weekday ₹3,048L/Weekend ₹3,647L; Activation by Region
+NORTH ₹997L/SOUTH ₹280L/EAST ₹214L/WEST ₹447L/CENTRAL ₹2L; Redemption by
+Region NORTH ₹1,087L/SOUTH ₹621L/EAST ₹218L/WEST ₹515L/CENTRAL ₹4L/
+Director's Cut ₹15L — all matching the hand-computed figures above. Zero
+console errors on Card Journey, unfiltered and under an FY2024-25 filter;
+clean production build (737.19 kB JS, 209.71 kB gzipped — a ~6.7 kB
+increase for the new label function and 5 charts, no new build warnings
+beyond the pre-existing 500KB chunk-size notice). Per the request, this
+was a lighter verification pass (no full 8-page sweep, no multi-breakpoint
+screenshots) — scoped to Card Journey itself, which is the only page
+touched.
+
+## 2026-08-24 — Overview's "Activation vs. Redemption by Weekday" card:
+70/30 split, new donut chart
+
+Layout-only change, no data/calculation change to the existing
+`weekdayTrend` bar chart — same exact `<BarChart>`, same colors, same
+labels, same height. The card's content is now `grid grid-cols-1
+md:grid-cols-[7fr_3fr] gap-4`: the bar chart fills the 70% left column
+(only its `ResponsiveContainer` `width` changed, from the whole card to
+its own grid column), a new donut chart fills the 30% right column.
+`grid-cols-1` at the base breakpoint stacks the donut below the bar chart
+on mobile instead of forcing the split into a column too narrow for
+either chart.
+
+**New `weekdayCombined`**: a pure reshape of the existing `weekdayTrend`
+array (`{ ...w, combined: w.Activation + w.Redemption }`) — no new
+aggregation, per the request. Since `weekdayTrend` is already a complete
+per-weekday partition of both `activationRows` and `redemptionRows`
+(established when this chart was first built, 2026-08-17) and already
+ordered by `WEEKDAY_ORDER`, the 7 combined slices inherit both guarantees
+for free: correct order, and an exact sum to `totalActivation +
+totalRedemption`.
+
+**Donut, not a flat pie**: `<Pie innerRadius={45} outerRadius={75}>` — the
+established house style (`donutLabel` in `ChartLabels.jsx` is named for
+exactly this convention; every radial chart this app has ever shipped,
+including the since-removed "Head Split" mini-donut, is a donut, never a
+flat pie). Colored via `categoricalColor(i)` cycling — the same 7-color
+set already used for `Activation.jsx`'s "Week-slot Activation Trend" and
+`CancelRedeem.jsx`'s "Cancel Redeem by Weekday," not a new palette.
+
+**Labels: compact color-dot legend below the donut, not `donutLabel`** —
+decided this upfront rather than prototyping both, based on the
+established precedent this same page already set: the since-removed "Head
+Split (excl. Cancel Redeem)" mini-donut (2026-08-05, removed 2026-08-06 —
+see CLAUDE.md) used the identical compact-legend treatment specifically
+because `donutLabel`'s outward-radiating labels need real clearance around
+the pie to land in, which that donut's own space didn't have. A 30%-width
+card column has even less room than that donut did, so the same
+constraint applies more strongly here. The actual removed JSX was never
+committed to git (confirmed via `git log -p`, only this file's own prose
+description of it survived), so the 2-column, small-dot-plus-name legend
+here is a fresh implementation matching that description, not a literal
+copy of code that no longer exists anywhere to copy from.
+
+**Tooltip**: a new page-local `WeekdayPieTooltip` (not `ChartTooltip`) —
+a Pie's own Recharts hover payload carries only the one hovered slice's
+single combined value, not the two-series shape `ChartTooltip`'s
+per-payload-entry loop expects, so this reads `Activation`/
+`ActivationCount`/`Redemption`/`RedemptionCardCount` directly off the
+hovered slice's own underlying data row (`payload[0].payload`) instead —
+same navy-box visual language as `ChartTooltip`, same "amount + (N cards)"
+convention as the bar chart beside it, breaking out both series rather
+than a blended total.
+
+**Verified the sum-reconciliation requirement**: unfiltered, the 7 bar
+labels' own Activation+Redemption pairs (Mon 911+661, Tue 1037+718, Wed
+1191+754, Thu 1441+916, Fri 1567+1171, Sat 1293+1322, Sun 827+1154) sum to
+₹14,963L against `totalActivation + totalRedemption` = ₹8,267L + ₹6,695L =
+₹14,962L (1L of pure per-bar display-rounding noise, same class already
+documented throughout this file — the underlying exact values reconcile
+by construction, per `weekdayCombined`'s own doc comment, not something
+that needed a separate proof). Confirmed the donut renders exactly 7
+sectors (Playwright, counted `.recharts-sector` nodes) and hovering the
+Monday slice shows "Activation ₹911 L, 1,66,009 cards / Redemption ₹661 L,
+1,68,150 cards" — matching the bar chart's own Monday figures exactly.
+Screenshotted at 1440px (clean 70/30 side-by-side, donut + 2-column
+legend fit inside the 30% column with no overflow) and 390px (donut
+stacks cleanly below the full-width bar chart, legend intact, no
+horizontal overflow). Zero console errors across all 8 pages; clean
+production build (767.31 kB JS, 215.32 kB gzipped — a real ~30 kB jump
+from pulling Recharts' `Pie`/`PieChart` sub-modules into the bundle for
+the first time anywhere in this app, not a regression elsewhere).
+
+## 2026-08-25 — KPI ribbon visual tightening pass (dashboard-wide via
+Kpi.jsx); ATV main/breakdown swap; Date Range panel gains by-region and
+by-source/head mini-breakdowns
+
+Layout/visual-only, no calculation changes anywhere in this entry.
+
+**Tighter gap above the ribbon**: `Layout.jsx`'s `<main>` top padding
+trimmed `py-6` → `pt-3 pb-6` (bottom kept, only the gap between the sticky
+filter bar and the page content below it was too generous). No separate
+top-margin existed on the KPI grid itself to trim — the whole gap was
+`main`'s own padding, confirmed by reading the render tree before editing
+anything.
+
+**Kpi.jsx's proportions tightened, dashboard-wide**: `py-3` → `py-2`, and
+the default `valueClassName` `text-3xl` → `text-2xl`. This is a shared
+component every page's KPI cards render through (Activation.jsx,
+RedemptionBoxOffice.jsx, RedemptionFnb.jsx, CancelRedeem.jsx, Overview.jsx)
+— editing it here was explicit and deliberate, not scope creep: 3 of
+Overview's 5 ribbon cards already had a `valueClassName="text-2xl"`
+override (Uptake, Total Transaction Value, the ATV card from two entries
+ago) while the other 2 defaulted to `text-3xl`, which is exactly the
+"boxy/inconsistent" look the request described. Making `text-2xl` the
+component's own default, then deleting the now-redundant per-card
+overrides on Overview's 3 cards, gets every card on every page onto the
+same proportions by construction instead of a per-page patch — confirmed
+via Playwright bounding-box measurement that all 5 Overview ribbon cards
+now render at an identical 178px height, and spot-checked
+Activation.jsx's own 5-card ribbon and RedemptionBoxOffice.jsx's 3-card
+ribbon by screenshot to confirm neither regressed (no wrapping, no
+newly-cramped labels).
+
+**ATV card: main value and breakdown swapped, sub-line removed**. Was:
+Universal ATV as the big number, a full-sentence caveat as `sub`
+("Company-wide (all payment methods) · FY/Month only — doesn't follow
+Region/Card Type/Source filters"), Gift Card ATV tucked into
+`breakdown`. Now: Gift Card ATV (₹338) is the main `value`, matching every
+other card on the ribbon reading as "the number for this cube, right
+here" — Universal ATV (₹1,020) moves into the `breakdown` slot labeled
+just "Universal" (same slot/visual treatment Uptake/Total Transaction
+Value already use for their own Ticket/F&B splits). The sub-line is gone
+entirely, per the request, rather than shortened and kept — the
+"Universal" label on a card whose big number is now the gift-card-specific
+figure is a small enough signal on its own that the number two rows down
+is a different kind of figure. `universalATV`/`giftCardATV` themselves are
+completely unchanged — this was a display-only swap of which value renders
+where.
+
+**Date Range panel gains by-region and by-source/head mini-breakdowns**.
+Both daily cubes already carried the needed fields (`Region_Clean` on
+both; `ActivationModeFinal` on the activation side, `RedemptionModeFinal`/
+`Head` on the redemption side — confirmed when the Date Range filter was
+first built, no new fields needed). New `dailyActByRegion`/
+`dailyRedByRegion`/`dailyActBySource`/`dailyRedByHead` — plain `groupSum`s
+over the same `dailyActivationRows`/`dailyRedemptionRows` pools the
+panel's headline Kpis already sum, ordered by `REGION_ORDER`/`HEAD_ORDER`
+(Activation Source via the shared `sourceOf()` 3-bucket model, same as
+every other "by Source" chart in this app), zero-value buckets dropped.
+Rendered via a new `MiniBarList` component — a compact proportional-bar
+list matching `RedemptionFnb.jsx`'s existing "Hero Products" visual
+convention (label, a CSS-width bar, the value) rather than a full Recharts
+`BarChart`, since a real chart's axes/grid/margins have no room in a panel
+already this compact. Values use `fmtRupees()`, not `fmtLacs` — a single
+day (or short range) split across 5 regions or 3-4 sources routinely
+produces sub-Lac per-bucket figures that `fmtLacs` would round to "₹0 L."
+Still Overview-only, still reading only the daily cubes — no change to
+what triggers the panel's render gate or which pools the two headline
+Kpis sum.
+
+**Bug found and fixed during verification, not present in the shipped
+code for long**: `MiniBarList`'s bar width was computed from the raw
+signed value (`d[valueField] / max`) — "Redemption by Head"'s Cancellation
+row carries a real negative `RedemptionAmount` (the netting convention
+this app uses everywhere), and a negative CSS `width` is invalid; the
+browser silently drops it and falls back to `auto`, which rendered as a
+near-full-width bar for a row whose actual magnitude was the *smallest* of
+the four. Caught via screenshot (not assumed), fixed by scaling and
+computing width from `Math.abs(d[valueField])` instead — the printed
+figure still shows the original signed value via `formatter`, only the
+bar's width uses magnitude. Re-verified: Cancellation's bar now renders at
+~29% width (₹18.07L against Online's ₹61.71L), matching its real
+proportion.
+
+**Verified against the raw daily cubes, 2024-07-01 to 2024-07-07 range**:
+Activation by Region (NORTH ₹1,22,04,137 + SOUTH ₹12,87,980 + EAST ₹55,500
++ WEST ₹1,02,071 + Online ₹63,132 = ₹1,37,12,820) and Activation by Source
+(Aggregators ₹14,30,020 + Corporate ₹1,14,85,200 + Cinema ₹7,97,600 =
+₹1,37,12,820) both sum to exactly the panel's own "Activation (selected
+range)" total (₹137.13L, matching the earlier Date Range reconciliation
+entry's own figure for this exact range). Redemption by Region (NORTH
+₹48,37,104 + SOUTH ₹1,71,369 + EAST ₹33,887 + WEST ₹1,16,650 + Online
+₹8,827 = ₹51,67,837) and Redemption by Head (Online ₹61,71,158 + Box
+Office ₹3,38,036 + F&B ₹4,65,871 − Cancellation ₹18,07,228 = ₹51,67,837)
+both sum to exactly "Redemption (selected range)" (₹51.68L) — the Head
+breakdown's net-of-cancellation total matching the Region breakdown's
+gross-by-definition total confirms the netting nets to the same place
+either way, not a coincidence given both derive from the same
+`dailyRedemptionRows` pool.
+
+**Verified**: zero console errors across all 8 pages; clean production
+build (770.18 kB JS, 215.75 kB gzipped — no new warnings beyond the
+pre-existing 500KB chunk-size notice). Screenshotted Overview's ribbon at
+1440px (one consistent row, all 5 cards the same height, ATV's swap
+visible) and 390px (5 cards stacked, same proportions, no regressions),
+plus the Date Range panel's new mini-breakdowns at 1440px.
+
+## 2026-08-26 — Weekday card's single combined pie split into two
+(Activation, Redemption), on-slice labels, dedicated 7-hue rainbow
+
+Replaces the prior phase's one combined-total pie on Overview's
+"Activation vs. Redemption by Weekday" card with two separate pies, side
+by side within the same 30% column — one for Activation, one for
+Redemption, both still built from the existing `weekdayTrend` array with
+no new aggregation (the prior phase's `weekdayCombined` reshape is gone,
+no longer needed since neither pie sums the two series together anymore).
+
+**New `WEEKDAY_COLORS`** (`lib/theme.js`) — a dedicated 7-hue rainbow
+(`#e6392f`/`#e8792a`/`#c9a227`/`#3f9142`/`#1fa2a6`/`#3568b3`/`#8b4fc9`,
+roughly 0/30/50/120/180/210/280° around the hue wheel), keyed by weekday
+name so both pies share the identical weekday→color mapping. Deliberately
+not `categoricalColor()`'s existing 5-hue `CATEGORICAL` cycle — that
+constant's own comment already documents it as validated only for
+adjacent-pair contrast (bar charts) or up to 4 all-pairs slots (donuts);
+a 7-slice pie needs all 7 slices distinguishable from each other
+simultaneously, which a 5-hue cycle repeating twice (slot 0 = slot 5,
+slot 1 = slot 6) cannot give — two weekdays would render in the literal
+same color. Given the "make it fast" scope of this request, the 7 hues
+were hand-picked for visible separation rather than run through the
+dataviz skill's full palette validator — worth a follow-up pass if this
+chart's colors ever need to clear a formal contrast/CVD check.
+
+**On-slice labels, no tooltip needed to read them**: new
+`weekdayPieLabel()` — 3-letter weekday abbreviation + rounded % on two
+stacked lines, positioned at 62% of the way from center to edge (not
+`donutLabel`'s outward-radiating placement, which needs clearance neither
+pie has at half of an already-narrow 30% column). Reuses `donutLabel`'s
+own <3% suppression threshold for the "too thin to read" case, though
+weekday shares are naturally too even (~10-20% each) for it to ever fire
+in practice. Both pies switched to flat (`innerRadius` 0, not a donut) to
+maximize in-slice label room at this size — a deliberate, scoped exception
+to this app's usual donut convention, made because the on-slice-label
+requirement needs the room a donut's hole would take away, not an
+oversight. Each pie also gained a real hover tooltip again (removed along
+with the combined pie's color-dot legend) — now trivially just
+`<ChartTooltip countField="ActivationCount"|"RedemptionCardCount"
+countUnit="cards" />`, since each pie is single-series now and no longer
+needs the prior phase's custom `WeekdayPieTooltip` (deleted) to break out
+two series from one slice's payload.
+
+**Verified fast, per the request (no screenshots, no extensive tests)**:
+confirmed both pies render exactly 7 sectors each and read their on-slice
+label text directly via Playwright — Activation: MON 11% / TUE 13% / WED
+14% / THU 17% / FRI 19% / SAT 16% / SUN 10% (sums to 100%); Redemption:
+MON 10% / TUE 11% / WED 11% / THU 14% / FRI 17% / SAT 20% / SUN 17% (sums
+to 100%). Cross-checked both against `weekdayTrend`'s own already-verified
+bar-chart amounts from the immediately preceding phase (e.g. Activation
+Friday ₹1,567L / ₹8,267L total = 18.96% → rounds to the rendered "19%";
+Redemption Saturday ₹1,322L / ₹6,695L = 19.75% → rounds to "20%") — both
+pies are therefore confirmed to sum to this page's own Total Activation /
+Total Redemption (net) by construction (same unreshaped `weekdayTrend`
+array, same guarantee its bar series already carried), not by a fresh
+per-slice recomputation. Zero console errors across all 8 pages; clean
+production build (769.80 kB JS, 215.90 kB gzipped — smaller than the prior
+phase, net code removed: one combined pie + legend + custom tooltip
+replaced by two pies + on-slice labels).
+
+## 2026-08-27 — Card Journey: new "Redemption by Source" chart closes the
+Online gap; region-chart note/6th-bar idea dropped in favor of it
+
+**New chart**: `CardJourney.jsx` gains "Redemption by Source" (Online/
+Cinema) — same `REDEMPTION_MODES` bucketing/`REDEMPTION_SOURCE_COLORS`
+this app's other "by Source" charts already use (structurally the same
+plain 2-bucket bar as `CancelRedeem.jsx`'s "Cancel Redeem by Source," not
+the CardType-stacked version `RedemptionBoxOffice.jsx`'s own "by Source"
+chart uses), built from `cohortRows` — never `redemptionRows` — per this
+page's one standing rule for every Redemption-side chart. Placed next to
+"Redemption Trend" (the row that already held "Activation by Source"
+widened from 2 to 3 columns) rather than "Redemption by Region," since
+that row already had a natural open slot and kept the region-pair row
+untouched.
+
+**This is a genuine reconciliation, not another documented exception**:
+Online (`RedemptionModeFinal='Online'`) + Cinema (`='Physical'`) is a
+complete, non-overlapping partition of every row's `RedemptionModeFinal`
+value on this cube (confirmed directly — no third/unclassified value
+exists), unlike "Redemption by Region," which deliberately excludes the
+Online channel-total bucket by design. Verified against the raw cube
+before writing any chart code: unfiltered, Online ₹4,239.09L + Cinema
+₹2,456.23L = ₹6,695.32L; FY2026-27, Online ₹1,246.57L + Cinema ₹481.21L =
+₹1,727.78L — both sums matching `redeemedAmount` ("Of Those, Redeemed")
+exactly. Confirmed live in the app too: unfiltered card reads Online
+₹4,239L / Cinema ₹2,456L against a funnel total of ₹6,695L; FY2026-27
+reads Online ₹1,247L / Cinema ₹481L against a funnel total of ₹1,728L
+(both rounding-exact).
+
+**Drops a previously-floated idea, per this request**: an earlier pass
+considered adding either an explicit "Online: ₹X L" note or a 6th bar to
+"Redemption by Region" itself, to surface the Online amount that chart's
+own region-only bucket set structurally excludes. That approach is
+dropped in favor of this new standalone chart, which shows the same
+figure more clearly without cluttering a chart whose whole point is pure
+geography. "Redemption by Region"'s own doc comment (this page,
+2026-08-23 entry above) already explains the exclusion and needs no
+further note. The equivalent gap on the activation side — "Activation by
+Region" excluding Aggregators/Corporate — has no matching new chart in
+this pass (already covered by the existing "Activation by Source" card
+right next to it), so its own doc-comment explanation stays as the only
+note for that side; nothing to add or drop there.
+
+**Verified fast, per the request (no screenshots, no extensive tests)**:
+confirmed the new chart exists, reconciles exactly for 2 filter states
+(unfiltered, FY2026-27) by reading its rendered figures directly, and
+zero console errors across all 8 pages. Clean production build (770.91 kB
+JS, 215.97 kB gzipped — a ~1.1 kB increase for the one new chart, no new
+warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-27 — Fix: Gift Card ATV's numerator was RedemptionAmount alone,
+not Total Transaction Value
+
+**The bug**: Overview's ATV card computed Gift Card ATV as
+`totalRedemption / totalRedemptionTxnCount` — Total Redemption *amount*
+divided by transaction count. The card's own name is "Average Transaction
+*Value*," and this dashboard already has a distinct "Total Transaction
+Value" KPI (`totalRedemption + totalUptake`) two cards to the left on the
+same ribbon — the ATV's numerator should have been that combined figure,
+not `RedemptionAmount` alone, so a transaction's Uptake component was
+being silently excluded from its own "average value."
+
+**The fix**: `giftCardATV = totalTransactionValue / totalRedemptionTxnCount`
+— reuses the exact same `totalTransactionValue` the ribbon's own "Total
+Transaction Value" card already sums, so the two figures can't drift
+apart on the numerator. The denominator (`RedemptionCount`, transaction
+count) is unchanged — still the same field `RedemptionBoxOffice.jsx`/
+`RedemptionFnb.jsx`'s own "Avg per Redemption" tiles use.
+
+**Verified against the raw cube before touching the UI**: unfiltered,
+Total Redemption ₹6,695.32L + Total Uptake ₹3,386.87L = Total Transaction
+Value ₹10,082.19L, over 19,80,252 transactions → ₹509.14. Confirmed live:
+the ATV card now reads "₹509" (was "₹338," the old RedemptionAmount-only
+figure). Universal ATV (the "Universal" breakdown figure) is unrelated to
+this fix and unchanged. Zero console errors across all 8 pages; clean
+build, no size change (a formula edit, not new code).
+
+## 2026-08-28 — Card/redemption/cancellation counts made visually invisible
+dashboard-wide, still selectable/copyable (new `.count-ghost` utility)
+
+**What changed**: every persistent "X cards"/"X redemptions"/"X
+cancellations" count annotation in the app — `Kpi.jsx`'s caption line,
+`FlowBox.jsx`'s count line, `MetricComparisonCard.jsx`'s per-bucket/per-FY
+count text, and `CardJourney.jsx`'s two funnel count lines (the one place
+this pattern is hand-rolled rather than going through `Kpi.jsx`) — now
+renders with `opacity: 0` via a new shared `.count-ghost` class
+(`index.css`). The number is still in the DOM, still reserves its normal
+layout space, still selectable and copyable; it simply isn't painted.
+
+**Why opacity, not `display:none`/`visibility:hidden`**: both alternatives
+were explicitly ruled out by the request, for good reason —
+`display:none` removes the element from layout entirely (collapsing its
+reserved space, which would visibly shift the rest of the card), and
+`visibility:hidden` additionally removes it from most browsers' hit-testing/
+selection handling, making it uncopyable — defeating the entire point.
+`opacity:0` does neither: confirmed via Playwright that
+`getComputedStyle(el).display` stays `'block'` and `.visibility` stays
+`'visible'`, the element's own `getBoundingClientRect().height` is
+unchanged (still ~16px, the same as when the text was visible), and a
+real triple-click + Ctrl+C on a ghosted element populates the clipboard
+with the exact original text ("13,37,018 cards") — not just a
+Selection-API check, an actual copy round-trip.
+
+**One class definition, not per-component tuning**: a single `.count-ghost
+{ opacity: 0; }` rule in `index.css`, applied identically everywhere a
+count renders regardless of what's behind it (white KPI cards, the cream
+page background, `Card.jsx`'s bucket tables) — opacity works uniformly
+across all of them without needing a different value/color per background,
+which is exactly why the request asked for opacity over color-matching.
+
+**`Kpi.jsx` needed a real API change, not just a class on the existing
+`sub` prop** — audited every `sub=` call site first (grepped the whole
+`src/` tree) and found the assumption "every `sub` is a count" was false:
+roughly two-thirds of call sites are a pure count (`"13,37,018 cards"`),
+but several combine a count with other meaningful text that must stay
+visible (e.g. Activation.jsx's per-source cards: `"5,89,298 cards · 51.5%
+of total"`), and exactly one (`Activation.jsx`'s "Avg Ticket Size") is
+pure descriptive text with *no* count at all (`"per card"`). Ghosting the
+entire `sub` string as one opaque blob would have wrongly hidden the
+"51.5% of total" figures alongside their counts, and wrongly hidden "per
+card" — neither of which is "a card count" the request asked to hide. Fixed
+by giving `Kpi.jsx` a new, separate `subCount` prop (rendered via
+`.count-ghost`, always on its own line via `block` — see below for why)
+alongside the unchanged `sub` (rendered fully visible, for whatever text
+isn't a count). Every call site that combined the two was split into its
+count half (now `subCount`) and its visible half (now `sub`, with the
+`" · "` glue removed since there's nothing visible on the count's side
+left to glue onto) — `Activation.jsx` (2 call sites), `RedemptionFnb.jsx`
+(2), `RedemptionBoxOffice.jsx` (2), `CancelRedeem.jsx` (1), `Overview.jsx`
+(6, all pure counts, no split needed). The one pure-descriptive `sub="per
+card"` call site was left completely untouched.
+
+**Why the ghosted count always renders on its own line**: an early design
+considered rendering `subCount` inline before/after the visible `sub`
+text, in the same left-to-right order the original combined string had.
+Rejected before implementing — since opacity:0 still reserves the ghosted
+text's own width, an inline layout would leave the *visible* half of the
+line floating with a blank gap in front of it (or a stray dangling
+separator), which is exactly the "broken/uneven spacing" the request
+asked to avoid. Rendering `subCount` as its own `block`-level line instead
+means the visible `sub` text (when present) sits flush at the caption's
+left edge exactly as it always has, and the invisible count occupies a
+line of its own beneath it — confirmed via screenshot on `Activation.jsx`
+(where "51.5%"/"25.1%"/"23.5%" now read cleanly with no leading gap) and
+`Summary.jsx`'s bucket tables (amount cells keep their original two-line
+height with the second line simply blank-looking, not collapsed).
+
+**Deliberately NOT touched**: `ChartTooltip.jsx`'s own count line (the "N
+cards" text inside hover tooltips) — tooltips are something a viewer
+actively summons by hovering specifically to see more detail, so hiding a
+number inside one would work against the reason someone opened it in the
+first place. This is a scope decision, not an oversight; flagging it in
+case the intent was actually broader than the three named components +
+"any other 'X cards' text" (which was read as "any other *persistent*
+inline count," matching the three worked examples, not transient hover
+content).
+
+**Verified**: 19 `.count-ghost` elements found on Overview alone (all with
+`opacity: 0`, non-zero reserved height); one hand-checked via a real
+triple-click + `Ctrl+C` → clipboard read, returning the exact original
+text. Screenshotted the KPI ribbon, `Activation.jsx`'s split sub/subCount
+cards, `CardJourney.jsx`'s funnel, and `Summary.jsx`'s
+`MetricComparisonCard` tables — no broken/uneven spacing, no floating
+separators, no collapsed rows anywhere checked. Zero console errors across
+all 8 pages; clean production build (771.18 kB JS, 216.00 kB gzipped —
+negligible size change, this is almost entirely a class-name/prop-split
+change, not new logic).
+
+## 2026-08-29 — Date Range panel: control sizing + inline clear, Online-row
+and Cancellation-row bugs fixed, section headings bolded
+
+Four fixes to the existing Date Range summary panel on Overview — kept as
+its own panel, no restructuring.
+
+**1. Control sizing + inline clear**: `DateRangeFilter.jsx`'s button was
+built to match `Select.jsx`'s *documented* control height (`minHeight:
+24`, per `Select.jsx`'s own `styles.control`) — but live measurement
+(Playwright `getBoundingClientRect()`, not re-reading the JS) showed every
+actual `.rs__control` renders at **38px**, because a global
+`.rs__control { min-height: 38px !important; }` rule in `index.css`
+(present since before the 2026-08-12 "compacted filter bar" pass) wins
+over Select.jsx's own inline override. That's a real, pre-existing
+discrepancy between this file's own claims and live behavior, flagged
+here rather than fixed — reconciling it would mean changing every Select
+in the bar, a materially bigger change than this request. Matched
+`DateRangeFilter.jsx`'s button to the *actual* 38px instead. Added a new
+inline "×" clear button, absolutely positioned inside the control's own
+right edge (a second, nested `relative` wrapper scoped to just the button
+— the existing popover a few lines down still positions off the outer
+wrapper, unchanged), rendered only when `hasSelection` is true,
+`stopPropagation`-guarded so clicking it resets the range
+(`onChange({start:null,end:null})`) without also toggling the popover open
+or touching any other filter.
+
+**2. "Online" row removed from "Activation by Region" / "Redemption by
+Region"**: both computations previously grouped *every* row (every
+channel) by raw `Region_Clean` — the same class of bug Overview's own main
+"Region Contribution" chart had before its 2026-08-05 fix. Confirmed
+directly against the raw daily cubes before touching code: activation's
+Aggregator/Corporate/Online channels aren't real geography (Corporate/
+Online are ~100% `NORTH`-tagged; Aggregator sometimes carries the
+`'NO_SITE'` sentinel), and mixing them in both inflated the real regions'
+bars *and*, via the shared `regionLabel()` `NO_SITE`→"Online" rename,
+surfaced a visible "Online" row with nothing to do with the actual Online
+redemption channel. Fixed the same way the main charts already are:
+restrict to `ActivationModeFinal === 'Physical'` / `RedemptionModeFinal
+=== 'Physical'` before grouping (matching `lib/regionBuckets.js`'s own
+predicates). Activation's Physical rows never carry `'NO_SITE'` on this
+cube (confirmed directly, same fact already on record for the main
+activation cube), so the fix alone removes the row there. Redemption's
+Physical rows still do carry a real `'NO_SITE'` value on this
+not-yet-migrated daily cube (unlike the main `redemptionCube.json`, which
+replaced it with the literal string `"Director's Cut"` in the 2026-08-19
+refresh) — explicitly excluded rather than relabeled, since the request
+asked for the row gone, not turned into a new "Director's Cut" bucket
+this compact panel never had before.
+
+**3. "Cancellation" row removed from "Redemption by Head"**: was a plain
+`groupSum` including `'Cancellation'` as its own visible 4th bar — per
+this app's standing rule (Cancellation is only ever its own visible
+category on the dedicated Cancel Redeem page), it's now netted
+proportionally into Online/Box Office/F&B via the existing
+`netBucketsProportionally()` utility — the exact same one Card Journey's
+own "Redemption by Head" chart already uses for the identical fix, not a
+new function.
+
+**4. Section headings bolded**: "Activation by Region," "Redemption by
+Region," "Activation by Source," and "Redemption by Head" —
+`font-semibold` → `font-bold` on all four, nothing else in the panel
+touched.
+
+**Verified against the raw daily cubes first, 2024-07-01 to 2024-07-07**:
+Activation by Region — NORTH ₹5.30L, SOUTH ₹1.28L, EAST ₹0.51L, WEST
+₹0.89L, summing to the Physical-only total (₹7.98L) exactly, both by hand
+and live in the app (₹5,30,100 / ₹1,27,500 / ₹51,100 / ₹88,900). Redemption
+by Region — NORTH ₹4.69L, SOUTH ₹1.71L, EAST ₹0.34L, WEST ₹1.17L
+(₹0.09L of excluded `NO_SITE` confirmed separately, not silently lost —
+it's out of scope for this panel, not unaccounted for). Redemption by
+Head, netted — Online ₹45.72L, Box Office ₹2.50L, F&B ₹3.45L, summing to
+the same ₹51.68L the ungrossed total (all rows including Cancellation)
+sums to — confirmed both by hand-computation and live in the app
+(₹45,72,221 / ₹2,50,451 / ₹3,45,165). Confirmed live: control height
+38px (matching a live `Select.jsx` control's own 38px exactly); clicking
+the new "×" resets the summary to "All"; all 4 heading elements read
+`font-weight: 700` via `getComputedStyle`; zero console errors across all
+8 pages; clean production build (771.60 kB JS, 216.14 kB gzipped, no new
+warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-19 — Full-dashboard audit against 8 standing rules
+
+Requested as a from-scratch code audit — read the actual current source on
+every page, not the historical entries above (several of which turned out
+to describe behavior that had since drifted) — against 8 rules this app
+already treats as standing, dashboard-wide conventions: (1) no Online/
+backend-logging rows in any "by Region" chart; (2) Cancellation visible as
+its own category only on /cancel-redeem, netted proportionally everywhere
+else; (3) Aggregator never appears as a redemption channel; (4) every
+Card Journey redemption-side chart uses `cohortRows`, never `redemptionRows`;
+(5) Universal ATV responds only to FY/Month; (6) no MoM/QoQ/YoY delta badge
+on any ratio/derived KPI; (7) daily-cube panels gate off when CardType/
+Denomination/Activation Source/Redemption Source is active; (8) paired
+Activation/Redemption charts reconcile to their own page's headline KPI.
+Confirmed via `App.jsx` that exactly 8 pages exist (Overview, Activation,
+Redemption · Box Office, Redemption · F&B, Trends, Cancel Redeem, Card
+Journey, Summary) — no separate "Card Journey · By Source" or "Daily
+Trends" page was ever built; "by Source" is one chart within
+`CardJourney.jsx`, and the daily cubes' only consumer is Overview's Date
+Range panel (already fixed in the immediately preceding session, before
+this audit — see that work's own screenshots/verification, not repeated
+here).
+
+**Violation #1 (Rule 1) — `Summary.jsx`'s "Activation by Region"/
+"Redemption by Region" cards let the Online/Aggregators/Corporate channel-
+total buckets ride along as their own rows.** `lib/regionBuckets.js`'s
+`ACTIVATION_REGION_BUCKETS`/`REDEMPTION_REGION_BUCKETS` each append 3 non-
+geographic channel-total buckets after the real regions (Aggregators/
+Corporate/Online on the activation side; Director's Cut/Online on the
+redemption side — "Online" here being the 100%-NORTH-tagged backend-logging
+channel, not a real region). `Overview.jsx`/`CardJourney.jsx` already slice
+to just the first 6 (region-only) entries before charting — `Summary.jsx`
+was passing the unsliced arrays straight into its `MetricComparisonCard`
+`buckets` prop, so its two region cards showed an explicit "Online" row
+sitting next to NORTH/SOUTH/EAST/WEST/CENTRAL. Fixed by adding the same
+local `.slice(0, 6)` constants (`ACTIVATION_REGION_ONLY_BUCKETS`/
+`REDEMPTION_REGION_ONLY_BUCKETS`) `Overview.jsx`/`CardJourney.jsx` already
+define, and pointing both cards at them — no information lost, since the
+channel totals these buckets used to smuggle in are already covered by
+this same page's own "Activation by Source"/"Redemption by Source" cards.
+Verified live: both cards' bucket tables now read exactly NORTH/SOUTH/EAST/
+WEST/CENTRAL(/Director's Cut)/Other — no "Online"/"Aggregators"/"Corporate"
+row anywhere; the residual channel-total amount now lands in
+`MetricComparisonCard`'s own generic synthetic "Other" bucket (an existing,
+unrelated mechanism from the 2026-08-14 audit, not a new one), which is a
+correct, differently-labeled catch-all, not a Rule 1 violation.
+
+**Violation #2 (Rule 2) — `Overview.jsx`'s "Redemption by Head" chart
+silently dropped Cancellation instead of netting it in.** Its own
+`REDEMPTION_HEAD_BUCKETS` was `HEAD_ORDER.filter(head => head !== 'Cancellation')`
+with a comment explicitly defending this as "gross, intentional, not a
+bug" — exactly the "silently dropped" failure mode Rule 2 forbids (this
+app's own standing rule, already correctly implemented elsewhere: net
+proportionally into Online/Box Office/F&B, never a raw visible line item
+outside /cancel-redeem, never dropped either). Fixed by switching
+`redemptionByHead` to `netBucketsProportionally(redemptionRows,
+REAL_HEAD_BUCKETS, isCancellationRow, 'RedemptionAmount',
+'UniqueCardCount')` — the exact same shared utility this same file's own
+`dailyRedByHead` panel and `CardJourney.jsx`'s own "Redemption by Head"
+chart already use for this identical bucket set, not a new pattern. The
+chart's MoM delta label (`regionDeltaLabel`, fed by a `mom` field
+`bucketRegionData` used to compute per-bucket) had to drop to a plain
+`AmountLabel` — `netBucketsProportionally` has no month-over-month variant
+anywhere in this codebase, and CardJourney's own netted "Redemption by
+Head" chart already accepts that same simpler labeling for the same
+reason, so this isn't a new gap, just matching the one precedent that
+exists. Removed the now-fully-dead `HEAD_ORDER` import. Verified live: the
+3 bars now read Online ₹4,342L / Box Office ₹919L / F&B ₹1,435L, summing
+to ₹6,696L — matching "Total Redemption (net)" (₹6,695L) to within
+rounding, where before the fix this chart deliberately summed to the
+*gross* ₹8,157.90L instead. This also resolves part of Rule 8's own
+reconciliation check for this exact pair, which the old "intentional gross"
+comment had explicitly given up on.
+
+**Rules 3, 4, 5, 6, 7 — audited, zero violations found, nothing changed:**
+- **Rule 3** (Aggregator never a redemption channel): grepped every
+  "Aggregator" occurrence in `src/` — all are on the activation side
+  (`ActivationModeFinal`/`sourceOf`/`lib/activationSource.js`); none appear
+  in `lib/redemptionMode.js` (`REDEMPTION_MODES` = Online/Cinema only, by
+  design, with its own doc comment saying so), any Redemption Source
+  option list, or any "Redemption by Source" chart on Summary/Card
+  Journey/Cancel Redeem/Box Office. Confirmed correct, untouched.
+- **Rule 4** (Card Journey redemption charts use `cohortRows`): read
+  `CardJourney.jsx`'s `useFilters()` destructure directly — it doesn't even
+  pull `redemptionRows` into scope at all, so no chart there could
+  accidentally reach for it. Individually confirmed `byHead`,
+  `redemptionByRegion`, `redemptionBySource`, `weekdayTrend`'s Redemption
+  series, and `cohortWeekSlot` all read from `cohortRows`; the spillover
+  chart's Redemption series legitimately reads `cohortRowsByActivation`
+  (the documented, correct exception — a different question, not a
+  violation). Confirmed correct, untouched.
+- **Rule 5** (Universal ATV is FY/Month-only): `filterUniversal()`
+  (`FilterContext.jsx`) literally only checks `filters.fy`/`filters.month`
+  — `Universal.json` has no Region/CardType/Source/Denom field for any
+  other filter to narrow, and `universalRows` has exactly one consumer
+  (Overview's ATV card's "Universal" breakdown value). Confirmed correct,
+  untouched.
+- **Rule 6** (no delta badges on ratio KPIs): checked every `<Kpi>` call
+  site for Average Transaction Value (ATV), Avg Ticket Size
+  (`Activation.jsx`), and Avg per Redemption (both Redemption pages) —
+  none pass a `deltas` prop. Card Journey's spillover same-month % is a
+  chart bar label (`amountWithPctLabel`), not a `<Kpi>` — delta badges
+  aren't a concept that applies to chart labels at all. Confirmed correct,
+  untouched.
+- **Rule 7** (daily-cube panels gate on Card Type/Denomination/Activation
+  Source/Redemption Source): re-read `dateRangeAvailable()`
+  (`FilterContext.jsx`) and its two consumers — `FilterBar.jsx`'s
+  `DateRangeFilter` `disabled`/`disabledReason` wiring, and Overview's own
+  `dateRangeActive` render-gate on the whole Date Range panel — both still
+  correctly gate on exactly those 4 filters. No other daily-cube-sourced
+  panel exists anywhere else in the app. Confirmed correct, untouched.
+
+**Rule 8 (Activation X / Redemption X reconciliation) — spot-checked live,
+via Playwright against the running dev server, after the two fixes above:**
+Overview's "Redemption by Head" (post-fix) now sums to "Total Redemption
+(net)" as shown above. Summary's "Activation by Region"/"Redemption by
+Region" cards (post-fix) no longer carry the channel-total rows that were
+never part of their own reconciliation story in the first place. Card
+Journey's "Of Those, Redeemed" (₹6,695L / 12,43,826 cards, 81.0% rate) and
+its own "Redemption by Head" chart (Online/Box Office/F&B bars from the
+same `netBucketsProportionally(cohortRows, ...)` call) reconcile by
+construction, unaffected by this audit's fixes. Zero console errors across
+Overview/Summary/Card Journey during verification.
+
+**Build**: clean production build after both fixes, 771.55 kB JS / 216.13 kB
+gzipped (only the pre-existing >500kB chunk-size advisory, no new warnings
+or errors).
+
+## 2026-08-20 — Fix: Pre-existing cards leaking into Card Journey's cohort
+pools whenever FY/Month is "All"
+
+**Root cause**: `cohortCube.json` has 1,959 rows whose `ActivationModeFinal`
+(and matching `ActivationYearMonth`) is the sentinel string `'Pre-existing
+(activated before Apr 2024)'` — cards activated before this dataset's Apr
+2024 start, with no real activation month to report. `passesCohortCommon()`
+(`lib/FilterContext.jsx`, shared by both `filterCohort` and
+`filterCohortByActivation`) used to rely on this sentinel simply never
+matching a *specific* FY/Month/Activation Source selection to keep these
+rows out — true as far as it went, but `matches([], x)` (an unrestricted,
+"All" filter) is unconditionally `true` regardless of `x`, so with FY,
+Month, and Activation Source all left at "All" — this page's own default
+state — every one of those checks was a no-op and the 1,959 rows passed
+straight through into both `cohortRows` ("Of Those, Redeemed") and
+`cohortRowsByActivation` (the spillover chart's Redemption series). These
+cards were never "activated in this period" under any FY/Month selection,
+so excluding them can't be conditional on some other filter happening to
+catch them incidentally.
+
+**The fix**: a new hard, unconditional check —
+`if (row.ActivationModeFinal === PRE_EXISTING_ACTIVATION) return false` —
+as the very first line of `passesCohortCommon()`, independent of any
+filter's state. Since both `filterCohort` and `filterCohortByActivation`
+call this same function, the fix covers every pool built from
+`cohortCube.json` on this page in one place, not per-consumer.
+
+**Verified against the raw cube by hand first** (Node script comparing
+"before" = no exclusion, the exact bug reproduction, vs. "after" =
+excluding the 1,959 sentinel rows), **then live in the app**, both with
+every filter left at "All" (the page's own default state where the bug
+was live):
+
+| Figure | Before (bug) | After (fixed) |
+|---|---|---|
+| Of Those, Redeemed | ₹6,695.32L / 12,43,826 cards / 81.0% rate | ₹6,406.97L / 11,82,047 cards / 77.5% rate |
+| Spillover — Apr 24 Redemption bar | ₹97.68L | ₹51.76L |
+| Spillover — Aug 24 Redemption bar | ₹59.48L | ₹46.56L |
+| Spillover — Dec 24 Redemption bar | ₹265.93L | ₹222.92L |
+
+Apr 24's before/after matches the ₹98L → ₹52L target exactly. Checked
+every month for residual bleed, not just Apr 24: the gap is largest in the
+first 9-10 months of the dataset (Apr 24 ₹45.91L, May 24 ₹34.14L, Jun 24
+₹33.15L, Jul 24 ₹29.49L, Aug 24 ₹12.92L, Sep 24 ₹16.57L, Oct 24 ₹20.02L,
+Nov 24 ₹21.13L, **Dec 24 ₹43.01L** — the single largest gap of any month,
+Jan 25 ₹5.33L) and tapers to near-zero by mid-2025 (₹0.01-0.74L) — exactly
+the shape you'd expect from a pre-existing cohort that's mostly redeemed
+out within its first several months rather than concentrated on one month.
+Confirmed live via Playwright: the app's own rendered "Of Those, Redeemed"
+KPI (₹6,407L / 11,82,047 cards / 77.5%) and every spillover bar checked
+(Apr 24 ₹52L, Aug 24 ₹47L, Dec 24 ₹223L) match the hand-computed "after"
+figures exactly, and zero console errors. Clean production build (771.63
+kB JS, 216.16 kB gzipped — negligible size change, a filter-logic fix, not
+new code).
+
+**Note for future entries in this file**: every "Of Those, Redeemed"/Card
+Journey figure recorded in earlier entries above (2026-08-13 through
+2026-08-19) was captured with the app in its default "All" FY/Month state
+and is therefore the *inflated*, pre-fix number — those entries are left
+as-is for history, but any future reconciliation check against this page
+should use the corrected ₹6,406.97L baseline, not the older ₹6,695.32L
+figure repeated throughout this file's earlier Card Journey work.
+
+## 2026-08-24 — Card Journey spillover chart: diverging → grouped, and the
+real label-collision fix that required
+
+Reversed the 2026-08-16 diverging (Activation up/Redemption down) layout
+back to a normal side-by-side grouped bar chart, both series positive,
+both rising from one zero baseline — per the request, this replaced the
+up/down structure entirely, not just the labels touched in the
+immediately preceding same-day pass. `RedemptionDown` (the negated field)
+and `ReferenceLine y={0}` are both gone; `Redemption` (always the plain
+positive amount) is the bar's own dataKey again. Both bars' `LabelList`
+moved off `DivergingAmountLabel` (still defined in `ChartLabels.jsx`,
+left in place per this file's "leave the dead export" precedent — it has
+no remaining call site anywhere in `src/`) onto `amountWithPctLabel`
+(Activation, unchanged from the prior pass) and `AmountLabel`
+(Redemption). Both labels render above their own bar again — the
+below-baseline placement from the immediately preceding pass was only
+ever needed to relieve the diverging chart's cramped stacked-above-bar
+layout, which no longer exists once nothing goes negative.
+
+**Verification found a real, severe collision the request asked to check
+for** — not a false alarm. Screenshotting both zoom levels (12-month/
+single-FY, 28-month/all-FY) and reading actual SVG text bounding boxes
+(not just eyeballing) showed the 12-month zoom was clean, but the
+28-month zoom had genuine, widespread text collisions: the % annotation
+overlapping the neighboring Redemption bar's amount for essentially every
+one of the 28 months, and — once that was fixed — the two series' own
+amount labels overlapping each other and bleeding into the *next*
+category's labels too (confirmed by cropping specific regions at 2x
+resolution and reading the rendered text directly, e.g. "₹297 L" and
+"₹283 L" from adjacent categories visibly fused together).
+
+**Root cause, confirmed by measuring actual rendered bar geometry, not
+assumed**: at 28 categories, each category's own slot is only ~44px wide
+(two ~15px bars plus a small gap) — every bar in the chart renders at
+that same width, since Recharts sizes bars off total-categories-÷-plot-
+width, not each bar's own value. At 12 categories, each slot is ~77px
+(bars ~28px). A "₹XXX L"-style label is comfortably wider than the ~22px
+half-slot two adjacent bars get at 28 categories, so no amount of
+`barGap`/`barCategoryGap` tuning could fix it — both were tried
+empirically (screenshotted and re-measured after each) and only moved the
+overlap by single-digit pixels in either direction, confirming the
+bottleneck is genuinely text width vs. available category width, not bar
+spacing.
+
+**The fix**: extended this app's own established "suppress a label once
+data density makes it illegible, rely on the tooltip instead" convention
+(already used for sub-3%-share donut segments and 24+-point line charts)
+to this chart's on-bar text. New `ChartLabels.jsx#MIN_BAR_WIDTH_FOR_ON_BAR_LABEL`
+(20px, chosen because it sits between the two measured widths — ~15px at
+28 categories, ~28px at 12) gates both bars' `LabelList` content: below
+it, `amountWithPctLabel` returns `null` entirely (no amount, no %); a new
+inline wrapper on the Redemption bar does the same for `AmountLabel`.
+Because bar width is uniform across every bar in the chart at a given
+zoom (per the root-cause finding above), this behaves as a clean
+all-or-nothing switch per zoom level, not a per-category flicker — the
+12-month zoom is completely unaffected (bars there are ~28px, comfortably
+above the threshold) and the 28-month zoom falls back to tooltip-only,
+which was already wired up and unaffected by any of this (`ChartTooltip`
+still shows the exact ₹ amount and card count on hover, at every zoom
+level).
+
+**Verified**: re-screenshotted and re-measured both zoom levels after the
+fix — 0 collisions across every text-pair check (pct-vs-month-tick,
+pct-vs-amount, amount-vs-amount) at both 12 and 28 months, down from 35
+pct-vs-amount and 35 amount-vs-amount collisions at 28 months before the
+width-gate. Visually confirmed via screenshot: the 28-month view now
+reads as clean gold/teal bars with no on-bar text at all (tooltip
+available on hover); the 12-month view is pixel-identical to the prior
+pass's already-verified layout (both amount lines plus the % annotation,
+all above their own bars). Zero console errors across both zoom levels;
+clean production build (771.43 kB JS, 216.14 kB gzipped — negligible
+change, label-logic only).
+
+## 2026-08-24 — Fix: spillover chart's % label gate was keyed on total
+category count, not on how many months actually have an Activation bar
+
+The immediately preceding pass's width-based density gate
+(`MIN_BAR_WIDTH_FOR_ON_BAR_LABEL`) suppressed on-bar text below a
+rendered-bar-width threshold — correct for the Redemption bar (which runs
+across every category, so its own collision risk really does track total
+category count), but wrong for the Activation bar's amount+%
+(`amountWithPctLabel`): rendered width is driven by the chart's *total*
+category count, which is dominated by however long the Redemption-only
+spillover tail happens to run, not by how many of those categories
+actually carry an Activation bar. An early FY's tail runs almost to the
+end of the dataset (same as "All" does), so total categories — and
+therefore width — stayed near the dense "All" case's own value even for a
+12-activation-month selection, and the gate almost never opened outside
+the one late-FY scenario (FY2025-26, whose short tail happened to keep
+total categories low) that got screenshotted in the prior pass.
+
+**The fix**: `amountWithPctLabel(data, pctField, activeCount)` gained a
+third parameter — the count of Activation-bearing months in the current
+`spillover` array, computed by `CardJourney.jsx`'s own new
+`activationMonthCount` (`spillover.filter(m => m.Activation > 0).length`)
+— and gates on that instead of `width`. New
+`MAX_ACTIVE_MONTHS_FOR_STACKED_LABEL = 20` sits between the two real
+values this dataset produces (12 for a single FY, 28 for "All"). The
+Redemption bar's own gate is untouched (`MIN_BAR_WIDTH_FOR_ON_BAR_LABEL`,
+still width-based) — reasoned through rather than assumed safe: since
+Activation bars sit a full category-width apart from each other
+regardless of how many Activation-less spillover-tail months follow them,
+the main collision risk the width-gate exists to prevent (a bar's label
+overlapping its *neighbor's*) is already eliminated once the Redemption
+bar beside it stays suppressed at genuinely dense widths — which it still
+does, unchanged.
+
+**Verified live at 3 scenarios, not just by reading the gate condition**:
+"All" (28 total months, 28 activation months) — 0 % labels, 0 amount
+labels, 0 collisions, correctly still suppressed (genuinely dense).
+FY2025-26 (16 total months, 12 activation months, short tail — the
+scenario the prior pass happened to test) — 12 % labels (one per
+activation month), 28 amount labels, 0 collisions, unchanged from before.
+**FY2024-25 (28 total months, but only 12 activation months, long tail —
+the broken edge case this fix targets)** — 12 % labels now render
+correctly (previously would have been suppressed, since total categories
+was 28 same as "All"), 12 amount labels (Activation's own, rendering
+correctly; Redemption's 16 tail-month amounts stay suppressed by its own
+unchanged width gate, as expected at that density), 0 collisions.
+Screenshotted all 3; the FY2024-25 case visually shows every one of the
+12 real activation months (Apr 24–Mar 25) with a clean amount+% label
+above its gold bar, while the long Redemption-only tail (Apr 25–Jul 26)
+correctly shows no on-bar text. Zero console errors across all 3
+scenarios; clean production build (771.50 kB JS, 216.14 kB gzipped —
+negligible change, label-gating logic only).
+
+## 2026-08-25 — Region filter: dropped "Online"/"Director's Cut" from the
+pickable list; both were real values, not a code-level leak
+
+**Root cause, checked directly rather than assumed**: the request's own
+hypothesis was a leftover `ActivationModeFinal`/`RedemptionModeFinal`
+reference or a hardcoded list surviving from the old unified Mode filter.
+Neither exists — `options.regions`'s computation
+(`FilterContext.jsx`) has only ever mapped `r.Region_Clean` off
+`activationCube`/`redemptionCube`, confirmed by reading the line itself
+and by inspecting the live dropdown's actual rendered option set (7
+entries, no duplicate). "Online" wasn't a separate leaked value at all —
+it's the display label `regionLabel()` (`lib/constants.js`) has applied
+to the real `Region_Clean` value `'NO_SITE'` everywhere in the UI,
+*including this exact dropdown*, since the 2026-08-03 "Display-only
+rename" entry above — the code's own comment there already says so
+("renders as 'Online' everywhere in the UI... the Region filter dropdown,
+etc."). So the request's literal premise ("'Online' does not exist as a
+Region_Clean value") was correct on its face, but the mechanism wasn't a
+bug — `NO_SITE` (which the request itself lists as a real value) fully
+and correctly accounts for it, by design, for over a dozen prior entries
+in this file.
+
+**What actually changed**: since the request's real goal — no
+non-geographic pseudo-region option in the Region filter's own pickable
+list — holds regardless of that mechanism, and the request's own Part 2
+already established the exact template for it (exclude a real-but-not-a-
+true-region value from the filter's option list, keep it flowing through
+unrestricted), `NO_SITE` got the identical treatment as `"Director's
+Cut"`: both filtered out of `options.regions` before the `.sort()`, using
+the same "real value, not offered as a selectable option, but still
+passes through untouched when the filter is left unrestricted"
+convention already established for Denom's/CardType's own `'N/A'`/
+`'Unknown (pre-existing)'` values. `regionLabel()`/`REGION_LABELS` itself
+is untouched — it's still there for the (many) other UI surfaces that
+render a real `NO_SITE` row's label, just no longer fed a `NO_SITE` entry
+by *this* dropdown specifically. Every chart's own "by Region" bucketing
+(`lib/regionBuckets.js`'s `ACTIVATION_REGION_BUCKETS`/
+`REDEMPTION_REGION_BUCKETS`) reads `Region_Clean` directly and was never
+wired through `options.regions` at all, so nothing chart-side needed
+touching.
+
+**Verified live**: Region dropdown now shows exactly `CENTRAL, EAST,
+NORTH, SOUTH, WEST` — 5 options, no "Online", no "Director's Cut".
+Baseline Revenue (all filters cleared, `filters.region` still `[]` by
+default) reads ₹8,267L / 13,37,018 cards, byte-identical to every prior
+baseline in this file — confirms `NO_SITE`/`"Director's Cut"` rows still
+flow through untouched when the filter is unrestricted, exactly as the
+request specified. Overview's "Redemption by Region" chart still renders
+all 6 of its own bars including `"Director's Cut"` at ₹11L, unchanged —
+confirms the chart-side bucketing is completely independent of this
+filter's option list, as expected since it never reads it. Zero console
+errors; clean production build (771.55 kB JS, 216.16 kB gzipped — no
+material size change, a filter-option-list change only).
+
+## 2026-08-25 — Kpi.jsx: MoM/QoQ/YoY badges always stack one per line
+
+The deltas container was `flex flex-wrap` — wrapped based on whichever
+width happened to be left over on each card, so cards with a `breakdown`
+side panel eating into their width (Uptake, Total Transaction Value) sat
+at one badge per line while wider breakdown-less cards (Activation
+Amount, Total Redemption (net)) fit two per line. Purely a width
+accident, not an intentional distinction — nothing about MoM/QoQ/YoY
+badges is meant to read differently on one card versus another. Changed
+to `flex flex-col` — one shared class in `Kpi.jsx`, so every page that
+renders a `<Kpi deltas={...}>` (Overview, Activation, both Redemption
+pages, Cancel Redeem, Summary's `MetricComparisonCard`) gets the same
+consistent stacked layout, not just Overview.
+
+**Verified live**: screenshotted Overview's full ribbon — all 4
+delta-bearing cards (Activation Amount, Total Redemption (net),
+Transaction Value, Uptake) now render 3 full-width badge pills stacked
+top-to-bottom (MoM, then QoQ, then YoY), matching what Transaction
+Value/Uptake already happened to look like. Confirmed via bounding-box
+measurement, not just eyeballing: all 3 badges on every one of the 4
+cards share the identical `x` position and a consistent 23px vertical
+step, i.e. all 4 cards now lay out identically regardless of their own
+width. ATV (no `deltas` prop) is unaffected. Zero console errors; clean
+production build (771.53 kB JS, 216.15 kB gzipped — a class-name change
+only).
+
+## 2026-08-25 — Ghost counts: opacity:0 → color:transparent, so selecting
+one now actually reveals it highlighted
+
+Correction to the 2026-08-28 "invisible count" work above — the original
+ask was always "invisible by default, but selectable and revealable on
+demand," not "invisible, full stop." `opacity:0` satisfied the "still
+selectable/copyable" half (confirmed at the time via a real copy
+round-trip) but silently failed the "reveal it by selecting" half:
+`opacity` applies to an element's entire rendered output as one
+compositing group, and that group includes the element's own
+`::selection` styling — so highlighting a `opacity:0` span washed the
+highlight out to nothing right along with the text, meaning a reader who
+actually tried to select one of these counts to peek at it saw no visual
+feedback at all, not even a highlighted band.
+
+**Fix**: `.count-ghost` switched to `color: transparent` (fully
+transparent ink, no compositing side effect) plus an explicit
+`.count-ghost::selection`/`::-moz-selection` override — `color: #1b2430`
+(the app's own body ink), `background: #f4e6c8` (the existing `gold-light`
+token, already used elsewhere for emphasis, e.g. Card Journey's rate box)
+— so a selected count now repaints in a real, readable color against a
+highlight chip, exactly like selecting any other text on the page, while
+staying fully invisible before that. Works uniformly across every
+background this text sits on (white KPI cards, the cream page background,
+navy tooltips) for the same reason `opacity:0` did — transparent ink
+doesn't need to match whatever's behind it.
+
+**Verified live**: a `.count-ghost` element's computed `color` is
+`rgba(0,0,0,0)` (fully invisible) before selection; screenshotted a KPI
+card's count line both unselected (blank) and with the text
+programmatically selected (`Range`/`Selection`, not just a CSS check) —
+the second screenshot shows "13,37,018 cards" clearly readable in dark
+text on a gold highlight band. `window.getSelection().toString()` still
+returns the exact original text, confirming copy still works, not just
+the visual highlight. Zero console errors; clean production build
+(771.53 kB JS, 216.15 kB gzipped / CSS 17.46 kB, 4.36 kB gzipped — a pure
+CSS change).
+
+## 2026-08-25 — Full redefinition of MoM/QoQ/YoY: every badge now anchors
+to the latest selected month, windows derived by calendar structure
+
+Replaces the prior `computeComparisons()` logic entirely, not a tweak.
+**Old rule**: "current" was the literal sum of whichever months were
+ticked in the Month filter; MoM compared that against the same-length
+window immediately preceding the *earliest* ticked month; QoQ compared
+the calendar quarter containing the anchor against the *immediately
+prior* quarter (quarter-over-quarter, adjacent quarters); YoY compared
+the ticked months against the same months one year back. Three
+inconsistent, filter-shape-dependent definitions.
+
+**New rule**: every badge is anchored to the single latest month in the
+current selection (last of `comparisonMonths` after sorting — unchanged,
+still resolved by `FilterContext.jsx#comparisonMonths` to either the
+explicit Month selection or the dataset's own latest month under the
+rest of the active filters). Region/CardType/Source/etc. only ever
+affect which rows get summed *within* a month; they never change which
+month is the anchor or which months make up a window — every window is
+now derived purely from calendar structure around that one anchor:
+- **MoM**: anchor month alone vs. the same calendar month one year
+  earlier.
+- **QoQ**: [anchor's calendar-quarter start .. anchor] vs. the identical
+  span one year earlier. Quarter starts are the fixed Jan/Apr/Jul/Oct
+  boundaries (same groupings as the FY quarters Apr-Jun/Jul-Sep/Oct-Dec/
+  Jan-Mar). An anchor that's already its own quarter's first month (e.g.
+  July) yields the same 1-month window as MoM — confirmed this is
+  correct, not a bug, in the verification below.
+- **YoY**: [anchor's FY start (April) .. anchor] vs. the identical span
+  one year earlier.
+
+All three windows are computable from the anchor alone by construction,
+so all three badges are always attempted — there's no "single month
+selected → MoM only" case; a lone selected month still gets a real (if
+short) QoQ/YoY window.
+
+**Implementation**: `lib/comparisons.js`'s private `computeComparisons
+FromSummer()` (the engine every exported comparison function ultimately
+calls) was rewritten around 3 new private window-builders —
+`quarterToDateMonths(anchor)`, `fyToDateMonths(anchor)`,
+`oneYearEarlier(months)` — replacing the old `quarterMonths`/
+`previousQuarterMonths`/`precedingPeriod`/`yoyPeriod` helpers outright
+(deleted, not left as dead exports — they encoded the old, now-wrong
+semantics, and nothing outside this file ever imported them). New
+exported `computeRatioComparisons(rows, numeratorField, denominatorField,
+selectedMonths)` reuses the same engine for a ratio KPI (current/previous
+value = numerator-sum ÷ denominator-sum per window, instead of a single
+field's sum) — added specifically for the new Gift Card ATV deltas below.
+Every other exported function in this file
+(`computeComparisons`/`computeBucketComparisons`/
+`computeNettedBucketComparisons`) is a thin wrapper around the same
+engine, so the redefinition applies everywhere without touching those
+functions' own bodies. `computeFYSeries`/`computeBucketFYSeries`/
+`computeNettedBucketFYSeries` are a separate, independent concept (a flat
+per-FY total vs. the previous FY, or a partial FY's YTD vs. the same
+months a year back — Summary's "By Year" blocks) with no anchor-month
+logic of their own, so they're untouched by this change, confirmed by
+re-reading them before concluding so, not assumed.
+
+**Call sites — no page keeps the old logic**, since every one of them
+calls the same rewritten engine: Overview's 4 headline KPIs (Activation
+Amount, Redemption Amount, Transaction Value, Uptake) plus its per-source/
+per-region/per-head MoM labels (`bucketRegionData`'s own internal
+`computeComparisons` call); Activation.jsx's Total + 3 per-source cards;
+`RedemptionBoxOffice.jsx`/`RedemptionFnb.jsx`'s headline + Digital Card
+cards; `CancelRedeem.jsx`'s Cancel Redeem card; `MetricComparisonCard.jsx`
+(Summary's every bucketed/unbucketed card, via `computeBucketComparisons`/
+`computeNettedBucketComparisons`, which only ever render MoM+YoY — no QoQ
+column exists there, a pre-existing design choice this change didn't
+touch).
+
+**New: MoM/QoQ/YoY deltas on Overview's Gift Card ATV** — a deliberate,
+explicit exception to this app's own "no delta badge on a ratio/derived
+KPI" convention (Avg Ticket Size, Avg per Redemption, and Universal ATV
+right next to it on the same card all still have none). New
+`giftCardATVDeltas = computeRatioComparisons(transactionValueRowsAllMonths,
+'TransactionValue', 'RedemptionCount', comparisonMonths)` — reuses the
+exact numerator field (`TransactionValue`, the synthesized
+RedemptionAmount+Uptake field) and pool the neighboring "Transaction
+Value" KPI's own deltas already use, over `RedemptionCount` (the same
+transaction-count denominator `giftCardATV` itself divides by), so the
+badges can't drift from what the KPI's own value represents.
+
+**Verified against all 4 requested cases**, live in the running app
+(Playwright), reading the actual rendered badge percentages off
+Overview's "Redemption Amount" KPI, each cross-checked against a Node
+script computing the same windows directly against `redemptionCube.json`
+*before* checking the UI:
+| Case | MoM | QoQ | YoY |
+|---|---|---|---|
+| 1. Month=Jul 2026 only | 174.5% | 174.5% (Jul is its own quarter-start) | 81.6% (Apr26-Jul26 vs Apr25-Jul25) |
+| 2. FY=All, Month=All (anchor=Jul26, dataset's true latest month) | 174.5% | 174.5% | 81.6% — identical to Case 1, confirming the anchor resolves to the same month either way |
+| 3. FY2024-25+FY2025-26, Month=Aug+Sep (anchor=Sep25, the latest of the 4 matching rows Aug24/Sep24/Aug25/Sep25) | 109.2% | 79.4% (Jul25+Aug25+Sep25 vs Jul24+Aug24+Sep24 — quarter-start July, never ticked) | 86.7% (Apr25-Sep25 vs Apr24-Sep24 — FY-start April, never ticked) |
+| 4. Month=December only (FY=All; anchor=Dec25, the latest December present) | 14.6% | 35.1% (Oct+Nov+Dec vs Oct+Nov+Dec prior year) | 66.1% (Apr-Dec vs Apr-Dec prior year) |
+
+Every figure matched its hand-computed ground truth exactly (to the same
+rounding `fmtPct` already uses). Also spot-checked live that Gift Card
+ATV's own MoM (▼33.6%) and YoY (▼25.9%) at the default "All" view match a
+direct ratio computation against the raw cube. Zero console errors across
+every scenario tested; clean production build (771.78 kB JS, 216.22 kB
+gzipped).
+
+## 2026-08-25 — Fix: MoM/QoQ/YoY comparisons went blank whenever a single
+FY was selected
+
+Bug in the previous day's MoM/QoQ/YoY redefinition — the new anchor-based
+engine was correct, but every call site fed it the wrong row pool.
+`activationRowsAllMonths`/`redemptionRowsAllMonths` (`FilterContext.jsx`)
+only lift the *Month* restriction (`skipMonth: true`) — FY still applies.
+So with FY2026-27 selected alone, that pool contained only FY2026-27's 4
+months; looking up the prior-year window (e.g. Jul 2025, which belongs to
+FY2025-26) found zero rows, `sumForMonths()` correctly returned `null` for
+a window that genuinely wasn't in the pool it was given, and every MoM/QoQ/
+YoY badge went blank — not an error, just badges silently vanishing the
+moment a single FY was chosen instead of "All."
+
+**The fix**: new `activationRowsForComparison`/`redemptionRowsForComparison`
+pools (`FilterContext.jsx`), built with `{ skipMonth: true, skipFY: true }`
+— every other active filter (Region, CardType, Activation/Redemption
+Source, Denomination, Week, Weekday) still applies, but a comparison can
+now always find a prior-year window regardless of which FY is selected.
+Deliberately did **not** just broaden `activationRowsAllMonths` itself to
+also skip FY — that pool doubles as the input to `comparisonMonths`' own
+anchor-month fallback (`FilterContext.jsx`, "default to the latest month
+under the rest of the active filters"), which *must* stay FY-aware: with
+FY2024-25 selected and Month left at "All," the anchor has to resolve to
+Mar 2025 (the latest month *within* that FY), not the dataset's true
+latest month (Jul 2026) sitting in a different FY entirely. Broadening the
+existing pool would have fixed today's bug while breaking that anchor
+resolution instead — so this needed a genuinely separate pool, not a
+widened existing one.
+
+**Every call site that fed the old, FY-restricted pool into a
+computeComparisons()-family function switched to the new one** — confirmed
+by grep that nothing else ever read `activationRowsAllMonths`/
+`redemptionRowsAllMonths` for anything besides a delta lookup, so nothing
+was missed: `Overview.jsx` (4 headline KPIs, the synthesized
+`TransactionValue` pool feeding both Transaction Value's and Gift Card
+ATV's deltas, and the 3 `bucketRegionData()` region/source charts' own MoM
+labels), `Activation.jsx` (Total + 3 per-source cards), `RedemptionBoxOffice.jsx`/
+`RedemptionFnb.jsx` (headline + Digital Card cards, via their own
+`netHeadRows(...ForComparison, ...)` pools), `CancelRedeem.jsx` (Cancel
+Redeem card), and `Summary.jsx` (every `MetricComparisonCard`, including
+Box Office/F&B (net)'s own netted pools). `MetricComparisonCard.jsx`'s
+`rowsAllMonths` prop keeps its original name — renaming it dashboard-wide
+for a one-word precision gain wasn't worth the extra diff — but its own
+doc comment now spells out that the prop needs a Month-*and*-FY-
+unrestricted pool, specifically to head off this same class of mismatch
+recurring. `activationRowsAllFY`/`redemptionRowsAllFY` (feeding
+`computeFYSeries`/`computeBucketFYSeries`'s "By Year" blocks) were
+untouched — a separate concept with no anchor-month logic, confirmed
+unaffected by this bug before concluding so.
+
+**Verified live in the app** (Playwright), not just by re-reading the
+fix: FY2026-27 selected alone — MoM 174.5%, QoQ 174.5%, YoY 81.6%, byte-
+identical to the "FY=All, Month=All" baseline from the previous day's own
+verification table (both resolve to the same Jul 2026 anchor and the same
+comparison windows, confirming the anchor logic itself was never the
+broken part — only the lookup pool was). Before this fix, this exact
+scenario rendered zero badges. FY2024-25 selected alone — headline
+Redemption Amount ₹1,866L / 4,56,005 cards renders correctly, and MoM/QoQ/
+YoY correctly show *no* badge at all (not an error, not a broken
+percentage) — its comparison window reaches into FY2023-24, which doesn't
+exist anywhere in this dataset (confirmed directly: zero rows for
+2024-03), so `sumForMonths()` returns `null` and the badge hides per the
+app's existing "don't show broken math" convention. Zero console errors
+in either scenario; clean production build (772.02 kB JS, 216.28 kB
+gzipped).
+
+## 2026-08-25 — Card Journey Phase 1: KPI ribbon brought up to Overview's
+5-card structure
+
+Goal: unify Card Journey's KPI area with Overview's own structure — same
+`Kpi.jsx` component, same 5-card grid, same MoM/QoQ/YoY badges — while
+keeping every redemption-side figure scoped to this page's own cohort
+question (activated *and* redeemed within the same period), not
+Overview's broader one.
+
+**What replaced what**: the old horizontal funnel (Cards Activated → Of
+Those Redeemed → "=" → Redemption Rate box) had its two number blocks
+promoted to real `<Kpi>` cards, joined by 3 new ones — Transaction Value,
+Uptake, ATV — in the exact same `grid-cols-1 sm:grid-cols-3 lg:grid-cols-5`
+ribbon Overview uses. Asked the user what should happen to "Redemption
+Rate" and the "What does this mean?" disclosure, since neither maps onto
+one of Overview's 5 cards: kept both, moved into their own compact strip
+directly below the ribbon (same gold-accented card container as before,
+just without the funnel arrows/equals-sign now that those numbers live in
+the ribbon above).
+
+**"Cards Activated" is the one card that reuses Overview's own pool,
+not a cohort-scoped one** — `cohortCube.json` has no `ActivationAmount`
+field at all (only Redemption-side measures), so there's no cohort-scoped
+version of plain activation to build. Its deltas call
+`computeComparisons(activationRowsForComparison, 'ActivationAmount',
+comparisonMonths)` — the identical call Overview's own "Activation Amount"
+card makes, so the two pages' numbers are provably identical, not just
+similar.
+
+**The other 4 cards needed genuinely new plumbing**, since
+`cohortCube.json` rows have no single `YearMonth` field the existing
+comparison engine could match a window against — only `ActivationYearMonth`
+and `RedemptionYearMonth` independently, and a cohort row should only
+count toward a given MoM/QoQ/YoY window if *both* fall inside it (the same
+"activated and redeemed within the same period" rule `FilterContext.jsx
+#filterCohort` already enforces for the un-windowed case):
+- `FilterContext.jsx#filterCohort()` gained `skipMonth`/`skipFY` options
+  (mirroring `passesCommon`'s existing ones), and a new
+  `cohortRowsForComparison` pool (`{ skipMonth: true, skipFY: true }`,
+  every other filter still applied) — built this way from the start
+  rather than the Month-only-unrestricted shape the main pools originally
+  had, specifically to avoid reintroducing the FY-selection bug fixed
+  earlier the same day (see that entry above).
+- `lib/comparisons.js` gained `computeCohortComparisons()` and
+  `computeCohortRatioComparisons()` — both built on the same private
+  `computeComparisonsFromSummer()` engine every other comparison function
+  in the file already shares, just with a new `sumForMonthsCohort()`
+  window-matcher that requires both date fields to fall in the window
+  instead of matching a single `YearMonth`. The ratio variant takes two
+  separate row pools (not one) for the ATV card's numerator/denominator,
+  since that ratio's two halves already come from different exclusion
+  rules (amount nets Cancellation rows in, count excludes them — same
+  split `redeemedAmount`/`redeemedCount` already used before this change).
+- Ticket/F&B breakdowns for Transaction Value and Uptake reuse
+  `lib/aggregate.js#netHeadRows()` verbatim rather than re-deriving its
+  Cancellation-attribution logic for cohort rows — `netHeadRows()`/
+  `physicalCancelWinnerMap()` key their Region+Month winner decision off
+  `r.YearMonth`, which doesn't exist on `cohortCube.json` rows, so
+  `cohortRowsForNetting` aliases `RedemptionYearMonth` to `YearMonth`
+  first (the redemption event's own month is what that netting logic
+  actually cares about).
+
+**Verified against hand-computed `cohortCube.json` sums, unfiltered,
+before checking the UI** (excluding the 1,959 Pre-existing-activation
+rows, same established exclusion "Of Those, Redeemed" already applied):
+Transaction Value ₹9,737.53L (Ticket ₹5,842.70L / F&B ₹3,894.83L), Uptake
+₹3,330.56L (Ticket ₹811.71L / F&B ₹2,518.85L), ATV ₹542.02. Live in the
+app: ₹9,738L/₹5,843L/₹3,895L, ₹3,331L/₹812L/₹2,519L, ₹542 — all exact
+(displayed-rounding only). Re-checked with FY2026-27 selected alone: every
+MoM/QoQ/YoY badge stayed populated with the *same* percentages as the
+unfiltered baseline (both resolve to the same Jul 2026 anchor) rather than
+going blank — confirming `cohortRowsForComparison` doesn't have the
+FY-selection bug the main pools needed fixing for earlier the same day.
+Zero console errors in either scenario; clean production build (773.48 kB
+JS, 216.73 kB gzipped).
+
+## 2026-08-25 — Card Journey Phase 2: Overview's flow diagram, cohort-
+scoped on the redemption side
+
+New "Activation vs. Redemption (This Cohort)" card, reusing
+`FlowBox`/`FlowBranch` exactly as Overview's own "Gift Card Activation vs.
+Redemption" diagram does — same components, same 3-layer structure, same
+visual style — placed right after the Redemption Rate strip Phase 1 left
+below the KPI ribbon.
+
+**Activation side is byte-identical to Overview's**: same
+`groupByActivationSource(activationRows, {...})` call, same
+`ACTIVATION_SOURCE_COLORS`/`CARD_TYPE_COLORS`, same 3-source →
+Digital/Physical split. No cohort-specific version exists to build — same
+reasoning Phase 1 used for the "Cards Activated" KPI: `cohortCube.json`
+carries no `ActivationAmount` field at all.
+
+**Redemption side mirrors Overview's Total → (Online, Cinema) → Cinema →
+(Box Office, F&B) tree, built from `cohortRowsForNetting`** (the
+`RedemptionYearMonth`→`YearMonth` alias Phase 1 already established for
+the Uptake/Transaction Value breakdowns), via the exact same
+`netHeadRows()`/`netCinemaRedemption()` Overview itself calls — not a
+cohort-specific reimplementation of either. `netCinemaRedemption()`/
+`isNetCinemaRedemptionRow()` turned out not to need the alias at all (they
+only ever check `Head`/`RedemptionModeFinal`, confirmed by reading them
+before assuming) — reused the one aliased pool anyway rather than building
+a second, narrower one, so every netting call on this page reads from the
+same input. The top node is labeled "Of Those, Redeemed," not "Total
+Redemption (net)," specifically so it reads as this page's own narrower
+cohort question at a glance rather than a relabeled copy of Overview's
+broader one.
+
+**Verified against the raw cube by hand first** (same non-Pre-existing-
+activation exclusion "Of Those, Redeemed" already applies), **then live
+in the app**: Online ₹4,052.39L, Box Office ₹978.60L, F&B ₹1,375.98L,
+summing to ₹6,406.97L — exactly "Of Those, Redeemed." Aggregators
+₹4,254.87L + Corporate + Cinema summing to the full ₹8,266.57L activation
+total. Live: Cards Activated ₹8,267L = Aggregators ₹4,255L + Corporate
+₹2,072L + Cinema ₹1,940L exactly; Of Those, Redeemed ₹6,407L = Online
+₹4,052L + Box Office ₹979L + F&B ₹1,376L exactly (Cinema node ₹2,355L =
+Box Office + F&B, shown as its own intermediate layer same as Overview).
+Zero console errors; clean production build (776.06 kB JS, 217.13 kB
+gzipped).
+
+## 2026-08-25 — Card Journey: Year-on-Year chart added; Denomination chart
+skipped — cohortCube.json has no Denom field
+
+**"Year-on-Year: Activated vs. Redeemed"**, mirroring Overview's own chart
+of the same name exactly (same `BarChart` props, same
+`COLORS.activationDark`/`COLORS.redemption` bars). Activation side is
+Overview's computation verbatim — `activationRowsAllFY` grouped by
+`fyOf(YearMonth)` — since there's no cohort-specific version of plain
+activation to build (same reasoning as Phases 1-2). Redemption side
+answers a genuinely narrower question than Overview's own chart: not "how
+much redeemed in FY X" (any card, regardless of activation date), but "of
+cards *activated* in FY X, how much was redeemed within that *same* FY" —
+spillover into a later FY doesn't count. New `FilterContext.jsx
+#cohortRowsAllFY` (`{ skipFY: true }`, Month and every other filter still
+applied — same shape as `activationRowsAllFY`/`redemptionRowsAllFY`) lifts
+the FY restriction, but doesn't by itself enforce "same FY" for a row —
+with FY unrestricted, `cohortCube.json`'s own cross-product of (activation
+month, redemption month) pairs includes real spillover rows, so
+`cohortYoyByFY` first keeps only rows where `fyOf(ActivationYearMonth) ===
+fyOf(RedemptionYearMonth)`, *then* groups by that shared FY.
+
+**Consequence, confirmed rather than assumed**: because of that same-FY
+constraint, the chart's own redemption bars do **not** sum to the
+page's unfiltered "Of Those, Redeemed" total (₹6,407L) — they sum to
+₹5,971L, a real ₹436L gap made up of genuine cross-FY spillover rows
+(activated in one FY, redeemed in the next) that "Of Those, Redeemed"
+includes when unfiltered but this chart deliberately excludes from every
+bar. This is the same class of documented, by-design gap as "Redemption by
+Region" excluding the Online channel-total bucket — not a reconciliation
+bug. The reconciliation that *does* hold, and is what got verified: for
+whichever FY is actually selected, that FY's own bar equals "Of Those,
+Redeemed" for that same selection, since both apply the identical
+same-FY constraint (one via `cohortRows`' normal FY/Month filtering, the
+other via `cohortYoyByFY`'s explicit same-FY check) — confirmed against
+the raw cube by hand first (FY2026-27: same-FY redemption ₹1,727.78L,
+activation ₹2,464.50L), then live in the app: the chart's own FY2026-27
+bars read ₹1,728L/₹2,465L, matching "Of Those, Redeemed"/"Cards Activated"
+for that exact selection (established in Phase 1's own verification)
+to the rupee.
+
+**Denomination chart skipped, per the user's own choice after checking
+the data first**: `cohortCube.json` has no `Denom` field at all (its full
+field list is `ActivationYearMonth`/`RedemptionYearMonth`/`Region_Clean`/
+`RedemptionModeFinal`/`Head`/`ActivationModeFinal`/`CardType`/`Weekday`/
+`RedemptionAmount`/`RedemptionCount`/`Uptake`/`UniqueCardCount` — confirmed
+directly, not a filtering issue), so "Redemption side from cohortRows
+grouped by Denom" can't be built at all. Flagged this to the user before
+building anything, with three options (activation-only chart, skip
+entirely, or fall back to the main `redemptionRows` pool for just this
+chart); the user chose to skip the chart entirely rather than break the
+cohort-scoping rule Phases 1-2 established or ship a one-sided chart.
+Nothing was added to the page for this half of the request.
+
+Zero console errors; clean production build (777.82 kB JS, 217.32 kB
+gzipped).
+
+## 2026-08-25 — Card Journey: final consistency pass across all 3 restructure
+phases, zero issues found
+
+Requested as a from-scratch audit — grep the whole file rather than trust
+each phase's own doc comments — after the KPI ribbon (Phase 1), flow
+diagram (Phase 2), and Year-on-Year chart (Phase 3) work.
+
+**Pool audit**: grepped `CardJourney.jsx` for `redemptionRows` — every hit
+is inside a comment explicitly saying *not* to use it (e.g. "never
+`redemptionRows`"); the file's own `useFilters()` destructure doesn't pull
+in `redemptionRows`/`redemptionRowsAllMonths`/`redemptionRowsForComparison`/
+`redemptionRowsAllFY` at all, so none of them can be reached from this
+page even by accident. Every redemption-side computation was individually
+traced to its source pool: `redeemedAmount`/`cohortUptake`/`byHead`/
+`redemptionByRegion`/`redemptionBySource`/`weekdayTrend`'s Redemption
+series/`cohortWeekSlot` all read `cohortRows` directly;
+`redeemedAmountDeltas`/`transactionValueDeltas`/`uptakeDeltas`/
+`giftCardATVDeltas` read `cohortRowsForComparison` (or its
+`cohortRowsForComparisonNonCancel`/`...WithTV` derivatives);
+`cohortUptakeTicketFnb`/`cohortTransactionValueTicketFnb`/the flow
+diagram's `cohortOnlineHead`/`cohortBoxOfficeHead`/`cohortFnbHead`/
+`cohortCinemaTotal` all read `cohortRowsForNetting` (itself built from
+`cohortRows`); `cohortYoyByFY`/`yoyByFY`'s redemption half reads
+`cohortRowsAllFY`; and `sameMonthByActivation`/`spillover`'s redemption
+half read `cohortRowsByActivation` — the one documented, intentional
+exception (the spillover chart's whole point is activation-fixed,
+redemption-unbounded), not a lapse. No stray reference to any
+`redemptionRows`-family pool anywhere.
+
+**Reconciliation audit, live in the app, 3 filter states** (unfiltered,
+FY2025-26 alone, Month=Jul 26 alone) — for each, checked every chart that's
+a *complete* partition of `cohortRows`/`activationRows` (i.e. every chart
+except the ones already documented as deliberate exceptions —
+`redemptionByRegion`'s excluded Online bucket, the Year-on-Year chart's
+excluded cross-FY spillover, and the spillover chart's own different
+question) against that state's own "Cards Activated"/"Of Those, Redeemed"
+KPI values:
+
+| Check | Unfiltered | FY2025-26 | Month=Jul 26 |
+|---|---|---|---|
+| Cards Activated / Of Those, Redeemed | ₹8,267L / ₹6,407L | ₹3,480L / ₹2,662L | ₹1,150L / ₹730L |
+| Redemption by Head (3 bars) sum | ₹6,408L | ₹2,663L | ₹730L |
+| Flow diagram: 3 activation sources sum | ₹8,267L | ₹3,480L | ₹1,150L |
+| Flow diagram: Online+Box Office+F&B sum | ₹6,407L | ₹2,662L | ₹730L |
+| Flow diagram: Cinema node = Box Office+F&B | ✓ (₹2,355L both) | ✓ (₹1,140L both) | ✓ (₹141L both) |
+| Activation by Source (3 bars) sum | ₹8,267L | ₹3,480L | ₹1,150L |
+| Redemption by Source (2 bars) sum | ₹6,407L | ₹2,662L | ₹730L |
+| Redemption Trend (Weekday+Weekend) sum | ₹6,407L | ₹2,662L | ₹731L |
+| Weekday chart (7 categories × 2 series) total | ₹14,676L (target ₹14,674L) | ₹6,142L (target ₹6,142L) | not re-checked |
+
+Every check lands within ±1-2L of its target — pure display-rounding
+noise across several rounded values summed together (the same class of
+noise this file has documented dozens of times before), not a real
+discrepancy. **No inconsistency found** — every redemption-side chart on
+this page, across all 3 states tested, reconciles to "Of Those, Redeemed"
+exactly (activation-side to "Cards Activated" exactly), confirming the 3
+restructure phases didn't leave anything reading from the wrong pool.
+
+Zero console errors across all 3 states; clean production build (777.82
+kB JS, 217.32 kB gzipped — unchanged, this was a read-only audit, no code
+changed).
+
+## 2026-08-25 — Fix: MoM/QoQ/YoY badges still showed numbers when every
+Month checkbox was explicitly unticked (should show nothing, like the KPI)
+
+**The bug, as reported**: select a single FY, then open the Month filter
+and untick every month (reaching the real `NONE_SELECTED` sentinel, not
+just leaving Month at its default "All") — every headline KPI correctly
+dropped to ₹0/0 cards (`matches([NONE_SELECTED], anyRealMonth)` is always
+`false`, so every row filter correctly excludes everything), but the
+MoM/QoQ/YoY delta badges kept showing real, populated percentages, as if
+a month were still selected.
+
+**Root cause**: `comparisonMonths`'s `useMemo` (`FilterContext.jsx`) did
+compute `isNoneSelected`, but never returned early for it — the
+`isRealRestriction` check below evaluated to `false` for the
+`NONE_SELECTED` array (length 1, not "real" months), so execution fell
+through to the same "default to latest month under the rest of the active
+filters" branch every truly-unrestricted (`[]`) Month selection uses. The
+anchor resolved to that FY's latest real month regardless, and every delta
+badge computed against it — exactly the reported symptom.
+
+**The fix**: added `if (isNoneSelected) return []` as the first line of
+the `useMemo`, before the `isRealRestriction` check (and dropped the now-
+redundant `!isNoneSelected &&` guard inside `isRealRestriction`, since the
+early return already handles that case). An empty `comparisonMonths`
+flows straight into `lib/comparisons.js#computeComparisonsFromSummer()`'s
+own pre-existing guard (`if (!selectedMonths || selectedMonths.length ===
+0) return { mom: null, qoq: null, yoy: null }`) — already correct,
+untouched — so no change was needed in `comparisons.js` itself. Every page
+that renders a delta badge (Overview, Activation, both Redemption pages,
+Cancel Redeem, Summary's `MetricComparisonCard`, Card Journey) reads this
+one shared `comparisonMonths` value, so the fix applies dashboard-wide
+from this single change, not per-page.
+
+**Verified live in the app** (Playwright), both the reported bug and the
+regression case it could have broken:
+  - FY2026-27 alone, Month left at its default "All" (unrestricted) —
+    unchanged from every prior verification of this scenario: Activation
+    Amount ₹2,465 L, ▲209.2% MoM, ▲209.2% QoQ, ▲95.9% YoY, 3,58,012 cards.
+  - Same FY, then Month's "Select All" toggled off (every real month
+    box unticked, landing on `NONE_SELECTED`) — Activation Amount card now
+    reads "₹0 L / 0 cards" with **zero** delta badges (confirmed by
+    reading the card's full rendered text — no percentage, no ▲/▼ arrow,
+    nothing where the 3 badges used to be), exactly matching the request's
+    own "when selecting no months even if a FY is selected it should not
+    display data" requirement.
+
+Zero console errors; clean production build (777.83 kB JS, 217.32 kB
+gzipped — a guard-clause-only change, no measurable size difference).
+
+## 2026-08-21 — New page: Channel Performance (BMS/PVR INOX/Paytm-District/
+Box Office booking channels + Gift Card as a 5th comparable line)
+
+New `/channel-performance` tab, backed by a new data source —
+`channelTransactions.json` (`public/data/`, 28 monthly rows: `YearMonth`/
+`BMS`/`PVRINOX`/`PaytmDistrict`/`BoxOffice`/`Total`) — loaded eagerly
+alongside `Universal.json` in `FilterContext.jsx` (same "tiny, every page
+would gain nothing from deferring it" reasoning already applied to that
+file). This is a **booking-channel** split (how a ticket was purchased —
+BookMyShow / the PVR INOX app-site / Paytm Insider-District / the physical
+Box Office window) — a different question from `Universal.json`'s
+payment-method split, and from this page's own added Gift Card line, which
+is a payment method riding on top of these 4 channels, not a 5th channel
+of the same kind (a deliberate simplification, stated on the page, not an
+error).
+
+**Gift Card as a 5th line**: net (non-cancelled) `RedemptionCount` from the
+redemption cube — `Head !== 'Cancellation'`, summed across both
+Online/Cinema without a further split, since the request wanted one
+combined GC number directly comparable to the other 4 channels, not a
+redemption-source breakdown. Its own "% contribution" is GC ÷ this file's
+own `Total` — `Total` itself never gets GC folded in (GC overlaps with,
+rather than adds to, the other 4 channels' underlying transactions), so
+GC's % is a ratio measured *against* the existing Total, not a component
+*of* a new bigger sum. `FilterContext.jsx#giftCardTransactionRows` is
+exposed as its own pool (all non-cancelled redemption rows, no FY/Month/
+Region/CardType/Source/Week/Weekday applied at the context level — see
+below for why) rather than reusing `redemptionRows`/
+`redemptionRowsForComparison`.
+
+**Deliberately not reconciled against `Universal.json`**: the request
+explicitly flagged this rather than asking for it to be silently resolved
+— `Universal.json`'s own `TotalTransactions` (whole-company, every payment
+method) and this page's channel `Total` (whole-company, every booking
+channel) are two independently-sourced totals that don't currently agree
+with each other, and reconciling them was out of scope for this task.
+Nothing on this page reads `universalRows` at all, so there's no code path
+where the two even get compared, silently or otherwise.
+
+**Filter scope — FY/Month/Date Range only, everything else greyed out**:
+`FilterBar.jsx` gained a `useLocation()`-based `onChannelPage` check that
+disables Region, Activation Source, Redemption Source, Card Type,
+Ticket/F&B, Denomination, Week, Weekday, *and* Date Range while on this
+route — reusing the exact `disabled`/`disabledReason` prop every `Select`/
+`DateRangeFilter` already supports, not a new mechanism. This reintroduces
+route-awareness to `FilterBar.jsx`, which the 2026-08-05 "split Mode
+filter" entry deliberately removed — but that removal was about a
+different concern (which *options* a shared control offered per page);
+this only toggles which controls are *enabled*, on one universal
+option-list/stored-value model, so it doesn't reverse that decision.
+
+The request's own text named only Region/CardType/Denomination/Source as
+inapplicable and called Date Range "applies cleanly here — YearMonth
+exists on both this file and the gift card cubes" — but Date Range
+actually reads day-level `DateStr` from a 4th pair of cubes
+(`dailyActivationCube.json`/`dailyRedemptionCube.json`), not `YearMonth`,
+and `channelTransactions.json` has no day-level field at all (only whole
+months) — so a sub-month range can't be represented against it. Disabled
+it too, rather than silently letting it look "live" while doing nothing to
+4 of this page's 5 lines. Extended the same reasoning to Week/Weekday and
+Ticket/F&B (not named in the request either, but real fields on the
+redemption cube with no analogous concept on `channelTransactions.json` —
+leaving them enabled would have silently narrowed the Gift Card line while
+the other 4 channels stayed unfiltered, the exact "filter looks active but
+does nothing" failure mode this app's own established convention forbids).
+Flagging both extensions here rather than treating them as implied by the
+literal request text.
+
+**Period logic — reused, not invented**: "this period" is
+`comparisonMonths` itself — the exact shared anchor every MoM/QoQ/YoY
+delta badge elsewhere in the app already reads (explicit Month selection
+wins; otherwise the latest month under the active filters, FY included).
+"Prior period" is `oneYearEarlier(comparisonMonths)` — `oneYearEarlier()`
+was a private helper inside `lib/comparisons.js`'s MoM/QoQ/YoY engine;
+exported (2026-08-21) for this exact reuse rather than re-deriving the
+same one-year-back month arithmetic a second time. `sumForMonths()` (also
+already exported) sums each channel field / GC's `RedemptionCount` over
+whichever of the two month sets is needed, returning `null` (not 0) when
+no row matches — the same "hide broken math, don't show a fake percentage"
+convention as everywhere else, which is why Apr 2024 (the dataset's first
+month, no Apr 2023 data at all) correctly renders dashes in every Prior
+Period/Difference/%Growth/%Contribution(Prior) cell instead of ±∞% or a
+fabricated 0.
+
+**Page-local "Channels Shown" filter** (`useState`, not `FilterContext`,
+per the request — "doesn't affect any other page"): reuses `Select.jsx`
+verbatim, defaulting to `[]` (Select's own "unrestricted → every box
+pre-ticked" convention, so "all shown by default" needed no separate
+initial-value array). Only controls which rows/lines render — `Total` and
+every %Contribution figure are always computed from the full, real channel
+set regardless of what's currently toggled visible, per the request's own
+"Total stays ground truth" instruction.
+
+**Table layout**: BMS / PVR INOX / Paytm-District / Box Office / Gift Card
+rows (this period / prior period / difference / % growth / % contribution
+this / % contribution prior), a bold Total row beneath them (channel
+Total field only, GC excluded), and a separate highlighted "Gift Card
+Contribution" callout below that restating GC's own % of Total for both
+periods plus the percentage-point delta — kept as its own section (not
+just the GC row's last 2 columns) since GC's relationship to Total is
+structurally different from the other 4 rows' (a ratio measured against,
+not a component of, the same sum). A companion "Monthly Transactions by
+Channel" line chart (all 28 months, 5 series, `CHANNEL_COLORS` — Gift Card
+reuses the brand teal every other page already uses for redemption/GC
+content, the 4 real channels take the remaining 4 validated `CATEGORICAL`
+hues) sits below, independent of whichever 2 periods the table is
+currently comparing.
+
+**Verified against the raw cubes by hand first** (Node script, before
+touching the UI): Apr 2024 — Total 39,46,018, GC net count 28,127,
+contribution 0.71%. Jul 2025 — Total 70,14,303, GC 83,953, 1.20%. Jul 2026
+— Total 59,58,966, GC 1,76,374, 2.96%. Whole-dataset GC net count
+16,58,327. All 4 exactly matched the request's own hand-computed targets;
+also confirmed `Total` = `BMS + PVRINOX + PaytmDistrict + BoxOffice` for
+all 28 rows, no exceptions.
+
+**Verified live in the app** (Playwright): unfiltered (default anchor =
+Jul 2026, the dataset's latest month) and Month=Jul 26 explicit both
+rendered byte-identical tables — This Period Total 59,58,966 / GC 1,76,374
+/ 2.96%, Prior Period Total 70,14,303 / GC 83,953 / 1.20% — matching the
+Jul 2026/Jul 2025 targets exactly. Month=Apr 24 rendered This Period
+39,46,018 / 28,127 / 0.71% (matching the Apr 2024 target) with every Prior
+Period/Difference/%Growth/%Contribution(Prior) cell correctly showing "—"
+instead of a broken number. Region's control confirmed disabled
+(`rs__control--is-disabled`) while Financial Year's stayed enabled, on
+this route only. Hiding "Gift Card" via the page-local Channels Shown
+filter removed both its table row and the Gift Card Contribution callout
+in the same action. Zero console errors; clean production build (785.75 kB
+JS, 219.21 kB gzipped, no new warnings beyond the pre-existing 500KB
+chunk-size notice).
+
+## 2026-08-21 — Channel Performance: 3 charts added beneath the table
+
+Same page, same two pools (`channelTransactionsRows`/
+`giftCardTransactionRows`) and the same page-local "Channels Shown"
+multi-select from the entry above — every chart below reads through the
+same `isShown(channelsShown, key)` check the table already used, so
+unticking a channel there drops it from every chart too, not just the
+table (confirmed live for all 3, not assumed from the shared helper).
+
+**1. "Monthly Trend by Channel"** — a `LineChart`, one line per channel +
+Gift Card, all 28 months, mirroring `Trends.jsx`'s own Monthly Trend
+styling (`COLORS.gridline`/`COLORS.border`/`COLORS.inkMuted` tokens,
+`ChartTooltip`, a `Legend`) rather than the ad hoc hex strings the chart
+had briefly used when it was still un-named "Monthly Transactions by
+Channel" in the previous entry — renamed to match this request's naming
+and switched onto the shared `COLORS` tokens for consistency. One shared
+Y axis, not rescaled/normalized for Gift Card — its line sits far below
+the other 4 in absolute terms by design, which is deliberately left
+visible rather than smoothed away onto a secondary axis, per the request.
+
+**2. "Contribution Mix"** — a 100%-stacked `BarChart`, one bar per month,
+each channel's `pctOfTotal(value, monthTotal)` share (the exact same
+formula the table's own %Contribution columns already use) stacked via a
+shared `stackId`. The 4 real channels are a complete partition of `Total`
+(confirmed against the raw file before this page was ever built — `Total`
+== `BMS+PVRINOX+PaytmDistrict+BoxOffice` for all 28 rows), so their 4
+segments always sum to exactly 100%; Gift Card's segment stacks
+additively on top of that instead of being renormalized in, so a bar
+visibly pokes past a `ReferenceLine` drawn at 100% by exactly GC's own
+share that month — the chart's own visual restatement of the table's
+"Gift Card overlaps with, rather than adds to, Total" caveat, not a
+rendering bug.
+
+**3. "Gift Card Penetration Trend"** — its own single-line `LineChart`,
+Gift Card's %-of-Total only, full 28-month range, deliberately a separate
+data array (not the same `contributionMix` array with 4 series hidden) so
+the Y axis auto-scales to GC's own ~0.7%–3% range instead of inheriting a
+domain sized for the other channels' much larger shares — the whole point
+of giving it a dedicated chart rather than just relying on "Channels
+Shown" to isolate it inside chart 2. Hidden entirely (not just its own
+line) when "Gift Card" is unticked from Channels Shown, since it has
+nothing else to show once its one series is gone.
+
+**Two real rendering bugs found during screenshot verification, fixed
+before calling this done** (not assumed correct from a code read alone,
+per this file's standing practice):
+  - Chart 1's Y-axis tick labels (up to `"38,00,000"`, 9 characters —
+    wider than the amount-in-Lacs numbers every other chart's `width={64}`
+    Y axis was sized for) visually collided with the rotated "Transactions"
+    axis title sitting in the same narrow strip. Fixed by widening the
+    axis to `width={78}` and nudging the label inward (`dx: -8`) — confirmed
+    via a cropped before/after screenshot, not just re-reading the JSX.
+  - Chart 2's `ReferenceLine` "100%" label rendered fully clipped (down to
+    a single stray character) at the chart's right edge — `margin.right:
+    16` (copied from every other chart on this page) left no room for a
+    4-character label sitting right at the plot's right boundary, unlike
+    every existing chart on this page/app, none of which places a label
+    that far right. Fixed by widening `margin.right` to `44` and switching
+    the label's `position` from `insideTopRight` (still clipped, since the
+    plot area itself was too narrow) to `right` (renders into the new
+    margin) — confirmed via a zoomed-in crop showing "100%" fully legible
+    next to the last bar.
+
+**Verified chart 3's endpoints against the same table figures already
+confirmed in the entry above**, live in the app (Playwright, hovering the
+first/last of its 28 dots and reading the tooltip): Apr 24 → "Gift Card
+0.71%", Jul 26 → "Gift Card 2.96%" — both exact matches, confirming the
+per-month `pctOfTotal()` computation this chart shares with the table
+agrees with it by construction, not by a second independent calculation
+that happened to land on the same numbers. Also confirmed live: all 4 new
+card titles present, Contribution Mix's reference line renders, and
+unticking "Gift Card" from Channels Shown removes the entire Gift Card
+Penetration Trend card. Zero console errors; clean production build
+(788.40 kB JS, 219.76 kB gzipped — a ~2.6 kB increase for the 2 new
+charts' data/JSX, no new warnings beyond the pre-existing 500KB
+chunk-size notice).
+
+## 2026-08-22 — Channel Performance restructured into two sections: Market
+Channels (4 real channels only) and a standalone Gift Card Performance panel
+
+Gift Card removed from the blended table/charts entirely — per the
+request, it's a payment method riding on top of the 4 real booking
+channels, not a 5th competitor in the same category, so mixing it into
+one table/chart set implied a comparison it shouldn't be making. Every
+figure that existed before is preserved, just relocated and (for the new
+PVR INOX ratio) added alongside it — no calculation was dropped.
+
+**Section 1 — "Market Channels"**: the existing "Channel Performance —
+Period Comparison" table, `REAL_CHANNELS` (`CHANNEL_ORDER` minus 'Gift
+Card') only — same this-period/prior-period/difference/%growth/
+%contribution columns and the same `sumForMonths`/`pctChange`/
+`pctOfTotal` math as before, just without a Gift Card row (Total was
+already the 4-channel sum, unaffected). "Monthly Trend by Channel" and
+"Contribution Mix" — the two charts added in the immediately preceding
+phase — also had their Gift Card line/segment dropped: the request's own
+reasoning ("not a booking channel... implied it competes in the same
+category") applies identically to a chart series as it does to a table
+row, so leaving GC in either chart would have reintroduced the exact
+blending this restructure exists to undo. Flagging this as a deliberate
+extension beyond the request's literal bullet list, which only named the
+table and the Penetration Trend chart directly. The page-local "Channels
+Shown" selector (`REAL_CHANNELS`-only options now) still governs Section 1
+alone, with Gift Card no longer one of its choices at all — Contribution
+Mix's 4 real channels are a complete partition of Total by construction,
+so its `ReferenceLine` at 100% is now a plain "always lands here" anchor
+rather than the overlap indicator it used to be (that story moved to
+Section 2's own contribution cards).
+
+**Section 2 — "Gift Card Performance"** (new `<h2>` section, same
+`font-serif text-lg font-extrabold` heading style `Summary.jsx` already
+uses for its own section labels): 3 cards in a row —
+  - **"Gift Card Transactions"** — a real `<Kpi>` card (this app's actual
+    headline-metric component, not a re-styled approximation): GC's own
+    net (non-cancelled) `RedemptionCount`, a `subCount` line (raw counts
+    ghosted via the existing `.count-ghost` convention, same as every
+    other persistent count on this dashboard) showing the prior-period
+    figure and the difference, and a single `deltas={[{label:'YoY', pct:
+    growthPct}]}` badge — labeled "YoY" deliberately, not a generic
+    "Growth", since the comparison window genuinely *is* exactly one year
+    back (the same `comparisonMonths`/`oneYearEarlier` pair every other
+    YoY badge on this dashboard already reads).
+  - **"GC Contribution — % of Total Market"** — the same figure already
+    verified in the previous phase (2.96% / 1.20% / +1.76pp), moved out of
+    the table's inline callout into its own card via a new local
+    `ContributionCard` component (this-period / prior-period / a
+    percentage-POINT delta chip) — kept as a plain colored "+1.76 pp" chip
+    rather than routing the point-change through `DeltaBadge` (which
+    formats a *relative* % change, not an absolute point difference —
+    feeding it a point value would render as a confusing "▲1.8% pp"
+    double-percent).
+  - **NEW: "GC Contribution — % of PVR INOX Channel"`** —
+    `pctOfTotal(giftCardCount, pvrinoxCount)` for the same two periods, via
+    the same `ContributionCard` component so the two contribution cards
+    can't visually drift apart. Given equal visual weight to the Total
+    version (same card size/typography, gold accent instead of teal to
+    distinguish it, not a smaller footnote) — per the request, this is the
+    more meaningful internal question ("how much of our own direct
+    channel do we power").
+
+**Two Penetration Trend charts, not one dual-line chart**: `gcPenetrationVsTotal`
+and `gcPenetrationVsPvrinox` are two separate arrays/charts (each with its
+own auto-scaling Y axis), not the single "Gift Card Penetration Trend"
+line from the prior phase split into 2 series on one shared axis — the
+request explicitly flagged why: the two ratios sit on very different
+scales (≈0.7-3% vs. ≈7-43%), and a shared axis would flatten the Total
+line to near-invisible next to PVR INOX's much larger one, defeating the
+same "give each its own scale" reasoning that already justified the
+original single chart's existence.
+
+**Verified against the raw cubes by hand first** (Node script, before
+touching the UI) — GC ÷ PVR INOX's own count, all 4 requested months:
+Apr 2024 28,127÷412,566 = 6.82%; Jul 2025 83,953÷443,432 = 18.93%; Jun
+2026 97,859÷331,534 = 29.52%; Jul 2026 176,374÷405,727 = 43.47% — all 4
+exact matches to the request's own hand-computed targets, alongside the
+already-established GC-vs-Total figure (2.96% for Jul 2026, unchanged by
+this restructure since its formula didn't move).
+
+**Verified live in the app** (Playwright): Section 1's table confirmed to
+contain zero "Gift Card" text anywhere, Total unchanged at ₹59,58,966 net
+of Jul 2026's own row; "Channels Shown" dropdown confirmed to show exactly
+4 options (BMS, PVR INOX, Paytm/District, Box Office), no Gift Card.
+Unfiltered (anchor = Jul 2026): "GC Contribution — % of Total Market" card
+reads 2.96% / 1.20% / +1.76pp; "GC Contribution — % of PVR INOX Channel"
+reads 43.47% / 18.93% / +24.54pp — both this-period figures and the PVR
+INOX card's own prior-period figure match the hand-computed targets
+above exactly (43.47% and 18.93% respectively). Month=Jun 26 alone: PVR
+INOX card reads 29.52% this period, matching the target exactly. Month=Apr
+24 alone (the dataset's first month, no Apr 2023 to compare against): PVR
+INOX card reads 6.82% this period with prior-period and point-change both
+correctly showing "—" instead of broken math, same established convention
+as every other comparison in this app. Both new "h2" section headings
+("Market Channels", "Gift Card Performance") confirmed present via a
+direct DOM query (an earlier, timing-sensitive Playwright locator briefly
+reported 0 matches for the same headings on the very first check of a
+page load — re-queried immediately after and found both present with
+exact text, so this was a script-side flake, not a rendering bug, per
+this file's own established "re-verify before treating a zero as real"
+practice). Zero console errors; clean production build (790.22 kB JS,
+219.96 kB gzipped, no new warnings beyond the pre-existing 500KB
+chunk-size notice).
+
+## 2026-08-23 — Channel Performance: 4 layout/clarity fixes, zero
+calculation changes
+
+**1. Section order flipped**: "Gift Card Performance" now renders before
+"Market Channels" — the request's own framing (GC is the page's main
+point, the channel table is supporting context) — a pure JSX reorder, the
+two sections' own internal content/computations are untouched.
+
+**2. Every literal "this period"/"prior period" caption replaced with the
+actual date range being compared** — `periodLabel()` (already built for
+the Market Channels table's own subtitle) computed once as
+`thisLabel`/`priorLabel` near the top of the component and threaded
+through everywhere those two words used to appear hardcoded: the "Gift
+Card Transactions" `<Kpi>` card's `sub` line (`vs. {priorLabel}`, e.g.
+"vs. Jul 25"), and a new `thisLabel`/`priorLabel` prop pair on the local
+`ContributionCard` component (used by both the vs.-Total and vs.-PVR-INOX
+cards) replacing the two hardcoded `<span>this period</span>`/`<span>prior
+period</span>` elements. Confirmed via a body-text grep, live in the app,
+that the literal strings "this period"/"prior period" no longer appear
+anywhere on the page. The Market Channels table's own column *headers*
+("This Period"/"Prior Period") were deliberately left as-is — those are
+generic table-header semantics with the actual date range already stated
+once in the card's own subtitle directly above them, not a second instance
+of the same ambiguity the GC cards had.
+
+**3. Fixed skipped X-axis month labels on both Penetration Trend charts**:
+both had used `interval={2}` (a guess at a step that would leave enough
+gaps), which Recharts' own auto-skip could still thin further unpredictably
+at real render widths. Replaced with the exact `interval={0}`/`angle={-45}`/
+`textAnchor="end"`/`height={50}` pattern this app already uses for other
+crowded month/category axes (e.g. `CancelRedeem.jsx`'s "by Region" chart) —
+forces every one of the 28 ticks to attempt render, angled for clearance
+instead of guessing a skip step. Confirmed live via Playwright, reading
+`.recharts-cartesian-axis-tick` node counts directly (not assumed from the
+JSX): both charts now render exactly 28 tick labels, and a full-resolution
+crop shows them clearly separated with no overlap at either chart's actual
+column width.
+
+**4. Trimmed explanatory-sentence subtitles down to numbers/dates**:
+  - "Channel Performance — Period Comparison" subtitle: `"{thisLabel} vs.
+    {priorLabel} (one year earlier) · booking-channel transaction counts"`
+    → `"{thisLabel} vs. {priorLabel}"` (e.g. "Jul 26 vs. Jul 25") — the
+    dropped tail was restating what the table's own column headers and the
+    card title already say.
+  - "Monthly Trend by Channel" and "Contribution Mix" subtitles — full
+    sentences ("All 28 months on file, regardless of..." /  "Each of the 4
+    real channels' % of that month's own Total — a complete partition, so
+    every bar sums to exactly 100%") — removed entirely rather than
+    shortened, since the X-axis already shows the full month range at a
+    glance and the Y-axis title ("% of Total") already states the unit;
+    keeping a subtitle that just re-said either fact wasn't "trimmed
+    prose," it was redundant prose.
+  - Both Penetration Trend chart subtitles — replaced with a new
+    `endpointLabel()` helper that reads the *first* and *last* entries
+    directly off the same `gcPenetrationVsTotal`/`gcPenetrationVsPvrinox`
+    arrays each chart plots (never a second, hand-authored copy of the
+    same two numbers that could quietly drift from what the chart itself
+    draws): `"0.71% (Apr 24) → 2.96% (Jul 26)"` and `"6.82% (Apr 24) →
+    43.47% (Jul 26)"` — matching this exact request's own example
+    transformation, and reusing the same 4 figures already verified
+    against the raw cubes in the immediately preceding phase (confirming
+    this pass changed only presentation, not any underlying number).
+
+**Verified live in the app** (Playwright, unfiltered — anchor month Jul
+2026, prior Jul 2025): h2 order reads `["Gift Card Performance", "Market
+Channels"]`; the 3 Section 1 cards read "1,76,374 ▲110.1% YoY / vs. Jul
+25", "2.96% Jul 26 / 1.20% Jul 25 / +1.76pp", and "43.47% Jul 26 / 18.93%
+Jul 25 / +24.54pp" — all three date labels correct, all three numeric
+figures byte-identical to the prior phase's own verification. Table
+subtitle reads "Jul 26 vs. Jul 25"; both Penetration Trend subtitles read
+their exact endpoint strings above; "Monthly Trend by Channel" and
+"Contribution Mix" confirmed to have zero subtitle `<p>` elements. Both
+Penetration Trend charts confirmed to render exactly 28 X-axis tick nodes
+each, legible at a full-resolution crop. Zero console errors; clean
+production build (790.00 kB JS, 219.78 kB gzipped — a marginal decrease
+from the removed subtitle strings, no new warnings beyond the pre-existing
+500KB chunk-size notice).
+
+## 2026-08-23 — Investigated a reported Channel Performance FY-filter bug:
+doesn't reproduce; root cause traced to a flawed reproduction method, not
+the app
+
+**The report**: selecting FY2024-25 or "All" was said to leave the whole
+page (table, GC KPI cards, both Penetration Trend charts) stuck on
+FY2026-27's window (Jul 2026), diagnosed as a likely repeat of the
+dashboard-wide MoM/QoQ/YoY anchor bug fixed earlier this session (see the
+2026-08-25 entries above) — specifically, `ChannelPerformance.jsx` maybe
+not reading `comparisonMonths` at all, or calling the shared anchor logic
+with no filter context.
+
+**Checked the code first, per this file's standing practice**:
+`ChannelPerformance.jsx` reads `comparisonMonths` directly from
+`useFilters()` (`thisMonths = comparisonMonths`) and derives
+`priorMonths = oneYearEarlier(comparisonMonths)` — both flow into every
+number on the page (`channelRows`, `totalThis`/`totalPrior`, `giftCard`,
+and both Penetration Trend charts' data arrays) via `sumForMonths`. There
+is no second, page-local anchor computation and no case where the shared
+`comparisonMonths` value from context is bypassed — exactly the thing the
+report asked to check, and it does pass the current filter context
+through, unconditionally.
+
+**Reproduction, first attempt, appeared to confirm the report** — a
+Playwright script that opened the Financial Year dropdown and blindly
+clicked "every option not in the target set" (assuming the menu always
+starts from its default all-ticked state) showed exactly the reported
+symptom when switching FY multiple times in one session without a page
+reload: FY2024-25 read "Mar 26 vs. Mar 25" (a different FY's own month)
+and FY2025-26 read "Jul 26 vs. Jul 25" (the dataset's true latest month,
+not that FY's own latest). This also reproduced identically on
+Overview.jsx's own "Activation Amount" KPI under the same script — a
+dashboard-wide symptom, not page-specific, which was the first sign
+something was off with the *test*, not the app: this exact anchor
+mechanism was extensively fixed and verified on Overview/Activation/
+Summary/Card Journey earlier this session (the 2026-08-25 entries above),
+so a fresh regression appearing identically everywhere at once, only
+under one specific script, warranted checking the script before the app.
+
+**Root cause of the false alarm**: the script's own dropdown-interaction
+helper clicked "every option not in the keep-list," which is only correct
+when the menu opens from Select.jsx's default all-ticked display state
+(`filters.fy === []`). On the *second* FY switch in the same session, the
+menu instead opened with only the *previous* selection's single box
+ticked — the helper's blind "click everything else" logic then ticked
+the WRONG box and left the INTENDED one unticked, landing on a
+completely different FY than the one actually being requested. Confirmed
+this diagnosis directly: rewriting the helper to read each option's real
+`checkbox.checked` state and click only the ones that actually need to
+change (a correct toggle, not a blind click-list) made the exact same
+multi-switch-without-reload script produce correct results on both pages.
+
+**Verified — with the corrected test methodology — that the app is
+correct as-is, no code change made**: on `ChannelPerformance.jsx`, live,
+without reloading between switches — FY2024-25 alone → "Mar 25 vs. Mar
+24", BMS this-period ₹18,16,264 (exact match to the raw file's own
+`2025-03` row), Total ₹34,81,118 (exact match); FY2025-26 alone → "Mar 26
+vs. Mar 25", BMS ₹29,71,655 / Total ₹57,19,299 (both exact matches to the
+`2026-03` row); switching back to "All" (every FY box re-ticked) → "Jul
+26 vs. Jul 25", byte-identical to the unfiltered baseline; FY2025-26 +
+Month=Dec 25 → "Dec 25 vs. Dec 24", BMS ₹37,18,452 / Total ₹71,33,453
+(exact matches to the `2025-12` row). Every case correctly re-derives the
+anchor from whatever FY/Month is currently selected, exactly as
+`comparisonMonths`'s own dashboard-wide rule specifies. Overview.jsx,
+re-tested the same way, also came back fully correct (₹2,322L for
+FY2024-25, ₹3,480L for FY2025-26 — both exact matches to every prior
+verification of these figures in this file).
+
+**No fix applied** — there was nothing to fix. Flagging the test-method
+pitfall itself in case whatever surfaced the original report used a
+similarly naive dropdown-automation approach (assume-default-state
+instead of reading actual checkbox state) — that's the more likely
+explanation for the reported symptom than an app-level regression, given
+how precisely it reproduced the false alarm here and how cleanly it
+stopped reproducing once the test itself was corrected.
+
+## 2026-08-23 — Fix: "Gift Card Transactions" KPI showed the anchor
+month's own count, not the sum across the current FY/Month selection
+
+**Confirmed as a real bug, not intentional, before touching anything**:
+the card's own `deltas={[{label:'YoY', pct: giftCard.growthPct}]}` badge
+wording was a red herring, not evidence of deliberate single-month design
+— "YoY" only describes the *comparison window* (this vs. one year back),
+it says nothing about whether the *headline number itself* is a single
+month or a full-range sum. Checked how every other total-style KPI in
+this app handles exactly this split (Overview's Activation Amount, Total
+Redemption, etc.): the anchor mechanism (`comparisonMonths`) is used
+*only* for the MoM/QoQ/YoY delta badges; the headline value is always a
+plain sum over the full currently-filtered row pool. This page's own
+"Gift Card Transactions" card was the one exception, built during Phase 1
+by reusing `thisMonths = comparisonMonths` directly for both the value
+*and* the badge — and this is the exact same "headline total silently
+collapsed to the latest month" bug already found and fixed once before,
+on the Summary page (2026-08-13 entry above), just recurring here in a
+newer page built after that fix landed elsewhere.
+
+**The fix, scoped to exactly this one KPI card**: new `selectedMonths`
+(every month the current FY/Month selection actually matches — computed
+by filtering `channelTransactionsRows`' own month list through `isShown()`,
+the same "`[]` = unrestricted, `NONE_SELECTED` = nothing, else must be in
+the list" convention this file's `isShown()` already implements for the
+page-local "Channels Shown" selector, reused here for FY/Month instead of
+a third hand-rolled copy) and `priorSelectedMonths` (`oneYearEarlier(
+selectedMonths)` — the identical months shifted back a year, not a single
+prior anchor month). New `giftCardTotal` memo sums `giftCardTransactionRows`'
+`RedemptionCount` over these two month sets instead of the anchor-based
+`thisMonths`/`priorMonths`; the KPI's `value`/`sub`/`subCount`/`deltas`
+all switched to read from it. The badge is still labeled "YoY" — the
+comparison genuinely still is a full window vs. the same window one year
+back, just no longer collapsed to one month on either side.
+
+**Deliberately NOT touched — same underlying `giftCard` memo, narrowed
+rather than replaced**: the two `ContributionCard`s ("% of Total Market",
+"% of PVR INOX Channel") and the Market Channels table above them all stay
+on the original anchor-based `thisMonths`/`priorMonths` — per the
+request's own scope, and because those percentages are ratios against the
+table's own Total/PVR INOX figures, which are *also* still anchor-based;
+switching the Gift Card numerator to a full-range sum while its
+denominator stayed anchor-based would have produced a nonsensical,
+wildly-inflated percentage (a 12-month GC total divided by one month's
+Total). `giftCard`'s returned shape was trimmed to just the 4 contribution
+percentages it still needs — its old `thisVal`/`priorVal`/`diff`/
+`growthPct` fields moved into the new, separate `giftCardTotal` memo
+instead of being duplicated.
+
+**Verified against the raw redemption cube by hand first**: FY2024-25 (12
+months) GC net count sums to 4,81,450; FY2026-27 (4 months, Apr-Jul 2026)
+sums to 4,16,653 — meaningfully larger than the old single-month figure
+(1,76,374, Jul 2026 alone) the report flagged as suspiciously small;
+FY2024-25 + FY2026-27 combined sums to 8,98,103, exactly the two
+individual totals added together.
+
+**Verified live in the app** (Playwright, using the corrected
+checkbox-state-aware dropdown helper from the immediately preceding
+investigation, not the naive one that produced a false alarm there): FY
+2024-25 alone → 4,81,450 (exact match), badge hidden and prior/diff
+correctly show "—" (the shifted-back window, Apr 2023–Mar 2024, doesn't
+exist in the dataset — same established "hide missing comparison"
+convention as everywhere else, not a new bug). FY2026-27 alone → 4,16,653
+(exact match), ▲38.4% YoY against "Apr 25 – Jul 25" (3,00,984) — checked
+by hand, (416653−300984)/300984 = 38.44%. Both FYs ticked together →
+8,98,103 (exact match); unticking FY2026-27 again correctly dropped it
+straight back to 4,81,450. All FYs ticked ("All") → 16,58,327 — an exact
+match to this same figure's own "whole dataset GC net count" verification
+from the original Channel Performance build (2026-08-21 entry above),
+confirming the fix now correctly sums the entire unfiltered dataset when
+nothing is restricted, not just its latest month. Re-checked the Market
+Channels table and both `ContributionCard`s under the same FY2024-25
+filter and confirmed them byte-identical to their pre-fix figures ("Mar 25
+vs. Mar 24", 1.38%/23.86% contribution) — confirming the fix's scope
+stayed exactly where intended. Zero console errors; clean production build
+(790.26 kB JS, 219.92 kB gzipped, no new warnings beyond the pre-existing
+500KB chunk-size notice).
+
+**Noted, not touched**: the file on disk carries an unrelated hand-edit to
+one chart's title ("Gift Card Penetration Trend — vs. All Chanllels",
+renamed from "vs. Total Market" with a typo) made outside this session's
+own edits — flagged here rather than silently reverted, per this
+project's standing practice of never overwriting a change found already
+in place without calling it out first.
+
+## 2026-08-24 — Overview KPI ribbon: Ticket/F&B % + "Uptake"→"Additional
+Revenue" rename, and an MTD/QTD/YTD preset ribbon with a generic
+custom-window badge
+
+**Part 1 — Ticket/F&B % + rename**: `fmtLacsWithPct(amount, total)` (new,
+`lib/format.js`) — `"₹6,102 L (60.5%)"`, reusing `fmtLacs`/`fmtPct` rather
+than a third ad hoc string builder; omits the parenthetical entirely (not
+a broken `"(—%)"`) when `total` is 0, same "hide broken math" convention
+as everywhere else. Applied to both "Transaction Value" and "Additional
+Revenue"'s Ticket/F&B `breakdown` entries, on **both** Overview.jsx and
+CardJourney.jsx — the request's own scope note ("Overview's KPI ribbon
+only, **for now**") was specific to Part 2's preset ribbon; Part 1 carried
+no such limit, and the exact same `breakdown` shape exists on both pages'
+already-identical Transaction Value/Uptake cards, so leaving CardJourney
+inconsistent would have read as an oversight, not a deliberate scope
+boundary. `label="Uptake"` → `label="Additional Revenue"` on both pages
+(2 call sites, confirmed via grep to be the only user-facing occurrences)
+— the underlying `Uptake` field, and every variable name derived from it
+(`totalUptake`, `cohortUptake`, `uptakeTicketFnb`, `uptakeDeltas`, etc.),
+deliberately untouched, per the request's own explicit carve-out.
+
+**Part 2 — MTD/QTD/YTD preset ribbon (Overview only, for now)**: 3
+right-aligned buttons above the KPI grid. Each reuses `presetWindows(anchor)`
+(new, `lib/comparisons.js`) — literally the same `quarterToDateMonths()`/
+`fyToDateMonths()` builders the MoM/QoQ/YoY engine already computes
+from — so a click sets Month/FY to the *exact* window a badge is already
+showing, never a second hand-authored definition of "this month"/"this
+quarter"/"this FY to date". `anchor` is the latest month in the current
+`comparisonMonths` (so clicking YTD while some other selection is active
+targets *that* selection's own current window, not always the dataset's
+global latest month). Clicking a preset calls `setFilter('fy', ...)` then
+`setFilter('month', ...)` (FY first — its own pruning logic reads the
+*old* Month value, but the Month call right after overwrites it
+unconditionally either way, so the final state is always exactly
+`{fy:[targetFY], month:[...targetMonths]}` regardless of what was
+selected before).
+
+**Flagged before building, decided with the user**: at the page's true
+default (FY=All, Month=All, untouched) — not YTD (scoped to the latest FY
+only) and not "custom" (whose own "same months last year" rule breaks
+down across the full 28-month dataset) — the user chose to keep today's
+existing all-3-badges behavior completely unchanged, rather than
+auto-highlighting a preset or showing no badge at all. Implemented as a
+third `isTrueDefault` branch (`filters.fy.length===0 &&
+filters.month.length===0`) in the shared `kpiDeltas()` selector, checked
+*before* falling through to "custom mode" — so an untouched landing page
+looks exactly as it always has.
+
+**Button "active" state is click-tracked, not value-derived** — a
+deliberate choice, not the simpler alternative: the request explicitly
+named Region (among "any filter") as something that should drop the
+active state, but Region never touches `filters.fy`/`filters.month` at
+all, so a pure "does the current fy/month match preset X's window"
+derivation *couldn't* satisfy that (Region changing would leave such a
+check unaffected). Implemented instead as real `activePreset` state,
+cleared by a `useEffect` the moment `filters` changes for any reason
+*other* than the very click that just set it (a `'pending'` sentinel in a
+ref, consumed by the effect's next run to capture the resulting `filters`
+object as the new "expected" snapshot; any *later* change — to any filter
+whatsoever — no longer matches that snapshot and clears `activePreset`).
+Confirmed live: clicking YTD then changing Region correctly un-highlights
+YTD and switches its badge from "YoY" to the generic "vs. Last Year"
+label, even though Month/FY themselves never changed.
+
+**Custom-mode badge**: two new exported helpers,
+`computeCustomWindowComparison()`/`computeCustomWindowRatioComparison()`
+(`lib/comparisons.js`) — unlike the MoM/QoQ/YoY engine (which always
+re-derives 3 *different* anchor-based sub-windows), these treat the
+caller's entire `selectedMonths` array as *one* window, compared directly
+against the identical months one year earlier (`oneYearEarlier`,
+already exported). `selectedMonths` itself (Overview.jsx, new) is *not*
+`comparisonMonths` — it's every month the current FY/Month selection
+actually matches (`options.months`, already FY-narrowed, filtered by
+`matchesFilter(filters.month, ...)` — the same `[]`=unrestricted/
+`NONE_SELECTED`=nothing convention this app already uses everywhere else)
+— because `comparisonMonths` itself collapses a bare FY-only selection
+down to that FY's single latest month (by design, for the anchor
+mechanism), which would silently shrink a "whole FY, no month picked"
+custom selection down to one month's worth of data if reused here.
+`pctChange()` was also exported (previously private, and already
+duplicated once page-locally by ChannelPerformance.jsx before this
+export existed) so this doesn't become a third hand-rolled copy.
+
+**Verified live in the app** (Playwright): true default — ₹8,267L, all 3
+badges (▲209.2% MoM/QoQ, ▲95.9% YoY), no button active, byte-identical to
+every prior baseline verification in this file. Click MTD — ₹1,150L (Jul
+2026 alone), only "▲209.2% MoM" shown, MTD highlighted. Click QTD — same
+₹1,150L (July is itself a calendar-quarter start, so QTD's window equals
+MTD's this month), only "▲209.2% QoQ" shown, QTD highlighted (confirms
+the two buttons track independently even when their windows coincide).
+Click YTD — ₹2,465L (Apr–Jul 2026, FY2026-27's own YTD total, matching
+every prior FY2026-27 verification in this file), only "▲95.9% YoY"
+shown. Region=NORTH afterward — YTD un-highlights, badge becomes "▲384.8%
+vs. Last Year", value narrows to ₹2,041L. Manual custom combination (FY
+2026-27 + Month=Apr,May,Jun, matching no preset) — no button active,
+single "▲48.3% vs. Last Year" badge, ₹1,315L. Transaction Value/Additional
+Revenue breakdowns confirmed reading e.g. "₹1,074 L (71.2%)"/"₹435 L
+(28.8%)" (summing to the card's own total exactly). Zero console errors
+throughout; clean production build (791.98 kB JS, 220.56 kB gzipped, no
+new warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-25 — Overview KPI ribbon: 2 fixes — breakdown-panel overlap,
+and the true-default state collapsed into the same single-badge rule as
+every other non-preset selection
+
+**1. Breakdown panel overlap**: `Kpi.jsx`'s `breakdown` block (the
+Ticket/F&B panel on Transaction Value/Additional Revenue) sized its value
+line at `text-xs` — fine for the old bare-amount values ("₹6,102 L"), but
+the immediately preceding entry's added `(NN.N%)` suffix made the widest
+realistic string ("₹6,102 L (60.5%)", ~16 characters) wide enough to
+visually run into the main number beside it. Value line `text-xs` (12px)
+→ `text-[10px]`; label line `text-[9px]` → `text-[8px]`; the block's own
+`pl-2.5`/`gap-2.5`/`gap-1.5` trimmed to `pl-2`/`gap-2`/`gap-1` to reclaim a
+few more px; the main column's reserved clearance bumped `pr-20` → `pr-24`
+to match. Verified at the exact widest case named in the request
+("₹6,102 L (60.5%)" / "₹3,980 L (39.5%)", Transaction Value unfiltered) —
+clean separation, no overlap, confirmed via screenshot not just a code
+read.
+
+**2. True-default 3-badge carve-out removed**: the immediately preceding
+entry's `kpiDeltas()` deliberately kept a third branch — FY=All/Month=All
+showing all 3 MoM/QoQ/YoY badges unchanged, a call made explicitly with
+the user at the time to preserve the untouched landing page's look. This
+request reversed that decision: "ANY time no MTD/QTD/YTD preset is
+active... this includes the default state" should collapse to the same
+single generic badge as any other custom selection, no exception. Fixed
+by deleting the `isTrueDefault` branch and its backing
+`filters.fy.length===0 && filters.month.length===0` check entirely —
+`kpiDeltas()` is now strictly 2-way (a preset's own single labeled badge,
+or the generic "vs. Last Year" badge otherwise), and `selectedMonths`
+(already built for the custom-mode math) now also drives the true
+default's own comparison: with FY/Month both unrestricted, it resolves to
+literally all 28 months in the dataset, compared against the same 28
+months shifted back a year (of which only the ~16-month overlap with the
+real dataset contributes to the "prior" sum) — the same "whatever the
+literal selection implies" rule applied with no special case, exactly as
+requested.
+
+**Verified live in the app**: true default — every KPI now shows exactly
+1 badge ("▲130.9% vs. Last Year" on Activation Amount, etc.), confirmed by
+counting rendered badge `<span>` elements directly (was 3, now 1), no
+preset button highlighted. Custom combination (FY2026-27 + Month=Apr,
+May,Jun) — unchanged from the immediately preceding verification, 1
+badge, "▲48.3% vs. Last Year", ₹1,315L. Clicking YTD from that same
+selection — badge label switches to "▲48.3% YoY", value stays ₹1,315L
+(expected, not a bug: Apr-Jun of FY2026-27 already *is* that FY's
+YTD-through-June window, so YTD's own computed window coincides exactly
+with what was already selected — only the label changes, confirming the
+preset and custom paths agree on the underlying number when their windows
+match). Zero console errors; clean production build (791.84 kB JS, 220.54
+kB gzipped, no new warnings beyond the pre-existing 500KB chunk-size
+notice).
+
+## 2026-08-25 — Overview KPI ribbon: fixed the FY-toggle bug in the
+"custom window" badge, plus 2 display changes to the same badge
+
+**1. Real bug — root cause confirmed before fixing**: the generic (no
+preset active) badge changed when an OLDER FY (e.g. FY2024-25) was ticked
+on/off, even with Month=All and even though the newest, currently-relevant
+FY (FY2026-27) stayed selected throughout. Root cause, exactly as
+suspected in the request: `selectedMonths` (what this badge's window sums
+over) was built as `options.months` (FY-narrowed to *whichever* FYs happen
+to be ticked) filtered by the Month selection — so toggling FY2024-25
+changed `options.months`' own FY-narrowing, which changed `selectedMonths`,
+which changed the badge, even though the badge is only ever supposed to
+be about the *latest* selected FY's own months-to-date. Every other
+comparison on this ribbon (MoM/QoQ/YoY, MTD/QTD/YTD) derives everything
+from a single anchor month and is immune to this by construction; this one
+badge was the sole holdout still reading a FY-narrowed month LIST instead
+of anchoring off a single month.
+
+**The fix, reusing existing primitives rather than inventing a new
+window definition**: whenever Month=All, `selectedMonths` is now literally
+`presets.ytd` — the exact same `fyToDateMonths(anchorMonth)` array the
+YTD button itself would set (`anchorMonth` itself is already immune to an
+older FY's toggle state, as long as the FY it actually falls in stays
+selected — confirmed by re-reading `comparisonMonths`' own resolution
+logic before writing this fix, not assumed). Whenever Month is an
+explicit restriction, `selectedMonths` is now the subset of the *literal*
+ticked months (`filters.month` itself) that fall in the anchor's own FY —
+not `options.months` at all anymore — so an unrelated FY simultaneously
+ticked in the FY filter can never leak extra months in or out. This also
+directly implements the request's own explicit edge case ("ignore which
+OTHER FYs are simultaneously ticked, using only the latest FY + the
+selected months within it").
+
+**2. Styling bug**: `DeltaBadge.jsx`'s pill had no explicit `leading-none`,
+so its text could inherit an ambient line-height taller than the
+`px-1.5 py-0.5` padding box accounted for — a glyph's ascender/descender
+could sit outside the colored background instead of fully covered by it.
+Added `leading-none` and bumped vertical padding `py-0.5` → `py-1` for a
+bit more breathing room. Also trimmed the trailing space a `label=""`
+call (see fix 3 below) used to leave dangling after the `%` sign.
+
+**3. "vs. Last Year" wording replaced**: the generic badge's `label` is
+now `''` (same convention `MetricComparisonCard.jsx` already uses for its
+own unlabeled MoM/YoY cells) — `kpiDeltas()` (Overview.jsx) renders a
+plain "▲ X%"/"▼ X%" for this case, `DeltaBadge` no longer appending a
+trailing space when there's no label. A new small-font line underneath
+(`Kpi.jsx`'s new `deltaCaption` prop, styled identically to `Card.jsx`'s
+own `subtitle` — the exact class list Channel Performance's own
+date-range subtitles already render with) states the two real date ranges
+being compared, e.g. "Apr 26 – Jul 26 vs. Apr 25 – Jul 25". `periodLabel()`
+— previously page-local to `ChannelPerformance.jsx` — was moved to
+`lib/format.js` and exported specifically for this reuse, per the
+request's own "reuse that page's existing date-formatting logic, don't
+write a new one." The caption updates for *every* state, not just custom
+mode (MTD's own month vs. its prior, QTD's quarter-to-date vs. its prior,
+YTD's FY-to-date vs. its prior, or the custom window vs. its prior) — one
+shared `windowDateRangeLabel` value computed once and passed to all 5
+cards, since the window is a ribbon-wide concept, not per-KPI.
+
+**Verified against hand-picked scenarios, live in the app**: FY=All +
+Month=All (all 3 FYs ticked) — badge "▲95.9%", caption "Apr 26 – Jul 26
+vs. Apr 25 – Jul 25", headline ₹8,267L. Unticking FY2024-25 (Month still
+All) — badge and caption byte-identical to the previous line (unaffected,
+as required), headline correctly drops to ₹5,945L (that figure is
+supposed to change — it's the real activation total for whichever FYs are
+selected, an entirely different, already-correct computation from the
+badge). Re-ticking FY2024-25 — back to ₹8,267L, badge/caption still
+unchanged throughout. FY2026-27 + Month=Apr,May,Jun (FY2024-25 unticked)
+— badge "▲48.3%", caption "Apr 26 – Jun 26 vs. Apr 25 – Jun 25",
+headline ₹1,315L; ticking FY2024-25 alongside — every one of those three
+values stayed exactly identical. Clicking YTD afterward — badge
+switches to "▲95.9% YoY" (the labeled preset variant), same caption
+format, confirming the caption line itself isn't specific to custom mode.
+Screenshotted the ribbon at both the default and YTD-active states —
+badge pills render as clean, fully-covered backgrounds with no clipped
+text at either size. Zero console errors; clean production build
+(792.17 kB JS, 220.65 kB gzipped, no new warnings beyond the pre-existing
+500KB chunk-size notice).
+
+## 2026-08-25 — QTD converted to a Q1-Q4 dropdown gated on real data
+availability; per-card comparison caption consolidated into one shared line
+
+Two changes to Overview.jsx's MTD/QTD/YTD control row, both reusing
+existing window/anchor machinery rather than adding new comparison logic.
+
+**QTD → Q1/Q2/Q3/Q4 dropdown**: new `lib/comparisons.js#fyQuarterMonths(anchor)`
+— returns the 4 individual 3-month arrays (Q1-Q4) of the FY containing
+`anchor`, built from the same `monthIndex`/`indexToMonth` arithmetic every
+other window-builder in that file already uses. `Overview.jsx` gained
+`anchorFYMonths` (`options.months` filtered to just the anchor's own FY —
+immune to any *other* FY being simultaneously ticked, same "derive
+everything from the single anchor month" principle the earlier FY-toggle
+bug fix established) and `quarterOptions` (each of the 4 quarters
+intersected with `anchorFYMonths`: 3 real months → enabled/full, 1-2 →
+enabled/"(to date)", 0 → disabled). Clicking a quarter
+(`applyQuarter()`) reuses the exact `applyMonths()` helper MTD/YTD already
+call — sets FY/Month to that quarter's real months, marks `activePreset:
+'qtd'` and a new `activeQuarter` (1-4) state. No changes were needed to
+`kpiDeltas()`/the comparison engine itself: since every KPI's QoQ figure
+is computed by `computeComparisons(rowsForComparison, field,
+comparisonMonths)`, and `comparisonMonths` resolves to the *anchor* month
+of whatever's in `filters.month`, picking Q1 (say) makes the anchor the
+quarter's last real month, and the engine's own `quarterToDateMonths(anchor)`
+window already reconstructs exactly that quarter's real months (the full
+3 for a complete quarter, or just the ones that exist for a partial one)
+— the QoQ math was already anchor-correct by construction, only the UI
+needed building.
+
+**Single shared comparison-date caption**: removed the `deltaCaption` prop
+Kpi.jsx gained the immediately preceding session (and its one line of
+JSX) — it's now unused, since all 5 per-card call sites were deleted in
+favor of one `<p>` rendered once, top-left of the preset button row
+(mirroring where MTD/QTD/YTD sit top-right), reading the same
+`windowDateRangeLabel` string every card used to render individually.
+
+**Verified live in the app** (Playwright, dev server): opening the QTD
+dropdown against the dataset's real Apr 2024–Jul 2026 range with the
+anchor in FY2026-27 showed exactly `Q1` (enabled), `Q2 (to date)`
+(enabled), `Q3`/`Q4` (disabled, both fully in the future) — matching the
+intended full/partial/future-disabled behavior exactly. Clicking Q1 set
+the caption to "Apr 26 – Jun 26 vs. Apr 25 – Jun 25" and Activation
+Amount to ₹1,315L / ▲48.3% QoQ / 1,94,134 cards; the QTD button itself
+relabeled to "Q1 ▾". Clicking MTD afterward re-anchored off the
+now-current Jun 26 month ("Jun 26 vs. Jun 25", ₹510L / ▲41.0% MoM);
+clicking YTD re-anchored the same way ("Apr 26 – Jun 26 vs. Apr 25 – Jun
+25", ▲48.3% YoY — same window as Q1 had, since the anchor hadn't moved).
+Reopening the dropdown and picking Q2 ("to date") correctly collapsed to
+just Jul 26 alone ("Jul 26 vs. Jul 25", ₹1,150L / ▲209.2% QoQ). Counted
+exactly one `.italic` `<p>` element on the entire rendered page throughout
+every scenario above — confirming no per-card caption duplicates survived
+the consolidation. Zero console errors across all 5 states tested; clean
+production build (794.12 kB JS, 221.14 kB gzipped, no new warnings beyond
+the pre-existing 500KB chunk-size notice).
+
+## 2026-08-26 — Channel Performance: root-caused and fully fixed the
+"collapses to the anchor month" bug across every section, not just the
+one KPI patched before
+
+Same class of bug flagged (and only partially fixed) twice already on
+this page — this pass found and eliminated every remaining instance
+instead of patching a 3rd symptom.
+
+**Root cause, confirmed by reading every "current window" computation on
+the page rather than assuming it was isolated to the 3 sections named in
+the report**: `channelRows`/`totalThis`/`totalPrior` (the Market Channels
+table) and `giftCard` (both `ContributionCard`s — "% of Total Market" and
+"% of PVR INOX Channel") all read `thisMonths = comparisonMonths` —
+`comparisonMonths` is the single-ANCHOR-month concept every MoM/QoQ/YoY
+delta badge elsewhere in this app needs (explicit Month selection wins,
+otherwise it collapses to just the latest month under the active
+filters), never meant to stand in for "every month the current selection
+covers." Whenever Month is left at "All" — the normal way to view a
+whole FY, and also the page's own true-default state — `comparisonMonths`
+is *always* exactly one month, so these 3 sections silently summed just
+that one anchor month (July) instead of the real window, exactly the
+reported symptom. This is the same "headline total silently collapsed to
+the latest month" bug class already fixed once on Summary (2026-08-13)
+and once already on this exact page's own "Gift Card Transactions" KPI
+(2026-08-23) — that earlier fix was deliberately scoped to just the one
+KPI it named ("the Market Channels table and the two ContributionCard
+percentages deliberately keep using the anchor-based thisMonths/
+priorMonths above, unchanged, per this fix's own scope"), which is
+precisely why the bug was still live in the 3 sections reported this
+time — never re-checked dashboard-wide, patched once per symptom instead.
+
+**The fix**: deleted the separate `thisMonths`/`priorMonths`
+(`comparisonMonths`-based) pair entirely — there is no code path on this
+page that reads `comparisonMonths` anymore (confirmed via grep, dropped
+from the `useFilters()` destructure too). Every section that needs "which
+months does the current FY/Month selection cover" — the table, both
+Contribution cards, and the GC Transactions KPI (already correct from the
+2026-08-23 fix) — now reads the exact same, single `selectedMonths`/
+`priorSelectedMonths` pair (every month the current FY/Month selection
+actually matches, via the page's own `isShown()`-based lookup against
+`channelTransactionsRows`' own `YearMonth` values — necessary since that
+cube, and `giftCardTransactionRows`, are deliberately exposed unfiltered
+by `FilterContext.jsx` so this page can always reach the correct prior-
+year window on the other side of whatever's selected). One canonical
+window, zero remaining independent copies.
+
+**Checked every other section for the same symptom, not just the 3
+named**: `monthlyTrend`, `contributionMix`, and both "Gift Card
+Penetration Trend" charts (vs. Total, vs. PVR INOX) never computed a
+"current window" value at all — each always plots the full 28-month
+history by design, independent of any period selection — confirmed by
+re-reading each one's own `useMemo`, not assumed safe. Nothing else on
+this page derives a period sum.
+
+**Verified against hand-computed ground truth (Node script against the
+raw `channelTransactions.json`/`redemptionCube.json`) for all 3 requested
+scenarios, before checking the UI, then confirmed live and screenshotted**:
+
+| Scenario | Total this / prior | PVR INOX this / prior | GC net count this / prior | GC % Total | GC % PVR INOX |
+|---|---|---|---|---|---|
+| FY2026-27 + Month=All (Apr–Jul 26 vs. Apr–Jul 25) | 2,15,74,445 / 2,10,51,329 | 13,83,846 / 14,46,075 | 4,16,653 / 3,00,984 | 1.93% / 1.43% | 30.11% / 20.81% |
+| FY2026-27 + Month=Jul only (Jul 26 vs. Jul 25) | 59,58,966 / 70,14,303 | 4,05,727 / 4,43,432 | 1,76,374 / 83,953 | 2.96% / 1.20% | 43.47% / 18.93% |
+| FY=All + Month=All (Apr 24–Jul 26 vs. Apr 23–Jul 25) | 14,21,88,871 / 7,80,16,842 | 1,05,00,845 / 61,18,897 | 16,58,327 / 7,82,434 | 1.17% / 1.00% | 15.79% / 12.79% |
+
+Every figure matched the hand-computed target to the rupee/card, both in
+the Market Channels table and both Contribution cards, for all 3
+scenarios — confirming the table's own subtitle correctly read "Apr 26 –
+Jul 26 vs. Apr 25 – Jul 25" / "Jul 26 vs. Jul 25" / "Apr 24 – Jul 26 vs.
+Apr 23 – Jul 25" instead of collapsing to a single month in the first and
+third cases (the exact bug). The whole-dataset GC net count (16,58,327)
+also exactly matches this same figure's own prior verification from the
+2026-08-21 build entry above, confirming this fix didn't change what
+"whole dataset" sums to, only fixed the FY-scoped/default-scoped cases
+that used to collapse. Zero console errors across all 3 scenarios; clean
+production build (794.06 kB JS, 221.07 kB gzipped, no new warnings beyond
+the pre-existing 500KB chunk-size notice).
+
+## 2026-08-26 — Channel Performance: section reorder, single top-right
+comparison-date line, dropped the "pp" point-delta
+
+Six layout/display changes, all downstream of the just-confirmed window
+fix above (verified against the corrected multi-month figures, not the
+buggy July-only ones the page used to show).
+
+**Section order reversed**: Market Channels now renders first, Gift Card
+Performance below it — the opposite of the "Gift Card first, it's the
+page's main point" ordering set a few requests ago; this request
+explicitly supersedes that.
+
+**One shared comparison-date line**: a single italic `<p>`, right-aligned
+at the very top of the page (mirrors where Overview's own single caption
+line sits — top-left there, since that page's line shares a row with the
+MTD/QTD/YTD buttons; this page has no equivalent control row, so it's
+simply right-aligned on its own), reading `{thisLabel} vs. {priorLabel}`.
+Every per-card date mention elsewhere on the page was removed in the same
+pass so this is the only place dates appear:
+  - The "Channel Performance — Period Comparison" `Card`'s own
+    `subtitle={...}` (previously `${thisLabel} vs. ${priorLabel}`, i.e.
+    the exact same string the top line now states) — removed.
+  - The table's "This Period"/"Prior Period" column headers — replaced
+    with the literal date ranges themselves (`{thisLabel}`/`{priorLabel}`,
+    the same `periodLabel()`-built strings every other date caption on
+    this page already uses) rather than removed outright, per the
+    request's own wording ("replace... with the actual date ranges").
+  - The "Gift Card Transactions" KPI's `sub={`vs. ${priorLabel}`}` —
+    removed entirely; the card now shows only the value and a plain
+    `▲ 111.9%` delta with no trailing label (dropped the `'YoY'` label too,
+    per the request's literal target text "keep just '▲ 44.3%'" — with
+    the date line now stating what's being compared, a "YoY" tag on the
+    badge itself was redundant). The ghost `subCount` line (the invisible-
+    but-selectable raw counts) is untouched — it was never date-bearing
+    text to begin with.
+  - Both `ContributionCard`s ("% of Total Market", "% of PVR INOX
+    Channel") — the two-value "2.10% [date] / 1.40% [date]" layout and the
+    percentage-POINT "+1.76 pp" delta are both gone. `ContributionCard`
+    now renders just the current period's own %, plus a plain relative-%
+    change badge underneath — reusing `DeltaBadge` (the same component
+    every other KPI's delta renders through) fed `pctChange(thisVal,
+    priorVal)` instead of the old point-difference arithmetic, with an
+    empty label for the same "no more specific name than 'the change'"
+    reason the GC Transactions badge above also dropped its label.
+    `ContributionCard`'s own `thisLabel`/`priorLabel` props are gone; its
+    only remaining inputs are `label`, `thisVal`, `priorVal`, `accent`.
+  - Left untouched, deliberately: the two "Gift Card Penetration Trend"
+    charts' own endpoint subtitles ("0.71% (Apr 24) → 2.96% (Jul 26)") —
+    a different kind of date info (the chart's own full-history
+    endpoints, unrelated to the FY/Month-selected comparison window this
+    request's date line is about), not "comparison-date text" in the
+    sense this request meant.
+
+**Verified live** (Playwright, dev server), unfiltered and under an
+FY2026-27+Month=Jul filter: exactly one `p.italic` element on the page
+either way ("Apr 24 – Jul 26 vs. Apr 23 – Jul 25" / "Jul 26 vs. Jul 25"),
+matching the table's own column headers exactly in both states (confirmed
+the headers read the real date ranges, not "This Period"/"Prior Period").
+Zero " pp" substring anywhere in the rendered page text. GC Transactions
+card text confirmed as `Gift Card Transactions16,58,327▲ 111.9%...` (no
+"vs." text, no "YoY" label) unfiltered and `...1,76,374▲ 110.1%...`
+filtered. Both Contribution cards confirmed single-value + plain badge
+(`1.17%▲ 16.3%` / `43.47%▲ 129.6%` unfiltered vs. filtered), each
+`pctChange` figure hand-checked against the already-verified contribution
+percentages from the immediately preceding fix (e.g. unfiltered "% of
+Total Market": (1.1662−1.0025)/1.0025×100 ≈ 16.3%, matching the rendered
+badge). `h2` order confirmed `["Market Channels", "Gift Card
+Performance"]`. Screenshotted the full page to confirm layout/spacing
+reads cleanly with the new single-line date caption and the simplified
+cards. Zero console errors; clean production build (793.56 kB JS, 220.99
+kB gzipped — smaller than before, net markup removed — no new warnings
+beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-28 — Channel Performance moved next to Overview in the nav;
+Card Journey's KPI ribbon brought up to Overview's latest MTD/QTD/YTD state
+via a new shared `usePresetWindow()` hook (no second copy of that logic)
+
+**Part 1 — nav order** (`Layout.jsx`): `TABS` reordered so "Channel
+Performance" sits directly after "Overview" (was last, after "Card
+Journey"). Pure array reorder, no route/behavior change.
+
+**Part 2 — Card Journey's ribbon**: brought up to exactly Overview's own
+latest state (MTD/QTD-as-Q1-Q4-dropdown/YTD control, one collapsed
+`▲/▼ X%` badge per KPI instead of 3 stacked MoM/QoQ/YoY badges, one shared
+italic top-left comparison-date line) — per the request's own "reuse the
+exact shared anchor/window functions... do not reimplement" instruction,
+not a second hand-built copy of Overview's control.
+
+**Root extraction, done before touching either page's JSX**: Overview's
+entire MTD/QTD/YTD state block (~130 lines — `anchorMonth`, `presets`,
+`selectedMonths`, the Q1-Q4 `quarterOptions` gating, `activePreset`/
+`activeQuarter`/`qtdMenuOpen` state, `applyPreset`/`applyQuarter`, the
+filters-changed-clears-the-preset `useEffect`, and `windowDateRangeLabel`)
+turned out to be entirely generic — it only ever reads `comparisonMonths`/
+`filters`/`setFilter`/`options` from `useFilters()` plus the anchor/window
+primitives already in `lib/comparisons.js`, nothing Overview-specific.
+Extracted verbatim into a new exported `usePresetWindow()` hook in
+`lib/comparisons.js` (added `useState`/`useRef`/`useEffect`/`useMemo` +
+`useFilters`/`periodLabel` imports there — checked first for a circular-
+import risk: `FilterContext.jsx`/`format.js`/`constants.js` import nothing
+from `comparisons.js`, so `comparisons.js` importing them is safe). The
+also-Overview-local `kpiDeltas()` (the 2-way "one preset badge, or the
+generic unlabeled fallback" selector) was promoted alongside it, exported
+from the same file. `Overview.jsx` itself was rewired to call
+`usePresetWindow()`/import `kpiDeltas` instead of keeping its own copies —
+confirmed behavior-preserving before touching CardJourney.jsx at all (see
+its own verification below): this was a pure extraction, not a rewrite.
+
+**New cohort-aware "custom window" comparators**: `computeCustomWindowComparison`/
+`computeCustomWindowRatioComparison` (the generic-badge engine, already
+used by Overview) only ever match a single `YearMonth` field — cohortCube.json
+rows have no such field, only `ActivationYearMonth`/`RedemptionYearMonth`
+independently. Added `computeCustomWindowCohortComparison`/
+`computeCustomWindowCohortRatioComparison` — the same parallel
+`computeCohortComparisons`/`computeCohortRatioComparisons` already draw
+against `computeComparisons`/`computeRatioComparisons`, just for the one
+comparison shape those two never covered (custom window, not anchor-
+derived MoM/QoQ/YoY). Built on the existing `sumForMonthsCohort()`
+window-matcher, not a new one.
+
+**CardJourney.jsx wiring**: calls `usePresetWindow()` for the control
+state exactly as Overview does; "Cards Activated" reuses
+`computeCustomWindowComparison(activationRowsForComparison, ...)` verbatim
+(same plain-`YearMonth`-field pool Overview's own "Activation Amount"
+reads); the other 4 KPIs ("Of Those, Redeemed", "Transaction Value",
+"Additional Revenue", ATV) use the new cohort-aware custom-window
+functions over `cohortRowsForComparison`/`cohortRowsForComparisonWithTV` —
+the same pools this page's own MoM/QoQ/YoY deltas already read, so the
+preset and custom paths can't drift onto different row pools. Every KPI's
+`deltas` prop switched from a hardcoded 3-badge array to
+`kpiDeltas(activePreset, xDeltas, xCustomPct)`. The MTD/QTD-dropdown/YTD
+JSX block is copied verbatim from Overview's own render (same class names,
+same structure) rather than a re-styled approximation, so the two pages'
+controls are visually identical, not just behaviorally.
+
+**Verified Overview is unaffected by the extraction** (Playwright, dev
+server): default state, MTD, first-enabled-quarter (Q1), and YTD all
+reproduced the exact figures already on record from this file's own prior
+Overview verifications (₹8,267L/95.9%; ₹1,150L/209.2% MoM; ₹1,315L/48.3%
+QoQ; ₹1,315L/48.3% YoY) — byte-identical, confirming the hook extraction
+changed nothing about Overview's own behavior.
+
+**Verified Card Journey's new control against the exact cases the request
+named**: default state — caption "Apr 26 – Jul 26 vs. Apr 25 – Jul 25",
+Cards Activated ₹8,267L/▲95.9% (matching Overview's own "Activation
+Amount" exactly, as designed), Of Those Redeemed ₹6,407L/▲87.8% (its own
+cohort-scoped figure). MTD — "Jul 26 vs. Jul 25", ₹1,150L/▲209.2% MoM
+(Cards Activated, exact match to Overview) / ₹730L/▲208.4% MoM (Of Those
+Redeemed). QTD dropdown — Q1 enabled/full, Q2 enabled/"(to date)", Q3/Q4
+disabled, identical gating to Overview's own dropdown for the same
+Apr2024–Jul2026 dataset range. Clicking Q1 — ₹1,315L/▲48.3% QoQ (exact
+match to Overview) / ₹932L/▲45.1% QoQ. YTD (anchor unchanged at Jun 26
+after Q1) — same window, label switches to YoY, values unchanged — same
+"preset changes the label, not necessarily the window" behavior Overview
+itself already exhibits. **Custom range** (FY2026-27 + Month=Apr+Jun,
+deliberately non-contiguous so it can't coincide with any preset's own
+window) — no MTD/QTD/YTD button shows active, badges render with no
+trailing label (`▲ 59.1%` / `▲ 59.4%`, not "▲ 59.1% QoQ"), matching
+Overview's own generic-badge convention exactly. **FY-toggle regression
+check** (the exact bug class Overview itself was fixed for) — ticking
+FY2024-25 alongside FY2026-27 under that same custom Month selection left
+the caption and both badges byte-identical (₹937L/▲59.1%, ₹592L/▲59.4%);
+unticking FY2024-25 again reproduced the same figures exactly — confirming
+Card Journey's custom-window badge is immune to an unrelated older FY
+being simultaneously ticked, the same guarantee Overview's own fix
+established. Zero console errors across every state tested; screenshotted
+the ribbon to confirm the single-badge-per-card layout and the MTD/QTD/YTD
+row render correctly. Clean production build (796.44 kB JS, 221.87 kB
+gzipped, no new warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-29 — Phase 2: rolled MTD/QTD/YTD + single collapsed delta +
+single date line out to Activation, Redemption · Box Office, Redemption ·
+F&B
+
+Same standard Overview.jsx/CardJourney.jsx already established, applied to
+all 3 pages identically — no per-page reinvention.
+
+**Every page**: calls the shared `usePresetWindow()` hook (`lib/comparisons.js`)
+for the MTD/QTD(Q1-Q4 dropdown)/YTD control state, renders the exact same
+control-row JSX Overview/CardJourney already use (copied verbatim, not
+re-styled), and switches every KPI's `deltas` prop from a hardcoded 3-badge
+`[MoM, QoQ, YoY]` array to `kpiDeltas(activePreset, xDeltas, xCustomPct)` —
+one collapsed badge, matching whichever preset (if any) is active. Each
+page's existing anchor-based `xDeltas` (`computeComparisons(...,
+comparisonMonths)`, already correctly built on the FY/Month-unrestricted
+`*RowsForComparison` pools from the 2026-08-25 FY-comparison-pool fix) is
+untouched — the only new computation per KPI is `xCustomPct =
+computeCustomWindowComparison(sameRowsForComparisonPool, field,
+selectedMonths)`, the generic-badge fallback every other rolled-out page
+already uses, fed the *same* row pool the anchor-based delta already reads
+so the preset and custom paths can never drift onto different data.
+
+- **Activation.jsx**: "Total Activation" + all 3 per-source KPIs
+  (Aggregators/Corporate/Cinema) collapsed. `sourceCustomPct` is a
+  per-source map, mirroring the pre-existing `sourceDeltas` map exactly.
+- **RedemptionBoxOffice.jsx / RedemptionFnb.jsx**: "Box Office/F&B
+  Redemption" + "Digital Card Redemption" collapsed, both built on the same
+  `netHeadRows(...)`-based row pools (`netBoxOfficeRowsForComparison`/
+  `digitalRowsForComparison`, or the F&B equivalents) their existing deltas
+  already used — `computeCustomWindowComparison` runs directly over these
+  pools with no netting-aware variant needed, since `netHeadRows()` already
+  returns real per-row data (Cancel Redeem rows attributed via the
+  Region+Month winner map at the row level), not a pre-summed netted
+  total — a plain row-pool comparator works on it exactly like it would on
+  any other filtered row array.
+- No per-KPI comparison-date text existed on any of these 3 pages before
+  this pass, so item 3 (remove per-KPI date text) had nothing to remove —
+  confirmed by reading each file first, not assumed.
+
+**Audit (item 4)**: grepped all 3 pages for `oneYearEarlier`/`monthIndex`/
+`quarterToDateMonths`/`fyToDateMonths`/`presetWindows(`/`fyQuarterMonths(`
+— zero hits outside the shared `lib/comparisons.js` imports themselves.
+No page re-derives any anchor/window arithmetic locally; every comparison
+on all 3 pages routes through `computeComparisons`/`computeCustomWindowComparison`/
+`usePresetWindow`, the same shared primitives Overview/CardJourney/Channel
+Performance already use.
+
+**Verified all 3 pages, all 3 requested cases, live** (Playwright, dev
+server): MTD/QTD(Q1-Q4 dropdown, same Q1-full/Q2-partial/Q3-Q4-disabled
+gating already verified on Overview)/YTD preset switching all correctly
+updated every KPI and the single top-left caption; a custom, deliberately
+non-contiguous Month selection (FY2026-27 + Apr+Jun) on every page showed
+no active preset button and an unlabeled `▲/▼ X%` badge, matching the
+generic-badge convention exactly; the FY-toggle regression check (ticking
+FY2024-25 alongside FY2026-27 under that same custom selection, then
+unticking it again) left every page's caption and KPI figures
+byte-identical across all 3 states — confirming none of the 3 pages have
+the FY-toggle bug class already fixed once on Overview/Channel Performance.
+Cross-page consistency, not just per-page correctness: Activation.jsx's
+own "Total Activation" custom-range figure (₹937L / ▲59.1%) is identical to
+Summary.jsx's "Total Activation" card for the same filter combination (see
+the Phase 3 entry below) — both read the exact same
+`activationRowsForComparison` pool through the exact same shared functions.
+Zero console errors across every scenario on every page; clean production
+build (802.37 kB JS, 221.98 kB gzipped, no new warnings beyond the
+pre-existing 500KB chunk-size notice).
+
+## 2026-08-29 — Phase 3: same rollout for Summary (MetricComparisonCard),
+Cancel Redeem, Trends — including a genuinely new capability the other
+pages didn't need
+
+**Cancel Redeem**: identical pattern to Phase 2 — `usePresetWindow()` +
+control row + single top-left caption; "Cancel Redeem"'s single KPI
+collapsed from `[MoM, QoQ, YoY]` to `kpiDeltas(activePreset, deltas,
+totalCustomPct)`, `totalCustomPct` built from the same
+`cancelRowsForComparison` (already carrying the synthesized
+`AbsRedemptionAmount` field the existing anchor-based `deltas` already
+uses) via `computeCustomWindowComparison`.
+
+**Trends.jsx**: has no KPI/delta anywhere on the page (confirmed directly,
+not assumed) — nothing to collapse, and nothing for the "shared anchor/
+window function" audit to find. Still gained the MTD/QTD/YTD control row +
+top-left caption for dashboard-wide UI consistency, since the control
+genuinely does something real here too: it sets the same FY/Month filter
+every trend chart on this page already respects, just exposed the same way
+every other page now exposes it, rather than only through the global
+filter bar.
+
+**Summary.jsx / MetricComparisonCard.jsx — the one page needing a real
+extension, not just a wire-up**: per the request's own explicit
+instruction, the control had to live ONCE at the page level, not once per
+`MetricComparisonCard` (this page renders 12 of them). `usePresetWindow()`
+is now called exactly once in `Summary.jsx`; the resulting `activePreset`/
+`selectedMonths` are passed down as 2 new props into every card, which
+feed them into `kpiDeltas()`/`computeBucketComparisons()`/
+`computeNettedBucketComparisons()` internally — no card reads `useFilters()`
+or computes its own window, so none of the 12 can drift onto a different
+selection than the others.
+
+This required a genuine (not just wiring) extension to `lib/comparisons.js`,
+since `computeBucketComparisons`/`computeNettedBucketComparisons` had no
+"custom window" counterpart at all before this — every other page's
+custom-window badge is a single flat KPI (`computeCustomWindowComparison`
+over one row pool), but Summary's cards need one per BUCKET ROW, including
+nested rows. Extracted the "treat `selectedMonths` as one window" arithmetic
+`computeCustomWindowComparison` already had into a shared
+`customWindowFromSummer(summer, selectedMonths)` engine (the same
+"takes a summer function" pattern `computeComparisonsFromSummer` already
+established for the anchor-based engine) so `computeBucketComparisons`/
+`computeNettedBucketComparisons` could reuse it per-bucket via their own
+existing `summer` closures, rather than re-deriving the arithmetic a second
+time. Both functions gained two things: a `qoq` field (computeComparisons
+already computed it internally — the table just never destructured it out,
+since this card never had a QoQ column before QTD existed as a control
+anywhere in the app) and an optional `selectedMonths` parameter that, when
+passed, attaches a `customPct` to every row alongside `mom`/`qoq`/`yoy`.
+Both new params are optional and additive — confirmed via build that no
+other call site (there are none outside `MetricComparisonCard.jsx`) needed
+updating.
+
+**Table restructured**: the per-bucket table's 2 separate "MoM"/"YoY"
+columns collapsed into 1 (header "Δ"), body cell reading
+`kpiDeltas(activePreset, r, r.customPct)[0].pct` with `label=""` — same
+unlabeled-badge convention the bucket rows already used before this pass
+(only the headline total's badge ever carried a visible "MoM"/"YoY" label).
+The headline total's own badge collapsed the same way, now visibly
+labeled when a preset is active (`kpiDeltas(...)` returns its real label
+for the headline row). **Left completely untouched, per precedent**: the
+"By Year" FY matrix / flat "FY Comparison" block — `computeFYSeries`/
+`computeBucketFYSeries`/`computeNettedBucketFYSeries` are FY-over-FY
+comparisons with no anchor-month logic of their own, already documented as
+"a separate, independent concept... the 2026-08-25 MoM/QoQ/YoY redefinition
+doesn't touch this function at all," and this rollout doesn't either.
+
+**Verified live** (Playwright, dev server), all 3 requested cases: MTD
+("Total Activation" → ₹1,150L / ▲209.2% MoM, matching Activation.jsx's own
+MTD figure exactly), QTD-Q1 (₹1,315L / ▲48.3% QoQ on both the headline
+*and* "Activation by Source"'s own collapsed badge — confirmed every card
+on the page moved in lockstep from the one shared control, not just the
+first one), YTD (same window, label switches to YoY). Custom range
+(FY2026-27 + Apr+Jun, non-contiguous) → ₹937L / ▲59.1% — byte-identical to
+Activation.jsx's own figure for the identical selection, confirming the
+two pages' "Total Activation" numbers can't drift since both now route
+through the exact same shared pool/functions. FY-toggle regression check
+(tick FY2024-25 alongside FY2026-27 under that custom selection, then
+untick it) left the caption and every card's figures unchanged across all
+3 states — no FY-toggle bug on this page either. Bucket-row badges
+confirmed single-value, not two side-by-side (e.g. "Activation by Source"'s
+Aggregators/Corporate/Cinema rows each show one `▲/▼ X%`), and the "By
+Year"/"FY Comparison" blocks confirmed rendering exactly as before,
+unaffected by any of this. Zero console errors across every scenario on
+all 3 pages; clean production build (808.58 kB JS, 222.47 kB gzipped, no
+new warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-29 — Channel Performance layout tweak (Gift Card Performance
+moved up, spacing compressed) + Phase 4 dashboard-wide MTD/QTD/YTD
+consistency audit
+
+**Layout-only changes, Channel Performance**: "Gift Card Performance" (the
+3 KPI/Contribution cards) moved from all the way below every Market
+Channels chart (after Contribution Mix) to directly below the "Channel
+Performance — Period Comparison" table — i.e. right after "Market
+Channels," not after its own Penetration Trend/Monthly Trend/Contribution
+Mix charts too. Page's outer wrapper `gap-8` → `gap-6`, matching the
+`gap-6` every other page in the app already uses (grepped first — Channel
+Performance and Summary were the only 2 pages using `gap-8`; only Channel
+Performance was in scope for this request). This alone compresses every
+gap on the page from 32px to 24px, including the caption-to-heading gap
+(already had a `-mb-4` pulling it tighter, net effect 32-16=16px before →
+24-16=8px after this change) — addresses the "too much empty space"
+complaint without touching `Layout.jsx` (shared by every page, out of
+scope; no other page had this complaint).
+
+**Phase 4 — full dashboard-wide audit**, all 9 pages (Overview, Activation,
+Redemption·Box Office, Redemption·F&B, Trends, Cancel Redeem, Summary,
+Card Journey, Channel Performance) checked against 4 criteria: (1) every
+KPI delta renders as one `▲/▼ X%` badge, (2) exactly one italic
+comparison-date line, top-left, same format, on every page, (3) every
+MTD/QTD/YTD control behaves identically, (4) every comparison routes
+through the same shared function.
+
+**Found exactly one real inconsistency: Channel Performance had no
+MTD/QTD/YTD control at all.** It already had the single top-left date
+line and single-badge KPIs (from earlier same-day passes), but its
+"current window" was always just this page's own `selectedMonths` — every
+month matching the current FY/Month filter, with no anchor/MTD/QTD/YTD
+concept — while all 8 other pages had gained the full preset control
+across Phases 1–3. Confirmed via grep (`usePresetWindow` appeared in only
+8 of the 9 page files) before touching anything, not assumed from a
+visual read alone.
+
+**The fix, and the one genuine design wrinkle it surfaced**: wired
+Channel Performance onto the same shared `usePresetWindow()` hook every
+other page uses — but NOT its `selectedMonths` output. That hook's own
+`selectedMonths` is deliberately scoped to just the anchor month's own FY
+(the 2026-08-25 FY-toggle-bug fix), whereas Channel Performance's own
+`selectedMonths` was built, and already explicitly verified (2026-08-23
+entry above), to support selecting 2+ FYs at once and summing across all
+of them — a real, deliberate design difference from every other page, not
+an oversight to paper over. Swapping it for the hook's version would have
+silently reintroduced a regression on an already-fixed, already-tested
+behavior. Resolved by taking only the hook's preset-button
+state/anchor/`quarterOptions`/`applyPreset`/`applyQuarter` and building a
+page-local `windowCurrentMonths = activePreset==='mtd' ? presets.mtd :
+activePreset==='ytd' ? presets.ytd : selectedMonths` — the exact same
+formula Overview.jsx's own ribbon uses — with this page's own
+(multi-FY-aware) `selectedMonths` only ever supplying the QTD-quarter and
+default-custom cases, same as every other page's own local variant would.
+Every metric on the page (`channelRows`/`giftCard`/`giftCardTotal`, and
+therefore the table, both Contribution cards, and the GC Transactions KPI)
+now reads `windowCurrentMonths`/`windowPriorMonths` instead of the old
+`selectedMonths`/`priorSelectedMonths` pair directly.
+
+**A second, smaller duplication found and fixed while wiring this up**:
+Channel Performance's own metrics are each a single this-vs-prior
+comparison over one active window, not 3 parallel anchor-derived
+sub-windows the way `computeComparisons()` produces — so `kpiDeltas()`
+(built for a `{mom,qoq,yoy}` triple) doesn't fit directly. A first pass at
+this fix wrote a page-local 3-line "which label does the active preset
+imply" mapping to cover that gap — the exact same mapping already living
+inside `kpiDeltas()` itself. Caught by this same audit before considering
+the work done: extracted that mapping into a newly-exported
+`presetBadgeLabel()` (`lib/comparisons.js`), had `kpiDeltas()` call it
+internally, and pointed Channel Performance's own GC Transactions KPI
+badge at the same exported function instead of its own copy — zero
+remaining duplicate preset→label mappings anywhere in the codebase
+(grepped for the literal `'mtd'`/`'qtd'`/`'ytd'` → label pattern
+afterward to confirm).
+
+**Audit results, the other 3 criteria — no violations found**:
+  - Every `<Kpi deltas={...}>` call site across all 9 pages passes either
+    `kpiDeltas(...)` directly, or (Channel Performance's one KPI, and
+    `MetricComparisonCard`'s headline/bucket rows, both of which can't use
+    `kpiDeltas()`'s exact call shape for the reason above) an equivalent
+    single-entry array built from `presetBadgeLabel()` — grepped for
+    `deltas={[` across every page file and confirmed exactly one such
+    site remains (Channel Performance's GC Transactions KPI), everything
+    else routes through `kpiDeltas()`.
+  - Grepped for hardcoded `label: 'MoM'`/`'QoQ'`/`'YoY'` object literals
+    anywhere in `src/` — the only 3 hits are inside `kpiDeltas()`'s own
+    definition, confirmed zero page-level re-implementations.
+  - Grepped for the exact italic-caption class
+    (`text-xs italic text-warmgray-muted`) — exactly one match per page,
+    all 9 pages, all identical class string.
+  - Grepped for the MTD/QTD/YTD control-row wrapper
+    (`flex justify-between items-center gap-2 -mb-2 flex-wrap`) — exactly
+    one match per page, all 9 pages, byte-identical class string; and for
+    the shared button class — exactly 3 per page (MTD, QTD trigger, YTD) ×
+    9 pages = 27, all identical.
+
+**Verified live** (Playwright, dev server): Channel Performance's new
+MTD/QTD/YTD control — MTD → "Jul 26 vs. Jul 25", ▲110.1% MoM; QTD-Q1 →
+"Apr 26 – Jun 26 vs. Apr 25 – Jun 25", ▲10.7% QoQ; YTD → same window,
+label switches to YoY, values unchanged (same "preset changes the label,
+not necessarily the window" behavior every other page already exhibits).
+**Multi-FY regression check, the one behavior this fix had to preserve**:
+FY2024-25 alone (Month=All) → 4,81,450; FY2026-27 alone → 4,16,653; both
+ticked together → 8,98,103 — all three exactly matching this page's own
+already-verified 2026-08-23 targets, confirming the hook wiring didn't
+regress the page's own deliberately-different multi-FY behavior. Zero
+console errors across every scenario; clean production build (810.47 kB
+JS, 222.69 kB gzipped, no new warnings beyond the pre-existing 500KB
+chunk-size notice).
+
+## 2026-08-29 — Card Journey: removed the "What does this mean?" disclosure,
+split the single Redemption Rate into "By Revenue"/"By Cards"
+
+Two small, layout/display-only changes to the compact gold-accented strip
+below the KPI ribbon — no calculation logic touched beyond adding one new
+sibling rate.
+
+**Disclosure removed entirely**: the `<details>`/`<summary>` "▸ What does
+this mean?" toggle and its explanatory paragraph (the Overview-vs-this-page
+distinction, the April/October spillover example) are gone — the trigger,
+the rotating-arrow marker, and the revealed text, all of it. Confirmed via
+Playwright: 0 `<details>` elements and 0 occurrences of "What does this
+mean?" anywhere on the rendered page.
+
+**Single rate split into two**: `samePeriodRedemptionRate` (the KPI strip's
+one existing figure) was confirmed, by reading the code rather than
+assuming, to already be `redeemedAmount / totalActivation × 100` — an
+amount/revenue-basis rate, not a card-count one. Relabeled to "By Revenue"
+unchanged, and a new sibling `samePeriodRedemptionRateByCards =
+redeemedCount / totalActivationCount × 100` added — `redeemedCount` is
+already `UniqueCardCount` (distinct cards, non-cancellation rows only) and
+`totalActivationCount` is already `ActivationCount`, both pre-existing
+variables this page's own KPI ribbon already computes, not new
+aggregations. Rendered as "By Cards" in the same compact strip, same
+label/value styling as "By Revenue," side by side rather than stacked.
+
+**Verified against the exact stated baseline, FY2026-27 unfiltered**: "By
+Revenue" renders 70.1% (target ₹1,727.78L / ₹2,464.50L = 70.1% — exact
+match, computed from the unrounded `redeemedAmount`/`totalActivation`
+values, not the rounded ₹ Lacs display strings). "By Cards" renders 72.0%
+— the request's own hand-computed target (257,600 / 358,012 = 71.9%) was
+a rounded approximation; the precise value is 257600/358012 = 71.953%,
+which correctly rounds to 72.0% at 1 decimal place (`fmtPct`'s own
+standard rounding, same behavior every other %-figure on this dashboard
+already uses) — not a discrepancy, confirmed by hand-computing the exact
+fraction before concluding so. Screenshotted the strip: both rates render
+side by side, cleanly, in a visibly more compact card now that the
+disclosure's extra height is gone. Zero console errors; clean production
+build (809.91 kB JS, 222.31 kB gzipped — CSS bundle also shrank slightly,
+consistent with pure markup removal — no new warnings beyond the
+pre-existing 500KB chunk-size notice).
+
+## 2026-08-29 — Replaced the ATV KPI card with "Unredeemed Balance" on
+Overview and Card Journey, via a new shared "difference" comparator (not
+a new comparison mechanism — same anchor/window engine, new combinator)
+
+Both pages' 5th ribbon card (previously Average Transaction Value, with
+Overview's own Universal-ATV `breakdown` mini-figure) is now "Unredeemed
+Balance" — Activation total minus Redemption total, the same two totals
+each page's own other KPIs already show separately, just differenced.
+
+**The one real design question**: every existing comparator in
+`lib/comparisons.js` (`computeComparisons`, `computeRatioComparisons`,
+`computeCohortComparisons`, etc.) operates on ONE row pool (or a
+numerator/denominator pair drawn from the SAME pool). "Unredeemed
+Balance" needed the difference of TWO independently-windowed sums, and —
+critically for Card Journey — those two sums don't even share a summing
+rule: Overview's redemption side is a plain `sumForMonths()` over
+`redemptionRowsForComparison`, while Card Journey's is a
+`sumForMonthsCohort()` over `cohortRowsForComparison` (that page's "Of
+Those, Redeemed" is cohort-scoped, not the dataset-wide pool). Per the
+request's own "no new comparison mechanism, no separate wiring"
+instruction, resolved by adding exactly two new exported functions —
+`computeDifferenceComparisons(summerA, summerB, selectedMonths)` /
+`computeCustomWindowDifferenceComparison(summerA, summerB, selectedMonths)`
+— that take two already-built `summer(months)` closures instead of a
+`(rows, field)` pair, and internally just call the exact same
+`computeComparisonsFromSummer`/`customWindowFromSummer` engines every
+other comparator already shares, wrapped around a `differenceFor(summerA,
+summerB)` combinator (`a - b`, returning `null` if either side has no
+data for that window — same "hide missing comparisons" rule as
+everywhere else). No new anchor/window arithmetic anywhere — this is the
+same pattern `computeRatioComparisons` already established (same engine,
+a different combinator than a plain field sum), just generalized to take
+summers instead of rows so each page can plug in whichever primitive
+matches its own pool shape. `sumForMonthsCohort` (previously private) was
+exported so Card Journey could build its own cohort-aware summer with it,
+the same primitive `computeCohortComparisons` already uses internally.
+
+**Overview.jsx**: `unredeemedBalance = totalActivation - totalRedemption`,
+`unredeemedPct = unredeemedBalance / totalActivation × 100` (sub-line:
+"X% of total activation"). `unredeemedDeltas`/`unredeemedCustomPct` built
+from `computeDifferenceComparisons`/`computeCustomWindowDifferenceComparison`,
+both summers plain `sumForMonths()` over the exact same
+`activationRowsForComparison`/`redemptionRowsForComparison` pools every
+other KPI on this ribbon already reads — can't drift from "Activation
+Amount"/"Redemption Amount" above it. Removed entirely, not left dangling:
+`universalRevenue`/`universalTransactions`/`universalATV`/`giftCardATV`/
+`giftCardATVDeltas`/`giftCardATVCustomPct`/`totalRedemptionTxnCount`, the
+`breakdown` prop (dropping the Universal mini-figure per the request —
+this KPI replaces it, doesn't sit alongside it), and `universalRows` from
+the page's own `useFilters()` destructure (confirmed via grep it has no
+other consumer on this page). `FilterContext.jsx`'s own `universalRows`/
+`filterUniversal`/`Universal.json` plumbing was deliberately left
+untouched — same "leave the dead export, don't chase it" precedent this
+file has followed at every prior deprecation, since removing that
+infrastructure wasn't asked for and isn't this task's scope.
+
+**CardJourney.jsx**: `unredeemedBalance = totalActivation - redeemedAmount`
+(this page's own cohort-scoped "Of Those, Redeemed", not Overview's
+dataset-wide redemption total — a deliberately different number from
+Overview's version, per the request), sub-line "X% of cards activated".
+Same two new functions, fed a plain summer for the activation side and a
+`sumForMonthsCohort`-based summer for the redemption side — mirroring
+exactly how this page's pre-existing `redeemedAmountDeltas` already reads
+`cohortRowsForComparison` via `computeCohortComparisons`. Removed
+`giftCardATVCohort`/`giftCardATVDeltas`/`giftCardATVCustomPct`, the now-
+orphaned `cohortRowsForComparisonNonCancel` (its only consumer was the
+removed ATV ratio), and the `computeCohortRatioComparisons`/
+`computeCustomWindowCohortRatioComparison`/`fmtRupees` imports (grepped
+first to confirm no other call site on this page needed them).
+
+**Verified against the exact stated baseline, unfiltered**: Overview's
+Unredeemed Balance renders ₹1,571L / 19% of total activation (target
+₹1,571.25L / 18.9% — exact match; 18.9% rounds to 19% at `fmtPct`'s own
+0-decimal display, same rounding behavior as everywhere else on this
+ribbon). Card Journey's own (cohort-scoped, deliberately different)
+figure: ₹1,860L / 22% unfiltered; ₹737L / 30% under FY2026-27 — hand-
+checked directly against that FY's own already-verified Cards Activated
+(₹2,465L) and Of Those, Redeemed (₹1,728L) figures: 2,465−1,728 = 737,
+exact match.
+
+**MTD/QTD/YTD and sign-correctness, verified live, not assumed**: on both
+pages, MTD/QTD-first-enabled-quarter/YTD all produced sensible values
+with correctly-labeled badges (MoM/QoQ/YoY), YTD reusing the exact same
+window QTD had just set (only the label changed) — the same behavior
+every other KPI on both ribbons already exhibits. Per the request's own
+explicit caution not to assume the delta is always positive: hand-computed
+every month's own activation-minus-redemption figure directly from the raw
+cubes first, found May 2026 (₹2.65L) is genuinely smaller than May 2025
+(₹13.66L) for that single month, then selected FY2026-27 + Month=May 26 in
+the live app and confirmed Overview's Unredeemed Balance correctly
+rendered `▼ 80.6%` (hand-computed: (264519−1365964)/1365964 × 100 =
+−80.63%, matching exactly) — proving the shared `pctChange` engine
+produces a correctly-signed shrinking-balance badge, not a hardcoded
+positive assumption. Screenshotted both pages' ribbons to confirm visual
+consistency with every other card. Zero console errors across every
+scenario; clean production build (809.34 kB JS, 222.06 kB gzipped, no new
+warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-30 — Three small changes: Card Journey nav position, Channel
+Performance table header dates, Overview's Additional Revenue % sub-line
+
+**1. Nav order** (`Layout.jsx`): "Card Journey" moved to sit directly after
+"Channel Performance" (which already sat directly after "Overview" from
+an earlier change) — `TABS` order is now Summary, Overview, Channel
+Performance, Card Journey, Activation, Redemption·Box Office,
+Redemption·F&B, Trends, Cancel Redeem. Verified via Playwright reading the
+actual rendered nav text in order, not just the array in source.
+
+**2. Channel Performance table headers**: "% Contribution (This)"/
+"% Contribution (Prior)" → "% Contribution ({thisLabel})"/
+"% Contribution ({priorLabel})" — reuses the exact same `thisLabel`/
+`priorLabel` (`periodLabel()`-built date-range strings) the table's own
+first two amount columns and the page's single top-left comparison line
+already read, no new formatting logic. Kept the "% Contribution" prefix
+rather than replacing the header with a bare date (unlike the amount
+columns' own earlier "This Period"→date replacement) — a bare date here
+would be visually indistinguishable from the amount columns 2 positions to
+its left, and this table has no other structural cue (a sub-header row,
+grouped column headers) to disambiguate a % column from an amount column
+sharing the identical date text. Verified live: headers read exactly
+"% Contribution (Apr 24 – Jul 26)" / "% Contribution (Apr 23 – Jul 25)"
+unfiltered, matching the same dates already shown in the first two
+columns and the top-left caption.
+
+**3. Overview's "Additional Revenue" % sub-line**: new `uptakePct =
+totalUptake / totalRedemption × 100`, rendered as a plain `sub` line
+("Uptake is 50.6% of Redemption") — no delta badge, per the request's own
+"whichever fits without crowding the card" latitude. Deliberately not
+wired through the MTD/QTD/YTD-aware comparison machinery: this ratio is
+derived from two KPIs already elsewhere on the same ribbon (Redemption
+Amount, Additional Revenue itself), the same "no meaningful parent, no
+comparison of its own" category Avg Ticket Size/Avg per Redemption already
+sit in dashboard-wide, and the card already carries one real delta badge
+(`kpiDeltas(activePreset, uptakeDeltas, uptakeCustomPct)`, untouched) plus
+a Ticket/F&B breakdown — a second, badge-bearing ratio would have been the
+"crowding" the request explicitly asked to avoid, not an oversight.
+
+**Verified against the exact stated baseline, unfiltered**: 50.6%
+(target ₹3,386.87L ÷ ₹6,695.32L = 50.6% — exact match, computed from the
+same unrounded `totalUptake`/`totalRedemption` sums the card's own value
+and every other figure on this ribbon already reads, not the rounded ₹
+Lacs display strings). Screenshotted the Additional Revenue card: the new
+sub-line wraps to two short lines ("Uptake is 50.6% of" / "Redemption")
+entirely within the card's own bounds, with no overlap against the delta
+badge above it or the Ticket/F&B breakdown panel to its right — confirmed
+visually, not assumed from the markup alone. Zero console errors across
+all three changes; clean production build (809.42 kB JS, 222.12 kB
+gzipped, no new warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-30 — "Unredeemed Balance" renamed to "Breakage," recalculated as
+a cumulative M+13 expiry balance (Overview + Card Journey)
+
+Full redefinition, not a rename with the same math kept underneath. The
+prior KPI (a single point-in-time snapshot, Activation total minus
+Redemption total, for whatever window was selected) answered "how much
+hasn't been redeemed yet" — this one answers a narrower, industry-standard
+gift-card question: "how much of the money we've taken in has permanently
+expired unredeemed," under an explicit validity rule.
+
+**The M+13 rule**: a card activated in month M is valid through month
+M+12 inclusive; it expires starting M+13. For the current anchor month A
+(the same single-anchor concept MTD/QTD/YTD/custom already resolve to via
+`usePresetWindow()`), Breakage is the CUMULATIVE unredeemed remainder
+across every activation cohort from the dataset's own start through month
+(A−13) inclusive — not just A−13's own cohort. Because summation is
+linear, "sum each qualifying month's (that month's activation − however
+much of that month's cohort has been redeemed, in any redemption month,
+ever)" collapses to two flat aggregate sums instead of a per-month loop:
+`sum(ActivationAmount) over every activation row with YearMonth <=
+cutoff` minus `sum(RedemptionAmount) over every cohortCube.json row with
+ActivationYearMonth <= cutoff` (the redemption side is deliberately
+unbounded on its own date — a cohort's redemptions count against it
+however late they land, mirroring the same "any redemption month, no
+matter how far out" lookup the spillover chart already established for
+this cube). If A−13 falls before the dataset's own start (Apr 2024) — true
+whenever the anchor is Apr 2025 or earlier — no cohort has reached expiry
+yet, so Breakage is exactly ₹0 by an explicit early return, not a
+`Math.max(0, …)` floor papering over a negative from missing data (the
+floor still exists separately, guarding the case documented dashboard-wide
+where a slice's redemption can exceed its own activation — see the
+2026-08-03 ">100% bug" investigation entry above — so a real historical
+cohort's own balance can never render as a confusing negative number
+either).
+
+**New shared `computeBreakage()`/`computeBreakageYoyPct()`**
+(`lib/comparisons.js`), not page-local: takes `activationRows`/
+`cohortRows` (both must be Month-AND-FY-unrestricted — Breakage is
+fundamentally about historical months almost always outside whatever's
+currently selected, the same reasoning `activationRowsForComparison`/
+`cohortRowsForComparison` already existed for) plus the shared
+`anchorMonth`. Returns `{ amount, cutoffMonth, hasCohorts }` —
+`hasCohorts: false` is the dedicated "too recent, nothing has expired"
+state, read by both pages to swap in "No cohorts have reached 13 months
+yet" instead of a cutoff-month sentence that would otherwise name a
+pre-dataset month. `computeBreakageYoyPct()` compares the current anchor's
+Breakage against the identical A−13 calculation one year earlier
+(`indexToMonth(monthIndex(anchor) - 12)`), via the same `pctChange()`
+every other delta on this dashboard already uses — reused, not
+re-derived. The delta is rendered as one fixed, always-`'YoY'`-labeled
+badge (`deltas={[{label:'YoY', pct: breakageYoyPct}]}`), not routed through
+`kpiDeltas()`'s MTD/QTD/YTD label-switching: Breakage is a point-in-time
+cumulative balance, not a flow quantity like Activation/Redemption
+Amount, so there's no meaningful "month-to-date" or "quarter-to-date"
+sub-window of it to switch between — only ever the one YoY comparison,
+regardless of which preset button is active elsewhere on the same ribbon.
+
+**Overview.jsx becomes cohortCube.json's second consumer**: this cube was
+previously loaded only by Card Journey (`loadCohortCube()`, lazy,
+idempotent, ref-guarded — see the 2026-08-16 entry above). Overview.jsx
+now calls the exact same `loadCohortCube()` from its own mount effect and
+reads the exact same `cohortRowsForComparison`/`cohortLoading` from
+`useFilters()` — no new fetch/parse logic, no second copy of the
+lazy-load machinery. The KPI's `value` is gated on `cohortLoading`
+(`cohortLoading ? '—' : fmtLacs(breakage.amount)`) so a first-time visit
+to Overview shows a plain dash while the ~17MB cube is still in flight,
+rather than briefly flashing a wrong (activation-only, cohort-less)
+number before the fetch resolves.
+
+**Card Journey's version is now deliberately IDENTICAL to Overview's**,
+not its own cohort-scoped variant — a real change from the prior
+"Unredeemed Balance," which was intentionally page-specific (dataset-wide
+on Overview, this-page's-own-cohort-scoped on Card Journey). Breakage has
+no such distinction to preserve: both pages call `computeBreakage()` with
+the same two pools and the same anchor, so the two cards can't drift
+apart, by construction.
+
+**Real bug found and fixed while verifying, not present for long**: the
+prior "Unredeemed Balance" implementation's own dead code — the
+`unredeemedDeltas`/`unredeemedCustomPct` blocks on Overview.jsx, which
+called `computeDifferenceComparisons()`/`computeCustomWindowDifferenceComparison()`
+— was never actually removed when Breakage's new block was written
+earlier in this same task; only the JSX and the *new* variables replacing
+it were added, leaving the old block orphaned lower in the same file with
+no remaining call site. Because that task's own import-cleanup dropped
+`computeDifferenceComparisons`/`computeCustomWindowDifferenceComparison`
+from the page's import line (believing them fully superseded), the
+orphaned block became a live `ReferenceError` crashing Overview's entire
+render to a blank error-boundary screen on every load — caught immediately
+by this task's own live-app verification pass (a `PAGEERROR:
+computeDifferenceComparisons is not defined` in the console, not a
+silent wrong-number bug) rather than shipped unnoticed. Fixed by deleting
+the dead block outright (confirmed zero remaining references via grep
+before removing) and dropping the now-also-unused `sumForMonths` import
+alongside it — Card Journey never had the equivalent leftover (grepped
+and confirmed clean before concluding so), so this was Overview-only.
+
+**Verified against the raw cubes by hand first** (Node script against
+`activationCube.json`/`cohortCube.json` directly, replicating
+`computeBreakage()`'s own two-sum arithmetic before writing any component
+code): anchor Jul 2026 → cutoff Jun 2025 → activation-to-cutoff
+₹3,208.14L − redeemed-to-date ₹2,573.60L = **₹634.54L**. Anchor Mar 2026
+→ cutoff Feb 2025 → ₹2,122.20L − ₹1,644.80L = **₹477.40L**. Anchor Mar
+2025 (i.e. FY2024-25 selected, Month unrestricted) → cutoff Feb 2024,
+before the dataset's Apr 2024 start → **₹0.00L**. YoY hand-check for the
+Jul 2026 anchor: prior anchor Jul 2025 → cutoff Jun 2024 → Breakage
+₹109.39L → (634.54−109.39)/109.39 × 100 = **+480.1%**.
+
+**Verified live in the app** (Playwright, dev server, both pages, after
+fixing the crash above) — selecting each target FY via a checkbox-state-
+aware toggle (never a blind click-list, per the exact pitfall this file's
+own 2026-08-23 "Investigated a reported Channel Performance FY-filter
+bug" entry already documented and warned against): unfiltered (anchor
+resolves to Jul 2026, the dataset's own latest month) → **Overview and
+Card Journey both read "₹635 L / ▲ 480.1% YoY / Cards activated Jun 25 or
+earlier"** — exact match to the hand-computed ₹634.54L/+480.1% above.
+FY2025-26 selected alone (Month unrestricted, anchor resolves to that
+FY's own latest month, Mar 2026) → **both pages read "₹477 L / Cards
+activated Feb 25 or earlier"**, no delta badge shown (the prior-year
+window's own Breakage is ₹0, and `pctChange` against a zero prior
+correctly returns `null` — the same "hide broken math" convention as
+every other comparator on this dashboard, not a bug) — exact match to the
+hand-computed ₹477.40L. FY2024-25 selected alone (anchor Mar 2025) → both
+pages read **"₹0 L / No cohorts have reached 13 months yet"**, no badge —
+exact match to the ₹0 target. Zero console errors across every scenario
+on both pages (confirmed clean only after the dead-code fix above — the
+same scenario had thrown the `ReferenceError` before it). Clean
+production build (809.74 kB JS, 222.37 kB gzipped — smaller than the
+pre-fix build, net dead code removed — no new warnings beyond the
+pre-existing 500KB chunk-size notice).
 
 ## Deployment
 

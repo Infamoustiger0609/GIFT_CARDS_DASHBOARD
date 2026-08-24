@@ -49,8 +49,40 @@ export function fmtLacsLabel(rupees) {
   return fmtLacs(rupees, 0)
 }
 
+// Amount + its % share of a KPI's own total, for a `breakdown` entry (e.g.
+// Overview's/CardJourney's Transaction Value/Uptake cards' Ticket vs. F&B
+// split) — "₹6,102 L (60.5%)", reusing fmtLacs/fmtPct's own formatting
+// rather than a third ad hoc string builder. Omits the parenthetical
+// entirely (not a broken "(—%)") when `total` is falsy/zero, since a share
+// of a zero total isn't a meaningful number — same "hide broken math"
+// convention every other comparison helper in this app already follows.
+export function fmtLacsWithPct(amount, total) {
+  if (!total) return fmtLacs(amount)
+  return `${fmtLacs(amount)} (${fmtPct((amount / total) * 100, 1)})`
+}
+
 export function monthLabel(yearMonth) {
   const [y, m] = yearMonth.split('-')
   const d = new Date(Number(y), Number(m) - 1, 1)
   return d.toLocaleDateString('en-IN', { month: 'short', year: '2-digit' })
+}
+
+// A 'YYYY-MM' month array -> a compact human range, e.g. "Jun 26" (single
+// month) or "Jun 26 – Jul 26" (a span). Originally built page-locally on
+// ChannelPerformance.jsx for its own period-comparison subtitles; moved
+// here (2026-08-25) so Overview.jsx's KPI ribbon can reuse the exact same
+// formatting for its own date-range badge caption instead of a second,
+// independently-authored copy.
+export function periodLabel(months) {
+  if (!months || months.length === 0) return '—'
+  const sorted = [...months].sort()
+  return sorted.length === 1 ? monthLabel(sorted[0]) : `${monthLabel(sorted[0])} – ${monthLabel(sorted[sorted.length - 1])}`
+}
+
+// Compact single-day label for the Date Range filter's control summary and
+// its Overview panel title — 'YYYY-MM-DD' -> "15 Jul '24".
+export function dayLabel(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const date = new Date(y, m - 1, d)
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: '2-digit' })
 }

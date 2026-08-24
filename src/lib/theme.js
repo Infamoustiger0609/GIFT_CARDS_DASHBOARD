@@ -36,6 +36,28 @@ export function categoricalColor(i, isOther = false) {
   return isOther ? CATEGORICAL_GRAY : CATEGORICAL[i % CATEGORICAL.length]
 }
 
+// 2026-08-26: a dedicated 7-hue rainbow for Overview's two weekday pies —
+// deliberately NOT categoricalColor()'s 5-hue CATEGORICAL cycle, which per
+// its own comment above is only validated for adjacent-pair contrast (bar
+// charts) or up to 4 all-pairs slots (donuts). A 7-slice pie needs all 7
+// slices visually separable from each other at once, which a 5-hue cycle
+// repeating twice (positions 0 and 5, 1 and 6) can't give — two slices
+// would render in the literal same color. Spread across the hue wheel
+// (roughly 0/30/50/120/180/210/280°) rather than re-derived from
+// CATEGORICAL, at a saturation/lightness that stays legible on this app's
+// cream background. Keyed by weekday name (WEEKDAY_ORDER) so both pies
+// share the exact same weekday->color mapping and a viewer can match
+// slices between them.
+export const WEEKDAY_COLORS = {
+  Monday: '#e6392f',
+  Tuesday: '#e8792a',
+  Wednesday: '#c9a227',
+  Thursday: '#3f9142',
+  Friday: '#1fa2a6',
+  Saturday: '#3568b3',
+  Sunday: '#8b4fc9'
+}
+
 // Keyed by the raw Region_Clean value, including 'NO_SITE' — the "Online"
 // display rename (lib/constants.js#regionLabel) is a rendering-layer
 // concern only, so this lookup key is untouched.
@@ -89,4 +111,22 @@ export const CARD_TYPE_COLORS = {
 export const REDEMPTION_SOURCE_COLORS = {
   Online: '#3568b3',
   Cinema: '#c8952e'
+}
+
+// Channel Performance page (2026-08-21): 4 booking-channel columns from
+// channelTransactions.json plus Gift Card as a 5th, directly-comparable
+// line (see FilterContext.jsx's own doc comment on why GC needs its own
+// FY/Month-only pool). Gift Card deliberately gets the brand teal every
+// other page already uses for anything redemption/gift-card-related
+// (Kpi.jsx's teal accent, COLORS.redemption) rather than a 5th rotation
+// slot, so it reads as "the gift card line" at a glance across pages. The
+// 4 real channels take the remaining 4 CATEGORICAL hues (skipping index 2,
+// teal, to avoid a collision with Gift Card) — still within the palette's
+// validated adjacent-pair/up-to-4-all-pairs guarantees.
+export const CHANNEL_COLORS = {
+  BMS: '#3568b3',
+  PVRINOX: '#c8952e',
+  PaytmDistrict: '#9c3f8a',
+  BoxOffice: '#6b7a1f',
+  'Gift Card': '#00805a'
 }

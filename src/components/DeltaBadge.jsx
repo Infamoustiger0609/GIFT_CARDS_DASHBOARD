@@ -9,11 +9,17 @@ export default function DeltaBadge({ pct, label }) {
   const positive = pct >= 0
   return (
     <span
-      className={`inline-flex items-center gap-0.5 text-[10px] font-bold px-1.5 py-0.5 rounded whitespace-nowrap ${
+      // 2026-08-25: `leading-none` added — without an explicit line-height,
+      // this span inherited the ambient one from its parent, which could
+      // render taller than the pill's own px-1.5/py-0.5 padding box
+      // accounted for, leaving a sliver of text (a glyph's ascender/
+      // descender) sitting outside the colored background instead of
+      // fully covered by it.
+      className={`inline-flex items-center gap-0.5 text-[10px] font-bold leading-none px-1.5 py-1 rounded whitespace-nowrap ${
         positive ? 'bg-teal-light text-teal-dark' : 'bg-coral-light text-coral-dark'
       }`}
     >
-      {positive ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}% {label}
+      {positive ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}%{label ? ` ${label}` : ''}
     </span>
   )
 }

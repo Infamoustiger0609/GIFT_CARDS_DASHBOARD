@@ -79,6 +79,88 @@ export function regionDeltaLabel(data) {
   }
 }
 
+// Below this rendered bar width (px), a grouped chart's two adjacent
+// series bars sit too close together for on-bar text to avoid touching
+// its neighbor's own label — confirmed against the actual rendered SVG on
+// Card Journey's spillover chart, not assumed: at the 28-month/all-FY zoom
+// (bars ~15px wide, ~44px total per category) every category showed real
+// text collisions — the % line into the neighboring bar's amount, and,
+// once that was fixed, the two bars' own amount labels into each other AND
+// into the next category's — while the 12-month/single-FY zoom (bars
+// ~28px wide, ~77px per category) had zero collisions at any width tested.
+// Bar width is uniform across every bar in a chart at a given zoom (it's
+// driven by total categories ÷ plot width, not by each bar's own value),
+// so this threshold behaves as an all-or-nothing switch per zoom level,
+// not a per-bar flicker. 20px sits between the two measured widths. Same
+// "suppress a label that data density has made illegible" precedent this
+// app already uses elsewhere (donut segments under 3% share, line charts
+// with 24+ points going tooltip-only) — narrow-category zooms fall back
+// to the tooltip entirely, still fully readable on hover. Still the right
+// signal for a bar whose own series runs across every category in the
+// chart (e.g. Card Journey spillover's Redemption bar) — see
+// `amountWithPctLabel`'s own doc comment below for why its Activation
+// consumer needed a *different* signal instead.
+export const MIN_BAR_WIDTH_FOR_ON_BAR_LABEL = 20
+
+// Amount label with a plain percentage stacked underneath — same
+// index-lookup-via-closure pattern as regionDeltaLabel above (LabelList
+// strips non-SVG props before calling `content`, so a per-bar % can't ride
+// along as an extra data-row prop), but for a plain share/ratio field
+// rather than a period-over-period delta: no arrow or red/green
+// color-coding, since a % share isn't a "good/bad" direction the way a
+// MoM change is. Use as <LabelList content={amountWithPctLabel(data,
+// 'SomePctField', activeCount)} /> — e.g. Card Journey's spillover chart,
+// where the % is "of this month's activated amount, how much redeemed in
+// that same month."
+//
+// 2026-08-24 correction: this used to gate on the bar's own rendered pixel
+// `width` (MIN_BAR_WIDTH_FOR_ON_BAR_LABEL above), which was the wrong
+// signal for this specific consumer — width tracks the chart's *total*
+// category count, and Card Journey's spillover chart's total category
+// count is dominated by however long the Redemption-only spillover tail
+// runs (which depends on how much time has elapsed since the *earliest*
+// activation month in the selection), not by how many of those categories
+// actually carry an Activation bar. Selecting an early FY (e.g.
+// FY2024-25) produces a tail almost as long as "All" (both run to the end
+// of the dataset), so total categories — and therefore width — stayed
+// near the "All" case's own dense value even though only 12 of those
+// months have an Activation bar at all, and the gate almost never opened
+// in practice. Re-keyed on `activeCount` (the number of Activation-bearing
+// months in the current view, computed by the caller and passed in — this
+// function has no way to know it just from `data` without also knowing
+// which field name means "active") instead: that's the number that
+// actually determines how crowded *this* bar's own label gets, since
+// Activation bars sit a full category-width apart from each other
+// regardless of how many spillover-only (Activation-less) categories
+// follow them. The Redemption bar beside it keeps the old width-based
+// gate (MIN_BAR_WIDTH_FOR_ON_BAR_LABEL) — that one really does run across
+// every category, so width is still the right signal there.
+export const MAX_ACTIVE_MONTHS_FOR_STACKED_LABEL = 20
+
+export function amountWithPctLabel(data, pctField, activeCount) {
+  return function AmountWithPctLabel(props) {
+    const { x, y, width, value, index } = props
+    if (!value || activeCount > MAX_ACTIVE_MONTHS_FOR_STACKED_LABEL) return null
+    const pct = data[index]?.[pctField]
+    const hasPct = pct != null && isFinite(pct)
+    const isNegative = value < 0
+    const amountY = isNegative ? y + (hasPct ? 28 : 14) : y - (hasPct ? 20 : 6)
+    const pctY = isNegative ? y + 14 : y - 6
+    return (
+      <g>
+        <text x={x + width / 2} y={amountY} textAnchor="middle" fontSize={11} fill={COLORS.inkMuted}>
+          {fmtLacsLabel(value)}
+        </text>
+        {hasPct && (
+          <text x={x + width / 2} y={pctY} textAnchor="middle" fontSize={10} fontWeight="bold" fill={COLORS.inkMuted}>
+            {fmtPct(pct, 1)}
+          </text>
+        )}
+      </g>
+    )
+  }
+}
+
 // Direct value label to the right of a horizontal bar's end, e.g.
 // "₹1,688 L". Recharts' built-in `<LabelList position="right"
 // formatter={...} />` mis-sizes its internal text-wrap budget to the *bar's
