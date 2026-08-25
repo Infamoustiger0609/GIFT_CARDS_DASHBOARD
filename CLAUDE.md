@@ -7588,6 +7588,35 @@ production build (809.74 kB JS, 222.37 kB gzipped — smaller than the
 pre-fix build, net dead code removed — no new warnings beyond the
 pre-existing 500KB chunk-size notice).
 
+## 2026-08-25 — Nav: disabled 5 more tabs, only Overview/Channel
+Performance/Card Journey remain active
+
+Extends the exact `disabled: true` pattern already used for "Summary"
+(added earlier) to 5 more tabs — Activation, Redemption · Box Office,
+Redemption · F&B, Trends, Cancel Redeem — leaving only Overview, Channel
+Performance, and Card Journey clickable. Zero new mechanism: each tab is
+just a one-key addition to its existing object literal in `Layout.jsx`'s
+`TABS` array; the same pre-existing `disabled ? <span title="Under
+development">…</span> : <NavLink>…` branch already renders a non-clickable,
+tooltipped label for any tab carrying the flag, so nothing else in
+`Layout.jsx` (or any route/page component) needed touching. Per the same
+comment already on that array, reversing this is a one-line edit per tab
+(delete `disabled: true`, or set it `false`) — the routes themselves
+(`/activation`, `/redemption/box-office`, `/redemption/fnb`, `/trends`,
+`/cancel-redeem`) are untouched and still fully functional if reached
+directly by URL; only their nav entries are blocked.
+
+**Verified live** (Playwright, dev server): read the actual rendered nav
+DOM node-by-node — confirmed exactly 3 `<a>` (Overview, Channel
+Performance, Card Journey) and 6 `<span title="Under development">`
+(Summary, Activation, Redemption · Box Office, Redemption · F&B, Trends,
+Cancel Redeem). Clicking a disabled label's underlying element left the
+URL unchanged (still on `/`); clicking Channel Performance and Card
+Journey both navigated correctly. Zero console errors; clean production
+build (809.80 kB JS, 222.38 kB gzipped — negligible size change, a static
+array edit only, no new warnings beyond the pre-existing 500KB chunk-size
+notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
