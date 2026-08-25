@@ -768,7 +768,7 @@ export default function ChannelPerformance() {
                   them here; Gift Card Performance (above) now sits between
                   the table and these charts, not after them. */}
               <div className="grid md:grid-cols-2 gap-6">
-                <Card title="Gift Card Penetration Trend — vs. All Chanllels" subtitle={gcTotalEndpoints}>
+                <Card title="Gift Card Penetration Trend — vs. All Channels" subtitle={gcTotalEndpoints}>
                   <ResponsiveContainer width="100%" height={320}>
                     <LineChart data={gcPenetrationVsTotal} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
