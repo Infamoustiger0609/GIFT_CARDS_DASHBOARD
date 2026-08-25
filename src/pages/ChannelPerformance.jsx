@@ -67,7 +67,8 @@ function fmtPctAxis(v) {
 // active, same as every other page — but unlike Overview/Activation/etc.,
 // this page never computes 3 PARALLEL anchor-derived sub-windows
 // (mom/qoq/yoy at once) the way `computeComparisons()` does, since its
-// own `channelRows`/`giftCard`/`giftCardTotal` are each a single
+// own `giftCard`/`giftCardTotal` (and, since 2026-08-25, each per-month
+// `monthSections` row) are each a single
 // this-vs-prior comparison over whichever ONE window is current. So
 // `kpiDeltas()` (built for a `{mom,qoq,yoy}` triple) doesn't fit directly —
 // `presetBadgeLabel()` (lib/comparisons.js) is the exact same "which label
@@ -87,6 +88,70 @@ function fmtPctAxis(v) {
 // not an absolute point difference; label left blank, matching the
 // generic-badge convention Overview's own ribbon already established for
 // a delta with no more specific name than "the change").
+// 2026-08-26: replaces the table's old single shared "Prior"/"This"
+// header row — each block (the new full-period summary block, and every
+// per-month section below it) now renders its own copy of this row with
+// that block's OWN real prior/this labels (e.g. "Jun 25"/"Jun 26" for a
+// month section, "Apr 26 – Jul 26"/"Apr 25 – Jul 25" for the full-period
+// block), rather than one static row reading generic "Prior"/"This" for
+// every block regardless of which dates it actually covers. The
+// %Contribution columns get the same real-label treatment for the same
+// reason — leaving those two saying "(Prior)"/"(This)" next to amount
+// columns that now say real dates would be an inconsistent half-fix.
+function ComparisonHeaderRow({ priorLabel, thisLabel }) {
+  return (
+    <tr className="text-[10px] uppercase tracking-wide text-warmgray-muted">
+      <th className="text-left font-semibold pb-1 pt-1">Channel</th>
+      <th className="text-right font-semibold pb-1 pt-1">{priorLabel}</th>
+      <th className="text-right font-semibold pb-1 pt-1">{thisLabel}</th>
+      <th className="text-right font-semibold pb-1 pt-1">Difference</th>
+      <th className="text-right font-semibold pb-1 pt-1">% Growth</th>
+      <th className="text-center font-semibold pb-1 pt-1">% Contribution ({priorLabel})</th>
+      <th className="text-center font-semibold pb-1 pt-1">% Contribution ({thisLabel})</th>
+    </tr>
+  )
+}
+
+// Shared row-rendering for a channel's this/prior/diff/growth/contribution
+// figures — used identically by the full-period summary block and every
+// per-month section, so the two can't drift apart on cell styling.
+function ChannelComparisonRow({ r }) {
+  return (
+    <tr className="border-t border-warmgray-border/60 hover:bg-cream/60 transition-colors">
+      <td className="py-2 pl-3 text-navy font-medium whitespace-nowrap">
+        <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: CHANNEL_COLORS[r.key] }} />
+        {channelLabel(r.key)}
+      </td>
+      <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(r.priorVal)}</td>
+      <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(r.thisVal)}</td>
+      <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtDiff(r.diff)}</td>
+      <td
+        className={`py-2 text-right tabular-nums whitespace-nowrap font-semibold ${
+          r.growthPct == null ? 'text-warmgray-muted' : r.growthPct >= 0 ? 'text-teal-dark' : 'text-coral-dark'
+        }`}
+      >
+        {fmtPctOrDash(r.growthPct)}
+      </td>
+      <td className="py-2 text-center text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(r.contribPrior, 2)}</td>
+      <td className="py-2 text-center text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(r.contribThis, 2)}</td>
+    </tr>
+  )
+}
+
+function TotalComparisonRow({ totalPrior, totalThis, totalDiff, totalGrowthPct }) {
+  return (
+    <tr className="border-t border-warmgray-border font-bold">
+      <td className="py-2 pl-3 text-navy">Total</td>
+      <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(totalPrior)}</td>
+      <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(totalThis)}</td>
+      <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtDiff(totalDiff)}</td>
+      <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(totalGrowthPct)}</td>
+      <td className="py-2 text-center text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(pctOfTotal(totalPrior, totalPrior), 2)}</td>
+      <td className="py-2 text-center text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(pctOfTotal(totalThis, totalThis), 2)}</td>
+    </tr>
+  )
+}
+
 function ContributionCard({ label, thisVal, priorVal, accent }) {
   const changePct = pctChange(thisVal, priorVal)
   const accentClasses = { teal: 'border-l-teal text-teal-dark', gold: 'border-l-gold text-gold' }[accent] || 'border-l-navy text-navy'
@@ -181,7 +246,7 @@ export default function ChannelPerformance() {
   // QTD-quarter-click case exactly like Overview's own comment explains:
   // once a quarter is picked, `filters.month` IS that quarter's real
   // months, which `selectedMonths` already resolves to). Every metric
-  // below (`channelRows`/`giftCard`/`giftCardTotal`) and the shared date
+  // below (`monthSections`/`giftCard`/`giftCardTotal`) and the shared date
   // caption now read `windowCurrentMonths`/`windowPriorMonths` instead of
   // `selectedMonths`/`priorSelectedMonths` directly, so clicking MTD/QTD/YTD
   // actually changes what this page shows, matching every other page.
@@ -194,70 +259,177 @@ export default function ChannelPerformance() {
   const thisLabel = periodLabel(windowCurrentMonths)
   const priorLabel = periodLabel(windowPriorMonths)
 
+  // 2026-08-25 bug fix: whenever the blended prior-year window
+  // (windowPriorMonths) reaches earlier than the dataset's own start —
+  // e.g. FY=All & Month=All shifts the full Apr24-Jul26 range back a year
+  // to Apr23-Jul25, of which only Apr24-Jul25 actually exists —
+  // sumForMonths() would otherwise silently sum just the real subset of
+  // those months and hand it back as if it WERE the whole window's total.
+  // That's a smaller, mismatched-length "prior" figure standing in for a
+  // real like-for-like comparison, which produces an inflated/deflated but
+  // entirely fabricated-looking growth %. `priorWindowComplete` gates every
+  // BLENDED (multi-month) prior-side sum on this page: an incomplete
+  // window's prior side is forced to null (not partial), so every derived
+  // %growth/%contribution correctly hides via this app's existing
+  // null-comparison convention (DeltaBadge/fmtPctOrDash already treat null
+  // as "no comparison to show", not 0 or ±Infinity) instead of rendering a
+  // fabricated number. Only the blended Gift Card Performance figures below
+  // need this — the restructured, per-month Period Comparison table (see
+  // monthSections below) never sums more than one real month per side, so
+  // a missing single prior month there is already, correctly, a genuine
+  // "no data for this one specific month" case with no fabrication risk
+  // (sumForMonths' own null-on-zero-match behavior already handles it).
+  const datasetMonthSet = useMemo(() => new Set(channelTransactionsRows.map((r) => r.YearMonth)), [channelTransactionsRows])
+  const priorWindowComplete = useMemo(
+    () => windowPriorMonths.length > 0 && windowPriorMonths.every((m) => datasetMonthSet.has(m)),
+    [windowPriorMonths, datasetMonthSet]
+  )
+
   // Section 1 — the 4 real booking channels only. channelTransactionsRows
   // is exposed UNFILTERED by FilterContext.jsx (see its own doc comments)
   // specifically so this page can sum two independently-chosen, arbitrary
   // month sets that reach on both sides of whatever FY/Month happens to be
   // selected — sumForMonths (reused from lib/comparisons.js, same
   // null-when-no-match convention every other comparison in this app
-  // relies on) is exactly the primitive built for that.
-  const { channelRows, totalThis, totalPrior } = useMemo(() => {
-    const totalThisVal = sumForMonths(channelTransactionsRows, 'Total', windowCurrentMonths)
-    const totalPriorVal = sumForMonths(channelTransactionsRows, 'Total', windowPriorMonths)
-    const rows = REAL_CHANNELS.map((key) => {
-      const thisVal = sumForMonths(channelTransactionsRows, key, windowCurrentMonths)
-      const priorVal = sumForMonths(channelTransactionsRows, key, windowPriorMonths)
-      return {
-        key,
-        thisVal,
-        priorVal,
-        diff: thisVal != null && priorVal != null ? thisVal - priorVal : null,
-        growthPct: pctChange(thisVal, priorVal),
-        contribThis: pctOfTotal(thisVal, totalThisVal),
-        contribPrior: pctOfTotal(priorVal, totalPriorVal)
-      }
-    })
-    return { channelRows: rows, totalThis: totalThisVal, totalPrior: totalPriorVal }
-  }, [channelTransactionsRows, windowCurrentMonths, windowPriorMonths])
+  // relies on) is exactly the primitive built for that. `totalThis`/
+  // `totalPrior` here are the whole-market (all 4 channels, NOT limited by
+  // "Channels Shown") blended totals — still needed as the denominator for
+  // Gift Card's own "% of Total Market" below, which is a market-wide
+  // question independent of which channel ROWS happen to be toggled
+  // visible in the table.
+  const { totalThis, totalPrior } = useMemo(
+    () => ({
+      totalThis: sumForMonths(channelTransactionsRows, 'Total', windowCurrentMonths),
+      totalPrior: priorWindowComplete ? sumForMonths(channelTransactionsRows, 'Total', windowPriorMonths) : null
+    }),
+    [channelTransactionsRows, windowCurrentMonths, windowPriorMonths, priorWindowComplete]
+  )
 
-  // Section 2 — Gift Card, entirely separate from the channelRows/Total
+  // One row per real channel-transaction month — used by monthSections
+  // below for direct per-month lookups (each section pairs exactly one
+  // "this" month against exactly one "prior" month, never a blended sum).
+  const rowByMonth = useMemo(() => new Map(channelTransactionsRows.map((r) => [r.YearMonth, r])), [channelTransactionsRows])
+
+  // 2026-08-25 restructure — replaces the old single blended-period table
+  // with one row-group per month currently in the selection (a single
+  // Month pick collapses to exactly one section, same code path). REAL
+  // BUG FIX (this-period "Total"/% Contribution ignored "Channels Shown"):
+  // each section's own Total/contribution denominators are now summed from
+  // ONLY the currently-shown channels (`shownChannels` below), not all 4 —
+  // toggling a channel off immediately changes that section's own Total
+  // and rebalances every remaining channel's % Contribution to still sum
+  // to 100%, by construction (the % is always taken against the same
+  // shown-only sum, never a fixed all-4 total).
+  const monthSections = useMemo(() => {
+    const shownChannels = REAL_CHANNELS.filter((k) => isShown(channelsShown, k))
+    return [...windowCurrentMonths]
+      .sort()
+      .map((m) => {
+        const priorMonth = oneYearEarlier([m])[0]
+        const thisRow = rowByMonth.get(m)
+        const priorRow = rowByMonth.get(priorMonth)
+        const totalThisVal = thisRow ? shownChannels.reduce((s, k) => s + (thisRow[k] || 0), 0) : null
+        const totalPriorVal = priorRow ? shownChannels.reduce((s, k) => s + (priorRow[k] || 0), 0) : null
+        const rows = shownChannels.map((k) => {
+          const thisVal = thisRow ? thisRow[k] : null
+          const priorVal = priorRow ? priorRow[k] : null
+          return {
+            key: k,
+            thisVal,
+            priorVal,
+            diff: thisVal != null && priorVal != null ? thisVal - priorVal : null,
+            growthPct: pctChange(thisVal, priorVal),
+            contribThis: pctOfTotal(thisVal, totalThisVal),
+            contribPrior: pctOfTotal(priorVal, totalPriorVal)
+          }
+        })
+        return {
+          month: m,
+          priorMonth,
+          rows,
+          totalThis: totalThisVal,
+          totalPrior: totalPriorVal,
+          totalDiff: totalThisVal != null && totalPriorVal != null ? totalThisVal - totalPriorVal : null,
+          totalGrowthPct: pctChange(totalThisVal, totalPriorVal)
+        }
+      })
+  }, [windowCurrentMonths, channelsShown, rowByMonth])
+
+  // 2026-08-26 addition — one combined comparison across the ENTIRE
+  // currently-selected date range (e.g. Jun+Jul 26 selected -> "Jun-Jul 26
+  // vs. Jun-Jul 25" combined), rendered ABOVE the per-month monthSections
+  // breakdown, not replacing it. Same shownChannels-filtered Total/
+  // %Contribution treatment as monthSections (Bug 1's fix) — toggling a
+  // channel off rebalances this block's own Total/%Contribution too, not
+  // just the per-month ones below. Prior-side values gated on
+  // `priorWindowComplete`, same reasoning as `giftCard`/`giftCardTotal`
+  // above: an incomplete prior window (e.g. FY=All & Month=All) hides
+  // this block's own %Growth/%Contribution(Prior) rather than computing
+  // them from a fabricated partial-length prior sum.
+  const overallSection = useMemo(() => {
+    const shownChannels = REAL_CHANNELS.filter((k) => isShown(channelsShown, k))
+    const rows = shownChannels.map((k) => {
+      const thisVal = sumForMonths(channelTransactionsRows, k, windowCurrentMonths)
+      const priorVal = priorWindowComplete ? sumForMonths(channelTransactionsRows, k, windowPriorMonths) : null
+      return { key: k, thisVal, priorVal }
+    })
+    const totalThisVal = rows.reduce((s, r) => s + (r.thisVal || 0), 0)
+    const totalPriorVal = priorWindowComplete ? rows.reduce((s, r) => s + (r.priorVal || 0), 0) : null
+    const finalRows = rows.map((r) => ({
+      ...r,
+      diff: r.thisVal != null && r.priorVal != null ? r.thisVal - r.priorVal : null,
+      growthPct: pctChange(r.thisVal, r.priorVal),
+      contribThis: pctOfTotal(r.thisVal, totalThisVal),
+      contribPrior: pctOfTotal(r.priorVal, totalPriorVal)
+    }))
+    return {
+      rows: finalRows,
+      totalThis: totalThisVal,
+      totalPrior: totalPriorVal,
+      totalDiff: totalPriorVal != null ? totalThisVal - totalPriorVal : null,
+      totalGrowthPct: pctChange(totalThisVal, totalPriorVal)
+    }
+  }, [channelTransactionsRows, channelsShown, windowCurrentMonths, windowPriorMonths, priorWindowComplete])
+
+  // Section 2 — Gift Card, entirely separate from the monthSections/Total
   // computation above. Two distinct "% contribution" denominators: the
   // file's own Total (the whole market), and PVR INOX's own count (our
   // direct channel) — the latter is the more meaningful internal question
   // ("how much of our own channel do we power"), given equal card weight
-  // below rather than a footnote, per the request. Same selectedMonths/
-  // priorSelectedMonths window as the table above (and as giftCardTotal
-  // below) — they're ratios against the Market Channels table's own
-  // Total/PVR INOX figures directly above, so the numerator and
-  // denominator have to stay on the same footing, which they now do by
-  // construction (same shared window, not two independently-anchored
-  // copies of "current period").
+  // below rather than a footnote, per the request. Same
+  // windowCurrentMonths/windowPriorMonths window as everything else on this
+  // page — they're ratios against the whole-market Total/PVR INOX figures
+  // directly above, so the numerator and denominator have to stay on the
+  // same footing, which they now do by construction (same shared window,
+  // not two independently-anchored copies of "current period"). Prior-side
+  // values are gated on `priorWindowComplete` (see its own doc comment).
   const giftCard = useMemo(() => {
     const thisVal = sumForMonths(giftCardTransactionRows, 'RedemptionCount', windowCurrentMonths)
-    const priorVal = sumForMonths(giftCardTransactionRows, 'RedemptionCount', windowPriorMonths)
+    const priorVal = priorWindowComplete ? sumForMonths(giftCardTransactionRows, 'RedemptionCount', windowPriorMonths) : null
     const pvrinoxThis = sumForMonths(channelTransactionsRows, 'PVRINOX', windowCurrentMonths)
-    const pvrinoxPrior = sumForMonths(channelTransactionsRows, 'PVRINOX', windowPriorMonths)
+    const pvrinoxPrior = priorWindowComplete ? sumForMonths(channelTransactionsRows, 'PVRINOX', windowPriorMonths) : null
     return {
       contribTotalThis: pctOfTotal(thisVal, totalThis),
       contribTotalPrior: pctOfTotal(priorVal, totalPrior),
       contribPvrinoxThis: pctOfTotal(thisVal, pvrinoxThis),
       contribPvrinoxPrior: pctOfTotal(priorVal, pvrinoxPrior)
     }
-  }, [giftCardTransactionRows, channelTransactionsRows, windowCurrentMonths, windowPriorMonths, totalThis, totalPrior])
+  }, [giftCardTransactionRows, channelTransactionsRows, windowCurrentMonths, windowPriorMonths, totalThis, totalPrior, priorWindowComplete])
 
   // "Gift Card Transactions" KPI — same windowCurrentMonths/windowPriorMonths
   // window as every other section on this page now (see the root-cause
-  // comment above `selectedMonths`/`windowCurrentMonths` itself).
+  // comment above `selectedMonths`/`windowCurrentMonths` itself). Prior
+  // value gated on `priorWindowComplete`, same as `giftCard` above.
   const giftCardTotal = useMemo(() => {
     const thisVal = sumForMonths(giftCardTransactionRows, 'RedemptionCount', windowCurrentMonths)
-    const priorVal = sumForMonths(giftCardTransactionRows, 'RedemptionCount', windowPriorMonths)
+    const priorVal = priorWindowComplete ? sumForMonths(giftCardTransactionRows, 'RedemptionCount', windowPriorMonths) : null
     return {
       thisVal,
       priorVal,
       diff: thisVal != null && priorVal != null ? thisVal - priorVal : null,
       growthPct: pctChange(thisVal, priorVal)
     }
-  }, [giftCardTransactionRows, windowCurrentMonths, windowPriorMonths])
+  }, [giftCardTransactionRows, windowCurrentMonths, windowPriorMonths, priorWindowComplete])
 
   // All 28 months, 4 real channels only (Gift Card removed — see the
   // module-level REAL_CHANNELS doc comment) — for Section 1's trend chart.
@@ -305,6 +477,16 @@ export default function ChannelPerformance() {
     [channelTransactionsRows]
   )
 
+  // Shared GC-by-month lookup — was independently rebuilt inside each of
+  // the two Penetration Trend memos below; now built once and reused by
+  // both plus the new "Raw Trend" chart (2026-08-25), so a future 4th
+  // consumer can't accidentally diverge on how GC's monthly count is
+  // derived.
+  const gcByMonthMap = useMemo(() => {
+    const gcByMonth = groupSum(giftCardTransactionRows, 'YearMonth', ['RedemptionCount'])
+    return new Map(gcByMonth.map((r) => [r.key, r.RedemptionCount]))
+  }, [giftCardTransactionRows])
+
   // Section 2's two Penetration Trend charts — GC's own % of Total and % of
   // PVR INOX, full 28-month range. Two SEPARATE arrays/charts, not one
   // dual-line chart on a shared axis: the two ratios sit on very different
@@ -312,21 +494,47 @@ export default function ChannelPerformance() {
   // line to near-invisible next to PVR INOX's much larger one — the same
   // "don't force very different scales onto one shared axis" reasoning
   // that already justifies keeping this pair on 2 charts instead of 1.
-  const gcPenetrationVsTotal = useMemo(() => {
-    const gcByMonth = groupSum(giftCardTransactionRows, 'YearMonth', ['RedemptionCount'])
-    const gcMap = new Map(gcByMonth.map((r) => [r.key, r.RedemptionCount]))
-    return [...channelTransactionsRows]
-      .sort((a, b) => (a.YearMonth > b.YearMonth ? 1 : -1))
-      .map((r) => ({ label: monthLabel(r.YearMonth), 'vs. Total': pctOfTotal(gcMap.get(r.YearMonth) || 0, r.Total) }))
-  }, [channelTransactionsRows, giftCardTransactionRows])
+  const gcPenetrationVsTotal = useMemo(
+    () =>
+      [...channelTransactionsRows]
+        .sort((a, b) => (a.YearMonth > b.YearMonth ? 1 : -1))
+        .map((r) => ({ label: monthLabel(r.YearMonth), 'vs. Total': pctOfTotal(gcByMonthMap.get(r.YearMonth) || 0, r.Total) })),
+    [channelTransactionsRows, gcByMonthMap]
+  )
 
-  const gcPenetrationVsPvrinox = useMemo(() => {
-    const gcByMonth = groupSum(giftCardTransactionRows, 'YearMonth', ['RedemptionCount'])
-    const gcMap = new Map(gcByMonth.map((r) => [r.key, r.RedemptionCount]))
-    return [...channelTransactionsRows]
-      .sort((a, b) => (a.YearMonth > b.YearMonth ? 1 : -1))
-      .map((r) => ({ label: monthLabel(r.YearMonth), 'vs. PVR INOX': pctOfTotal(gcMap.get(r.YearMonth) || 0, r.PVRINOX) }))
-  }, [channelTransactionsRows, giftCardTransactionRows])
+  const gcPenetrationVsPvrinox = useMemo(
+    () =>
+      [...channelTransactionsRows]
+        .sort((a, b) => (a.YearMonth > b.YearMonth ? 1 : -1))
+        .map((r) => ({ label: monthLabel(r.YearMonth), 'vs. PVR INOX': pctOfTotal(gcByMonthMap.get(r.YearMonth) || 0, r.PVRINOX) })),
+    [channelTransactionsRows, gcByMonthMap]
+  )
+
+  // NEW (2026-08-25) — "Gift Card vs. PVR INOX Channel — Raw Trend": both
+  // series as ABSOLUTE counts, not a ratio — a different question from the
+  // two Penetration Trend charts above (which stay unchanged). Full
+  // 28-month range, same always-full-history convention as every other
+  // trend chart on this page (never subject to the current FY/Month
+  // selection).
+  const gcVsPvrinoxRaw = useMemo(
+    () =>
+      [...channelTransactionsRows]
+        .sort((a, b) => (a.YearMonth > b.YearMonth ? 1 : -1))
+        .map((r) => ({ label: monthLabel(r.YearMonth), 'Gift Card': gcByMonthMap.get(r.YearMonth) || 0, 'PVR INOX': r.PVRINOX })),
+    [channelTransactionsRows, gcByMonthMap]
+  )
+
+  // NEW (2026-08-25) — "PVR INOX Channel Share of Total Market": PVR
+  // INOX's own count ÷ that month's Total (all 4 real channels) — a
+  // market-share question about PVR INOX itself, unrelated to Gift Card.
+  // Full 28-month range, same convention as every chart above.
+  const pvrinoxShareOfTotal = useMemo(
+    () =>
+      [...channelTransactionsRows]
+        .sort((a, b) => (a.YearMonth > b.YearMonth ? 1 : -1))
+        .map((r) => ({ label: monthLabel(r.YearMonth), 'PVR INOX': pctOfTotal(r.PVRINOX, r.Total) })),
+    [channelTransactionsRows]
+  )
 
   // Endpoint-only subtitles for the two Penetration Trend charts — the two
   // numbers/dates the request wants in place of a full explanatory
@@ -436,62 +644,73 @@ export default function ChannelPerformance() {
                   the two periods being compared, once, for the whole page. */}
               <Card title="Channel Performance — Period Comparison">
                 <div className="overflow-x-auto">
-                  <table className="w-full text-xs min-w-[720px] border-separate border-spacing-0">
-                    <thead>
-                      <tr className="text-[10px] uppercase tracking-wide text-warmgray-muted">
-                        <th className="text-left font-semibold pb-2">Channel</th>
-                        {/* 2026-08-26: literal "This Period"/"Prior Period"
-                            replaced with the actual date ranges (thisLabel/
-                            priorLabel, the same periodLabel()-built strings
-                            the top-right line and every other date caption
-                            on this page already use). */}
-                        <th className="text-right font-semibold pb-2">{thisLabel}</th>
-                        <th className="text-right font-semibold pb-2">{priorLabel}</th>
-                        <th className="text-right font-semibold pb-2">Difference</th>
-                        <th className="text-right font-semibold pb-2">% Growth</th>
-                        {/* 2026-08-30: literal "(This)"/"(Prior)" replaced
-                            with the same thisLabel/priorLabel date-range
-                            strings the amount columns above already use —
-                            same periodLabel()-built values, no new
-                            formatting logic. */}
-                        <th className="text-right font-semibold pb-2">% Contribution ({thisLabel})</th>
-                        <th className="text-right font-semibold pb-2">% Contribution ({priorLabel})</th>
-                      </tr>
-                    </thead>
+                  {/* 2026-08-25 restructure: one row-group per month
+                      currently in the selection (monthSections above),
+                      each its own this-year vs. same-month-last-year
+                      comparison — replaces the old single blended-period
+                      table entirely. A single selected Month collapses to
+                      exactly one section below, so narrow selections still
+                      work the same way. Column order swapped to Prior-then-
+                      This (was This-then-Prior) throughout, including the
+                      % Contribution pair; % Contribution columns are now
+                      center-aligned (`text-center`, was `text-right`).
+                      2026-08-26: the one shared static `<thead>` (generic
+                      "Prior"/"This" text for every block regardless of its
+                      actual dates) is gone — `ComparisonHeaderRow` now
+                      renders per-block, with that block's own real date
+                      label in place of the generic text. A new full-period
+                      summary block (`overallSection`) renders first, above
+                      the per-month breakdown, using the exact same
+                      thisLabel/priorLabel calendar-range strings ("Apr 26 –
+                      Jul 26") the page's own top caption already uses —
+                      not a new FY-based format. */}
+                  <table className="w-full text-xs min-w-[760px] border-separate border-spacing-0">
                     <tbody>
-                      {channelRows
-                        .filter((r) => isShown(channelsShown, r.key))
-                        .map((r) => (
-                          <tr key={r.key} className="border-t border-warmgray-border/60 hover:bg-cream/60 transition-colors">
-                            <td className="py-2 text-navy font-medium whitespace-nowrap">
-                              <span className="inline-block w-2 h-2 rounded-full mr-1.5" style={{ backgroundColor: CHANNEL_COLORS[r.key] }} />
-                              {channelLabel(r.key)}
-                            </td>
-                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(r.thisVal)}</td>
-                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(r.priorVal)}</td>
-                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtDiff(r.diff)}</td>
-                            <td
-                              className={`py-2 text-right tabular-nums whitespace-nowrap font-semibold ${
-                                r.growthPct == null ? 'text-warmgray-muted' : r.growthPct >= 0 ? 'text-teal-dark' : 'text-coral-dark'
-                              }`}
-                            >
-                              {fmtPctOrDash(r.growthPct)}
-                            </td>
-                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(r.contribThis, 2)}</td>
-                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(r.contribPrior, 2)}</td>
-                          </tr>
-                        ))}
-                      <tr className="border-t border-warmgray-border font-bold">
-                        <td className="py-2 text-navy">Total</td>
-                        <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(totalThis)}</td>
-                        <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(totalPrior)}</td>
-                        <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">
-                          {fmtDiff(totalThis != null && totalPrior != null ? totalThis - totalPrior : null)}
+                      <tr className="bg-gold-light">
+                        <td colSpan={7} className="py-1.5 pl-1 text-[11px] font-bold text-navy italic tracking-wide">
+                          Full Period — {thisLabel} <span className="font-normal text-warmgray-muted">vs. {priorLabel}</span>
                         </td>
-                        <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(pctChange(totalThis, totalPrior))}</td>
-                        <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">100.00%</td>
-                        <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">100.00%</td>
                       </tr>
+                      <ComparisonHeaderRow priorLabel={priorLabel} thisLabel={thisLabel} />
+                      {overallSection.rows.map((r) => (
+                        <ChannelComparisonRow key={r.key} r={r} />
+                      ))}
+                      <TotalComparisonRow
+                        totalPrior={overallSection.totalPrior}
+                        totalThis={overallSection.totalThis}
+                        totalDiff={overallSection.totalDiff}
+                        totalGrowthPct={overallSection.totalGrowthPct}
+                      />
+                      {monthSections.map((section) => {
+                        const sectionPriorLabel = monthLabel(section.priorMonth)
+                        const sectionThisLabel = monthLabel(section.month)
+                        return (
+                          <React.Fragment key={section.month}>
+                            {/* 2026-08-26 fix: the whole line is now
+                                italic with consistent casing throughout
+                                ("Jun 26 vs. Jun 25") — previously the outer
+                                <td> forced `uppercase` ("JUN 26") while the
+                                inner <span> forced it back with
+                                `normal-case`, an inconsistent half-caps
+                                line with no italic anywhere. */}
+                            <tr className="bg-cream/70">
+                              <td colSpan={7} className="py-1.5 pl-1 text-[11px] font-bold text-navy italic tracking-wide">
+                                {sectionThisLabel} <span className="font-normal text-warmgray-muted">vs. {sectionPriorLabel}</span>
+                              </td>
+                            </tr>
+                            <ComparisonHeaderRow priorLabel={sectionPriorLabel} thisLabel={sectionThisLabel} />
+                            {section.rows.map((r) => (
+                              <ChannelComparisonRow key={r.key} r={r} />
+                            ))}
+                            <TotalComparisonRow
+                              totalPrior={section.totalPrior}
+                              totalThis={section.totalThis}
+                              totalDiff={section.totalDiff}
+                              totalGrowthPct={section.totalGrowthPct}
+                            />
+                          </React.Fragment>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -507,6 +726,20 @@ export default function ChannelPerformance() {
                   just relocated within the same page, not restructured. */}
               <div>
                 <h2 className="font-serif text-lg font-extrabold text-navy mb-1">Gift Card Performance</h2>
+                {/* 2026-08-25 REAL BUG FIX: whenever the blended prior-year
+                    window (windowPriorMonths) reaches earlier than the
+                    dataset's own start (e.g. FY=All & Month=All), every
+                    figure below is deliberately hidden rather than computed
+                    from a fabricated partial sum — see priorWindowComplete's
+                    own doc comment above. This caption is the one place on
+                    the page that states why, instead of the 3 cards below
+                    just going quietly blank with no explanation. */}
+                {!priorWindowComplete && (
+                  <p className="text-xs italic text-warmgray-muted mb-2">
+                    Insufficient prior-year data for this comparison window — growth/contribution figures below are hidden rather than shown against a
+                    partial, mismatched-length prior period.
+                  </p>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <Kpi
                     label="Gift Card Transactions"
@@ -587,6 +820,52 @@ export default function ChannelPerformance() {
                       />
                       <Tooltip content={<ChartTooltip formatter={(v) => fmtPct(v, 2)} />} />
                       <Line type="monotone" dataKey="vs. PVR INOX" name="vs. PVR INOX" stroke={CHANNEL_COLORS.PVRINOX} strokeWidth={3} dot={{ r: 2.5 }} activeDot={{ r: 6 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </Card>
+              </div>
+
+              {/* NEW (2026-08-25) — raw-count companion to the two ratio
+                  charts above: absolute GC vs. PVR INOX counts, and PVR
+                  INOX's own share of the whole market. Same 2-column row
+                  layout/style as the Penetration Trend pair above. */}
+              <div className="grid md:grid-cols-2 gap-6">
+                <Card title="Gift Card vs. PVR INOX Channel — Raw Trend">
+                  <ResponsiveContainer width="100%" height={340}>
+                    <LineChart data={gcVsPvrinoxRaw} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} interval={1} />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                        axisLine={false}
+                        tickLine={false}
+                        width={68}
+                        tickFormatter={fmtNumber}
+                        label={{ value: 'Transactions', angle: -90, position: 'insideLeft', dx: -8, style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                      />
+                      <Tooltip content={<ChartTooltip formatter={fmtNumber} />} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Line type="monotone" dataKey="Gift Card" name="Gift Card" stroke={CHANNEL_COLORS['Gift Card']} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
+                      <Line type="monotone" dataKey="PVR INOX" name="PVR INOX" stroke={CHANNEL_COLORS.PVRINOX} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </Card>
+
+                <Card title="PVR INOX Channel Share of Total Market">
+                  <ResponsiveContainer width="100%" height={340}>
+                    <LineChart data={pvrinoxShareOfTotal} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} interval={1} />
+                      <YAxis
+                        tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                        axisLine={false}
+                        tickLine={false}
+                        width={56}
+                        tickFormatter={fmtPctAxis}
+                        label={{ value: '% of Total', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                      />
+                      <Tooltip content={<ChartTooltip formatter={(v) => fmtPct(v, 2)} />} />
+                      <Line type="monotone" dataKey="PVR INOX" name="PVR INOX" stroke={CHANNEL_COLORS.PVRINOX} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
                     </LineChart>
                   </ResponsiveContainer>
                 </Card>

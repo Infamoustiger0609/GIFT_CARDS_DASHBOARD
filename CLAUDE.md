@@ -7617,6 +7617,175 @@ build (809.80 kB JS, 222.38 kB gzipped — negligible size change, a static
 array edit only, no new warnings beyond the pre-existing 500KB chunk-size
 notice).
 
+## 2026-08-25 — Channel Performance: 5 fixes to the Period Comparison
+table + 2 new absolute-count charts
+
+**Fix 1 (REAL BUG) — "Channels Shown" only hid rows visually, Total/%
+Contribution stayed computed against all 4 channels.** The table's Total
+row and every channel's %Contribution cell were summed from the fixed
+`REAL_CHANNELS` list regardless of `channelsShown` — unticking a channel
+removed its own row but left the denominator (and every remaining row's
+share of it) untouched. Fixed by having the table's own per-month
+computation (see Fix 2 below) derive its Total/denominators from
+`shownChannels = REAL_CHANNELS.filter((k) => isShown(channelsShown, k))`
+directly, so toggling a channel immediately changes that Total and
+rebalances every remaining %Contribution cell — by construction, since
+the % is always taken against the same shown-only sum, never a fixed
+all-4 total.
+
+**Fix 2 — table restructured into one row-group per month in the
+selection.** The old table blended the entire selection into one "this
+period" vs. "one prior period" pair (e.g. all 28 months summed into a
+single row per channel). Replaced with `monthSections`: one section per
+month in `windowCurrentMonths`, each independently paired against the
+same calendar month one year earlier (`oneYearEarlier([m])[0]`), with
+that section's own channels (and a Total row) nested underneath a bold
+month-header row ("Jul 26 vs. Jul 25"). A single selected Month
+collapses to exactly one section — verified live via the MTD preset
+(1 section, "Jul 26 vs. Jul 25"). No collapsible/expandable UI was added
+— per the request, a plain stacked list under each month header was
+judged to read cleanly enough on its own.
+
+**Fix 3 — % Contribution columns centered.** Both `<th>`/`<td>` for the
+two %Contribution columns switched from `text-right` to `text-center`.
+
+**Fix 4 — column order swapped, Prior before This.** Both the amount
+columns (was This, Prior — now Prior, This) and the %Contribution columns
+(was %Contribution(This), %Contribution(Prior) — now %Contribution(Prior),
+%Contribution(This)) reordered, inside every month section from Fix 2.
+The underlying `diff`/`growthPct` math (`this − prior`, `pctChange(this,
+prior)`) is unchanged — only the display column order moved, not the
+comparison direction.
+
+**Fix 5 (REAL BUG) — a prior-year window reaching before the dataset's
+own start silently summed a partial match and presented it as a real
+comparison.** `sumForMonths()` (`lib/comparisons.js`) returns null only
+when *zero* of the requested months match any row — with FY=All &
+Month=All, `windowCurrentMonths` is the full Apr24-Jul26 range (28
+months) and `windowPriorMonths` (`oneYearEarlier` of that) is Apr23-Jul25,
+of which only the Apr24-Jul25 half (16 of 28 months) actually exists in
+the dataset. Since *some* months matched, the old code silently summed
+those 16 real months and used the result as if it were the full 28-month
+prior total — a shorter, mismatched-length "prior" figure masquerading as
+a real like-for-like comparison, producing a fabricated-looking growth %.
+Fixed with a new `priorWindowComplete` flag (`windowPriorMonths.every((m)
+=> datasetMonthSet.has(m))`) that gates every BLENDED (multi-month)
+prior-side sum on this page — when incomplete, the prior value is forced
+to `null` (not partial), so every derived %growth/%contribution correctly
+hides via this app's existing null-comparison convention (`DeltaBadge`/
+`fmtPctOrDash` already treat `null` as "no comparison," not 0 or
+±Infinity) instead of rendering a fabricated number. A new caption directly
+under the "Gift Card Performance" heading ("Insufficient prior-year data
+for this comparison window — growth/contribution figures below are hidden
+rather than shown against a partial, mismatched-length prior period")
+states this explicitly rather than leaving the 3 cards silently blank with
+no explanation. The restructured, per-month Fix 2 table needed no
+equivalent gating — each section only ever compares one real month against
+one specific prior month, so a missing prior month there is already,
+correctly, a genuine "no data for this one month" case (Apr 2024's own
+"vs. Apr 2023" section already shows dashes for exactly this reason, with
+no risk of a partial-sum fabrication since there's nothing to partially
+sum — a single month either exists or it doesn't).
+
+**Two new charts**, both full 28-month range, added below the existing
+"Gift Card Penetration Trend" pair:
+  - **"Gift Card vs. PVR INOX Channel — Raw Trend"** — two lines, GC's own
+    count and PVR INOX's own count, both as ABSOLUTE numbers — a different
+    question from the existing (unchanged) ratio-based "Gift Card
+    Penetration Trend — vs. PVR INOX Channel" chart.
+  - **"PVR INOX Channel Share of Total Market"** — single line, PVR INOX's
+    count ÷ that month's Total (all 4 real channels).
+  Both reuse a new shared `gcByMonthMap` (extracted from what used to be
+  two independently-rebuilt per-chart maps inside the two Penetration
+  Trend memos) rather than a third hand-rolled copy of the same GC-by-month
+  lookup.
+
+**Verified against the raw `channelTransactions.json` by hand first, then
+live in the app**: Jul 2026 section (unfiltered) — BMS Prior ₹36,70,757 /
+This ₹29,40,510 / Diff −7,30,247 / −19.9% / 52.33% / 49.35% (Prior
+column now genuinely holds Jul 2025's own BMS figure, confirming the
+column swap), Total Prior 70,14,303 / This 59,58,966, both matching the
+raw file exactly. Unticking Box Office from "Channels Shown" on that same
+section: Total dropped from 59,58,966 to 43,38,600 — exactly
+59,58,966 − 16,20,366 (Box Office's own This value) — and the remaining 3
+channels' %Contribution(This) rebalanced to 67.78% + 9.35% + 22.87% =
+100.00%, matching a hand-computed check against the raw file exactly.
+Default (FY=All & Month=All) state: confirmed exactly 28 month-sections
+rendered (Apr 24 through Jul 26), the "Insufficient prior-year data"
+caption present, and the Gift Card Transactions KPI showing "—" (no
+fabricated growth %) instead of a real-looking percentage — the exact
+target this fix asked for. Both new chart titles confirmed present. Zero
+console errors across every scenario tested; clean production build
+(812.91 kB JS, 222.86 kB gzipped, no new warnings beyond the pre-existing
+500KB chunk-size notice).
+
+## 2026-08-26 — Channel Performance table: per-block real-date headers,
+consistent italic titles, full-period summary block
+
+Three fixes to "Channel Performance — Period Comparison", all following
+directly from the 2026-08-25 per-month restructure above.
+
+**Fix 1 — removed the single shared "Prior"/"This" `<thead>`.** Every
+block (the new full-period summary block below, and each per-month
+section) now renders its own `ComparisonHeaderRow` (new, shared component)
+with that block's OWN real date label in place of the generic text — e.g.
+the "Jun 26 vs. Jun 25" section's two amount columns now read "Jun 25" /
+"Jun 26", not "Prior"/"This". Extended the same real-date treatment to the
+% Contribution columns too (now "% Contribution (Jun 25)" / "% Contribution
+(Jun 26)", not "(Prior)"/"(This)") — leaving those two saying the old
+generic text right next to amount columns that now say real dates would
+have been an inconsistent half-fix. `ChannelComparisonRow`/
+`TotalComparisonRow` (also extracted as shared components) render
+identically for the full-period block and every per-month section, so the
+three can't drift apart on cell styling.
+
+**Fix 2 — month-group title line was inconsistently cased with no
+italic anywhere.** The old markup applied `uppercase` to the outer `<td>`
+(rendering "JUN 26") while the inner `<span>` applied `normal-case` to
+override it back for "vs. Jun 25" — inconsistent casing across the same
+line, and neither half was actually italic despite reading like a caption.
+Fixed by removing `uppercase`/`normal-case` entirely and adding `italic`
+to the outer `<td>` only — the inner `<span>` inherits it (confirmed via
+`getComputedStyle` on both elements, not assumed from the markup) — so the
+whole line now reads "Jun 26 vs. Jun 25" in one consistent case, fully
+italic.
+
+**Fix 3 — added a full-period summary block above the per-month
+breakdown.** New `overallSection` (`useMemo`), one combined comparison
+across the ENTIRE currently-selected date range (e.g. Jun+Jul 2026
+selected → "Jun 26 – Jul 26 vs. Jun 25 – Jul 25" combined) rather than per
+individual month. Reuses `thisLabel`/`priorLabel` — the same
+`periodLabel()`-built calendar month-year range strings ("Apr 26 – Jul
+26") the page's own top caption already uses — rather than a new FY-based
+format, per the request. Same shownChannels-filtered Total/%Contribution
+treatment as `monthSections` (the 2026-08-25 Bug 1 fix) — toggling a
+channel off in "Channels Shown" rebalances this block's own Total/
+%Contribution too, not just the per-month ones below it. Prior-side
+values gated on the existing `priorWindowComplete` flag, same reasoning as
+`giftCard`/`giftCardTotal`: an incomplete prior window (FY=All & Month=
+All) hides this block's own %Growth/%Contribution(Prior) rather than
+computing them from a fabricated partial-length prior sum. Rendered first
+in the table, in a `bg-gold-light` row (visually distinct from the
+per-month sections' `bg-cream/70`), with the per-month breakdown groups
+unchanged directly beneath it.
+
+**Verified against the raw `channelTransactions.json` by hand first, then
+live in the app**: selected FY2026-27 + Month=Jun 26+Jul 26 — the
+full-period block read "Jun 26 – Jul 26 vs. Jun 25 – Jul 25" with BMS
+59,68,424 → 56,80,690 (−2,87,734, −4.8%, 50.99%/49.31%), PVR INOX 7,87,426
+→ 7,37,261 (−50,165, −6.4%), Paytm/District 12,70,870 → 18,47,666
+(+5,76,796, +45.4%), Box Office 36,77,659 → 32,55,283 (−4,22,376, −11.5%),
+Total 1,17,04,379 → 1,15,20,900 (−1,83,479, −1.6%) — every figure matching
+a hand-computed check against the raw file exactly, and exactly 2
+per-month sections (Jun 26, Jul 26) still rendered beneath it, unchanged.
+Confirmed live: zero `<thead>` elements remain on the table; each of the
+first 3 header rows checked (full-period, Apr 24 section, May 24 section)
+carries its own distinct real-date labels; the July 2026 section's title
+reads "Jul 26 vs. Jul 25" with `font-style: italic` computed on both the
+outer `<td>` and the inner `<span>`. Zero console errors across every
+scenario tested; clean production build (814.13 kB JS, 223.20 kB gzipped,
+no new warnings beyond the pre-existing 500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
