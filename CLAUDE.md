@@ -7786,6 +7786,351 @@ outer `<td>` and the inner `<span>`. Zero console errors across every
 scenario tested; clean production build (814.13 kB JS, 223.20 kB gzipped,
 no new warnings beyond the pre-existing 500KB chunk-size notice).
 
+## 2026-08-27 — Channel Performance: collapsible Period Comparison table,
+Online/Box Office GC bifurcation, page-wide Lakh notation, full-year
+monthly breakdown
+
+Four changes, all reusing existing shared primitives rather than adding
+new ones.
+
+**1. Collapse/expand toggle**, collapsed by default. The Card's own
+`title` prop now takes a `<button>` (a small `▸` arrow that rotates 90°
+when expanded, plus the existing title text) instead of a plain string —
+`Card.jsx` itself needed no change, since it already just renders
+whatever `title` node it's given inside an `<h3>`. Collapsed state shows
+one muted line ("Collapsed — click the title above to expand.") in place
+of the table; expanding renders the exact same full-period-summary +
+per-month-sections table the 2026-08-25/26 restructures already built,
+untouched.
+
+**2. Online/Box Office bifurcation on 3 GC cards** ("Gift Card
+Transactions", both `ContributionCard`s). New `giftCardByHead`
+(`useMemo`) splits the SAME `giftCardTransactionRows` pool these cards'
+own headline figures already read — `Head === 'Online'` /
+`Head === 'Box Office'` — reusing the exact `sumForMonths`/
+`windowCurrentMonths`/`windowPriorMonths`/`priorWindowComplete` machinery
+every other delta on this page already runs through, no new comparison
+mechanism. F&B is deliberately excluded (per the request — it has no
+equivalent slot in this page's channel-based framing), even though it's
+still part of each card's own headline total. Cancellations are already
+netted out the way this page has always treated the GC line:
+`giftCardTransactionRows` itself is `redemptionCube.filter(r => r.Head
+!== 'Cancellation')` (FilterContext.jsx), so neither head-filtered pool
+below it can contain a Cancel Redeem row in the first place — nothing
+further to net.
+
+Rendering-wise, this needed the existing `Kpi.jsx` `breakdown` prop
+extended with an optional per-item `deltaPct` (renders a small
+`DeltaBadge` under that item's value when present — omitted, not null,
+for every pre-existing `breakdown` caller, so purely additive), and the
+identical breakdown pattern added to `ContributionCard` (a page-local
+component, not a `<Kpi>`, with no such slot before this) — same absolute
+top-right position, same border-l/text sizing, same optional delta, so
+all 3 cards show the bifurcation identically.
+
+**3. Page-wide L-suffix Lakh notation** ("56.81 L", no ₹ symbol — these
+are transaction counts, not money) replacing plain digit-grouped numbers
+everywhere on the page. New `fmtLacsCount()`/`fmtLacsCountAxis()`
+(`lib/format.js`) mirror `fmtLacs()`/`fmtLacsAxis()`'s exact currency
+convention (full "X.XX L" for values/tooltips/table cells; bare number,
+axis title carries the unit, for axis ticks) — 2/1 decimals instead of
+`fmtLacs`'s 0, since this page's counts routinely fall well under 1 Lakh,
+where 0-decimal rounding would flatten every sub-Lakh figure to "0 L".
+This page's own `fmtCountOrDash()`/`fmtDiff()` now route through
+`fmtLacsCount()` instead of the old `fmtNumber()`, which reformatted
+every table cell/KPI value in one change; both trend charts that used to
+tick/tooltip in bare digit-grouped numbers ("Monthly Trend by Channel",
+"Gift Card vs. PVR INOX Channel — Raw Trend") switched to
+`fmtLacsCountAxis`/`fmtLacsCount` with their Y-axis titles updated to
+"Transactions (Lakhs)".
+
+**4. New full-year monthly breakdown** — one 12-row (Apr-Mar, always the
+complete FY regardless of the Month filter) table per currently-selected
+FY, stacked when more than one is ticked (`fullYearTables`, new
+`useMemo`). `selectedFYs` treats `filters.fy === []` the same way
+`Select.jsx`'s own "unrestricted looks like every option ticked"
+convention already does elsewhere — every real FY in the data, not zero
+tables, so the page's default (untouched) state renders all 3 stacked.
+Columns: BMS/PVR INOX/Paytm-District/Box Office (from
+`channelTransactions.json`, via the page's existing `rowByMonth` lookup),
+Gift Card (via the existing `gcByMonthMap`), and a Total column that sums
+only the 4 real channels — Gift Card doesn't feed it, same "overlaps
+with, rather than adds to, Total" convention this page has followed for
+Gift Card everywhere else. A month with no real row (e.g. FY2026-27's
+remaining 8 months) renders every cell as "—", not 0, so a partial FY
+reads as "not here yet" rather than "zero activity"; the footer Total row
+sums only the real months present and is labeled "Total (to date)"
+whenever the FY is partial, with a card subtitle stating "Partial —
+N/12 months on file" (same partial-year framing precedent as Summary.jsx's
+own FY-to-date blocks).
+
+**Verified against the raw `redemptionCube.json`/`channelTransactions.json`
+by hand first, then live in the app**: FY2026-27 alone (Apr-Jul 2026 vs.
+Apr-Jul 2025) — GC Online 3,01,494 → 3.01 L, ▲191.9%; Box Office 49,699 →
+0.50 L, ▲44.3% — both exact matches, rendered identically on all 3 cards.
+Whole-dataset default state: 3 full-year tables rendered (FY2024-25,
+FY2025-26, FY2026-27); FY2025-26's table (a complete year) shows no
+"Partial" subtitle and a plain "Total" row (BMS 325.99 L + PVR INOX
+44.44 L + Paytm/District 80.69 L + Box Office 185.37 L = 636.49 L,
+matching its own Total column exactly); FY2026-27's table shows "Partial —
+4/12 months on file", Mar 2027 as a fully-dashed row, and a "Total (to
+date)" footer whose Gift Card figure (4.17 L) matches the "Gift Card
+Transactions" KPI's own headline value for that same FY exactly — a
+useful cross-check that the two independently-built views can't drift
+apart. Table collapse/expand confirmed live (collapsed placeholder shown
+by default; clicking the title renders the full table). Grepped the
+rendered page for any leftover digit-grouped number pattern — none found.
+Zero console errors across every scenario tested; clean production build
+(818.90 kB JS, 224.16 kB gzipped, no new warnings beyond the pre-existing
+500KB chunk-size notice).
+
+## 2026-08-26 — Channel Performance: corrected the GC breakdown from
+Online/Box Office to Online/Cinema
+
+The 2026-08-27 bifurcation above split Gift Card by `Head` (Online vs.
+Box Office only, silently dropping F&B), a page-local split invented for
+this one spot. Corrected to `redemptionModeOf(RedemptionModeFinal)`
+(`lib/redemptionMode.js`) — the exact same Online/Cinema 2-way,
+mutually-exclusive split every other page in this app already uses for a
+redemption-side channel breakdown (Cinema = `RedemptionModeFinal ===
+'Physical'` = Box Office + F&B combined, the established meaning of that
+label dashboard-wide), not a new or page-local split, and not a 3-way
+Online/Box Office/F&B split either. `giftCardOnlineRows`/
+`giftCardCinemaRows` replace the old `giftCardOnlineRows`/
+`giftCardBoxOfficeRows` pair, filtering the same `giftCardTransactionRows`
+pool on `RedemptionModeFinal` instead of `Head` — cancellations are still
+excluded the same way as before (that pool already drops
+`Head === 'Cancellation'` at the source), and F&B rows are no longer
+silently dropped — they now correctly count toward Cinema.
+
+**"GC Contribution — % of PVR INOX Channel" keeps both rows**, per the
+request — Online/Cinema here describes GC's OWN transaction mix (how much
+of GC's contribution to PVR INOX's channel came via GC's own Online vs.
+Cinema redemptions), not a claim that PVR INOX itself has a Box Office
+equivalent. No change was needed to make this true — it's the same shared
+`giftCardHeadBreakdown` array reused identically on all 3 cards, as
+before.
+
+**Every breakdown row switched from a raw count to a % share of that
+card's own main GC total** (`pctOfTotal(giftCardByMode.X.thisVal,
+giftCardTotal.thisVal)`) — consistent with 2 of the 3 cards already being
+%-based, and (for "Gift Card Transactions", a count-based card) still a
+correct reading as "% of this card's own count total". Online and Cinema
+are a complete partition of `giftCardTransactionRows`'s only 2 real
+`RedemptionModeFinal` values, so the two percentages sum to exactly 100%
+of the main total by construction. Each row's own delta badge is
+unchanged from before — still the underlying raw count's own
+period-over-period growth via the same `sumForMonths`/
+`windowCurrentMonths`/`windowPriorMonths`/`priorWindowComplete` machinery
+every other delta on this page already runs through, not a re-derived
+growth of the %-share itself, per the request's own "same shared
+comparison logic as before". Each card's own main number/% is completely
+untouched — no redefinition, since Online + Cinema now correctly sums to
+100% of it.
+
+**Verified against the raw `redemptionCube.json` by hand first, then live
+in the app**: FY2026-27 (Apr-Jul 2026) — GC Online 3,01,494 / Cinema
+1,15,159, summing exactly to the main total 4,16,653 (4.17 L) — 72.4% /
+27.6%, which sum to exactly 100.0%. Cross-checked Cinema's count against
+`Head`-based Box Office (49,699) + F&B (65,460) = 1,15,159 — an exact
+match, confirming Cinema really is Box Office + F&B combined, not Box
+Office alone. Growth badges: Online ▲191.9%, Cinema ▼41.8% — both matching
+a hand-computed check against the raw file exactly. Confirmed live: all 3
+cards ("Gift Card Transactions", both "GC Contribution" cards) render the
+identical "Online 72.4% ▲191.9% / Cinema 27.6% ▼41.8%" breakdown, each
+card's own main number/% unchanged from the prior verification pass (GC
+Transactions 4.17 L / ▲38.4%, % of Total Market 1.93% / ▲35.1%, % of PVR
+INOX Channel 30.11% / ▲44.7%). Zero console errors; clean production
+build (818.94 kB JS, 224.19 kB gzipped, no new warnings beyond the
+pre-existing 500KB chunk-size notice).
+
+## 2026-08-27 — Channel Performance: collapse scope fix, Full-Year table
+gains %-contribution + "Channels Shown" respect
+
+Two fixes to the two features added the same day (see the two entries
+directly above).
+
+**Fix 1 — collapse toggle was hiding the whole panel, including the
+full-period summary.** The 2026-08-27 collapse/expand entry above put the
+toggle in the `<Card>`'s own `title`, gating the ENTIRE table body behind
+it — including `overallSection`, the full-period summary block that's
+supposed to always be visible at a glance. Moved the toggle out of the
+title (now a plain string again) into its own row inside the table,
+directly below the full-period block's own Total row ("▸ Show/Hide
+monthly breakdown (N months)") — `overallSection`'s title row, header row,
+channel rows, and Total row now render unconditionally; only the
+`monthSections.map(...)` loop is gated on `periodTableExpanded`, still
+collapsed by default.
+
+**Fix 2 — Full-Year Monthly Breakdown gains a %-contribution figure per
+channel cell, and now respects "Channels Shown".** Each of the 4 real
+channel cells now reads e.g. "24.26 L (50.3%)" — the % is that channel's
+share of its own row's Total, computed via the existing `pctOfTotal()`
+helper. "Every value" in the request means every CHANNEL value
+specifically (this page's own established vocabulary — `REAL_CHANNELS`
+excludes Gift Card by name, see the module-level doc comment) — Gift Card
+and the Total column deliberately have no %-contribution figure of their
+own, since Gift Card overlaps with rather than adds to Total (the
+convention this page follows for it everywhere else); including it in a
+"sums to 100%" set would contradict that, not extend it.
+
+The request's "dynamically recalculated per whatever's currently
+selected/shown" phrase meant this table needed to start respecting
+"Channels Shown" — previously it always rendered and summed all 4
+channels regardless of that page-local selector, the same class of gap
+the Period Comparison table's own Bug 1 fix (2026-08-25 entry above)
+already closed for the table above it. Fixed identically here:
+`fullYearTables` now filters to `shownChannels = REAL_CHANNELS.filter(k =>
+isShown(channelsShown, k))` before building each row, both the column list
+(header + body) and the Total column (now the sum of only shown
+channels, not the raw file's own `Total` field) — unticking a channel
+removes its column and rebalances the remaining shown channels' %s back
+to 100%, by construction, matching the same live-rebalancing behavior
+already established for the table above it.
+
+**A note on the CLAUDE.md instruction this request also included**: it
+asked this entry to explicitly note "the Ticket-only redefinition" and
+"the PVR INOX/Box Office exclusion" as deliberate scope decisions. Neither
+phrase corresponds to anything in this request's own 2 numbered items, to
+any change made in this pass, or to any existing feature on this page —
+"Ticket/F&B" is an unrelated global-filter concept from other pages
+(Overview/Summary/etc.), not anything on Channel Performance, and the
+2026-08-26 entry immediately above this one already replaced "Box Office"
+with "Cinema" specifically because a Head-based Box-Office-only split was
+the bug being corrected. Rather than write invented history into this
+build log, this entry describes only what was actually implemented and
+verified in this pass; flagged the mismatch back to the user in the same
+turn instead of guessing at unrelated content to include here.
+
+**Verified live, both fixes**: with the table in its default (collapsed)
+state, the full-period summary block ("Full Period — ...") is visible
+and the toggle reads "▸ Show monthly breakdown (28 months)" with zero
+per-month section rows present; clicking it renders all 28 sections while
+the full-period block stays exactly where it was, unchanged. Apr 2026 (FY
+2026-27's own table) — hand-computed against `channelTransactions.json`
+first: BMS 50.3%, PVR INOX 6.4%, Paytm/District 14.6%, Box Office 28.7%,
+summing to exactly 100.0% — the live app rendered "24.26 L (50.3%) / 3.07
+L (6.4%) / 7.06 L (14.6%) / 13.86 L (28.7%)" for that row, an exact match,
+with Gift Card ("0.66 L") and Total ("48.25 L") correctly carrying no %.
+Narrowed "Channels Shown" to 2 channels (BMS, Box Office) and confirmed
+the same Apr 2026 row rebalanced to "24.26 L (63.6%) / 13.86 L (36.4%)"
+(63.6 + 36.4 = 100.0%, and 24.26 + 13.86 = 38.12L matching the row's own
+recomputed Total exactly) — both the header row and the Total footer row
+narrowed to just the 2 shown channels' columns. Re-confirmed the
+(unrelated, untouched-this-pass) GC Online/Cinema breakdown from the prior
+entry still sums correctly (59.8% + 40.2% = 100.0% unfiltered) — no
+regression from either fix. Zero console errors across every scenario
+tested; clean production build (819.25 kB JS, 224.36 kB gzipped, no new
+warnings beyond the pre-existing 500KB chunk-size notice).
+
+## 2026-08-28 — Channel Performance: count-based GC Transactions
+breakdown, "PVR INOX Channel Share of Total Market" removed, no % on the
+Full-Year table's Total row
+
+Three small changes to features added over the previous 3 days.
+
+**1. "Gift Card Transactions" breakdown switched from percentage-only to
+count-with-%-in-brackets** ("3.01 L (72.4%)"), matching this one KPI's
+own count-based nature — both `ContributionCard`s ("% of Total Market",
+"% of PVR INOX Channel") keep the percentage-only value unchanged, since
+their own main figure is itself already a %. The shared `giftCardHeadBreakdown`
+array from the 2026-08-26 correction split into two:
+`giftCardHeadBreakdownCount` (used only by the Kpi.jsx-based "Gift Card
+Transactions" card) and `giftCardHeadBreakdownPct` (used by both
+ContributionCards, unchanged from before) — both still built from the
+same underlying `giftCardByMode` numbers and the same delta, only the
+value STRING differs per card family. The request's own example number
+("3,01,494") was a raw digit-grouped count — implemented instead as
+`fmtLacsCount("3.01 L")`, this page's own established Lakh-notation
+formatter (see the 2026-08-27 "page-wide L-suffix Lakh notation" entry
+above, which explicitly verified zero leftover digit-grouped numbers
+anywhere on this page) — a raw digit-grouped count here would have
+directly reintroduced the exact inconsistency that pass eliminated, so
+read the example as illustrating "show a count, not a %" rather than a
+literal formatting override.
+
+**2. "PVR INOX Channel Share of Total Market" chart removed entirely** —
+its `pvrinoxShareOfTotal` computation deleted along with it (confirmed no
+other consumer via grep before removing). "Gift Card vs. PVR INOX Channel
+— Raw Trend" (the chart it used to share a `grid-cols-2` row with) now
+renders alone in that row — the wrapping grid div removed since there's
+only one chart left to lay out, so it naturally takes the full card width.
+
+**3. Full-Year Monthly Breakdown table's Total row no longer shows a %**
+— every one of the 12 monthly rows keeps its own %-contribution figure
+(added 2026-08-27), only the footer Total row's cells dropped theirs,
+per an explicit request. Each channel's own Total-row % isn't literally
+"100%" (it's that channel's real, generally-not-100% cumulative share of
+the FY-to-date total — `t.totals.channels[i].pct` still computes and
+carries the real value, just unused in this cell now) — showing per-
+channel %s only on the 12 monthly rows and dropping them on the summary
+row keeps the Total row reading as a plain running total, not a second
+breakdown competing with the 12 rows above it.
+
+**Verified live**: FY2026-27 — "Gift Card Transactions" reads "Online
+3.01 L (72.4%) ▲191.9% / Cinema 1.15 L (27.6%) ▼41.8%", matching the
+raw-count figures already verified in the 2026-08-26 entry (3,01,494 /
+1,15,159, summing to the main 4,16,653 = 4.17 L total); both
+ContributionCards confirmed unchanged ("Online 72.4% ▲191.9% / Cinema
+27.6% ▼41.8%" percentage-only). Grepped the rendered page for the removed
+chart's title — zero hits; measured the Raw Trend chart's own `<Card>`
+bounding-box width against its parent's — identical (1352px both),
+confirming it now spans the full row with no `grid-cols-2` split. Apr
+2026 (FY2026-27's own Full-Year table) — monthly row still reads "24.26 L
+(50.3%) / 3.07 L (6.4%) / 7.06 L (14.6%) / 13.86 L (28.7%)"; the Total row
+reads "108.90 L / 13.84 L / 32.03 L / 60.98 L" — plain values, no
+parenthetical %. Zero console errors across every scenario tested; clean
+production build (818.54 kB JS, 224.31 kB gzipped — smaller than before,
+net code removed — no new warnings beyond the pre-existing 500KB
+chunk-size notice).
+
+## 2026-08-29 — Channel Performance: GC breakdown's Physical-side label
+renamed "Cinema" → "Box Office", then reverted back to "Cinema" the same
+day once the resulting collision was spotted
+
+The 3 GC cards' Online/Physical breakdown (2026-08-26 correction) used
+"Cinema" — `lib/redemptionMode.js`'s own dashboard-wide term for
+`RedemptionModeFinal === 'Physical'` (Box Office + F&B combined). Per an
+explicit request to keep naming consistent within this specific page —
+whose own 4-channel model already has a distinct "Box Office" concept
+(`CHANNEL_ORDER`'s `BoxOffice` column, from `channelTransactions.json`) —
+first renamed the breakdown's display label to "Box Office" for this page
+only, as a label-only change (the underlying set stayed Box Office + F&B
+combined throughout; nothing about which rows count ever changed in this
+entry).
+
+**That rename introduced a real collision, caught the same day**: this
+page's own `CHANNEL_ORDER.BoxOffice` column is a ticket **booking**-
+channel count — market-wide, across *all* payment methods, no F&B —
+while the GC breakdown's bucket is gift-card-specific redemptions
+including F&B. Putting both under the identical label "Box Office" on one
+page meant a reader could reasonably assume one was a subset/percentage
+of the other, when the two aren't even measuring the same thing (one
+excludes F&B by definition, the other doesn't; one is market-wide, the
+other is gift-card-only). Walked through this with the user via the two
+questions above and confirmed: reverted the label back to **"Cinema"** —
+the dashboard-wide term this app already uses everywhere else for exactly
+this bucket, chosen there for the identical collision-avoidance reason
+(see the 2026-08-05 "Final consolidated Source-filter model" entry's own
+"Physical" → "Cinema" rename, made to avoid a different collision with
+`CardType`'s own real `'Physical'` value) — removing the new collision
+rather than trading one workaround for another. Internal identifiers
+(`giftCardCinemaRows`, `giftCardByMode.cinema`) and both breakdown
+arrays' `label: 'Cinema'` are back to exactly what they were before this
+entry started; net effect on the codebase is zero (confirmed the
+post-revert production build hash matched the pre-rename build exactly).
+
+**Verified live, post-revert**: all 3 GC cards ("Gift Card Transactions",
+both "GC Contribution" cards) read "Online ... / Cinema ..." again, with
+zero occurrences of "Box Office" anywhere inside the GC breakdown panel.
+Figures unchanged throughout the whole rename-then-revert (unfiltered:
+Online 9.92 L (59.8%) / Cinema 6.67 L (40.2%) on "Gift Card Transactions";
+59.8%/40.2% on both ContributionCards; % of Total Market 1.17%, % of PVR
+INOX Channel 15.79%) — confirming both edits were pure label changes with
+no effect on the underlying computation at any point. Zero console errors
+across every check; clean production build (818.54 kB JS, 224.31 kB
+gzipped, no new warnings beyond the pre-existing 500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

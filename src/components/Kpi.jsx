@@ -62,6 +62,17 @@ export default function Kpi({ label, value, sub, subCount, accent = 'navy', delt
               <div key={b.label} className="leading-tight">
                 <div className="text-[8px] font-medium uppercase tracking-wide text-warmgray-muted">{b.label}</div>
                 <div className="text-[10px] font-semibold text-navy tabular-nums whitespace-nowrap">{b.value}</div>
+                {/* 2026-08-27: optional per-item delta — a breakdown entry
+                    can now carry its own dynamic growth badge (e.g. Channel
+                    Performance's Online/Box Office GC split) alongside its
+                    value, not just a static number. Omitted entirely
+                    (undefined, not null) for every pre-existing breakdown
+                    caller that never passes it, so this is purely additive. */}
+                {b.deltaPct !== undefined && (
+                  <div className="mt-0.5">
+                    <DeltaBadge pct={b.deltaPct} label="" />
+                  </div>
+                )}
               </div>
             ))}
           </div>

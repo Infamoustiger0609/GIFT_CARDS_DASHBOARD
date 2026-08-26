@@ -2,10 +2,10 @@ import React, { useMemo, useState } from 'react'
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
 import { groupSum } from '../lib/aggregate'
-import { sumForMonths, oneYearEarlier, usePresetWindow, presetBadgeLabel } from '../lib/comparisons'
+import { sumForMonths, oneYearEarlier, usePresetWindow, presetBadgeLabel, monthIndex, indexToMonth } from '../lib/comparisons'
 import { CHANNEL_ORDER, channelLabel, NONE_SELECTED, fyOf } from '../lib/constants'
 import { COLORS, CHANNEL_COLORS } from '../lib/theme'
-import { fmtNumber, fmtPct, monthLabel, periodLabel } from '../lib/format'
+import { fmtPct, monthLabel, periodLabel, fmtLacsCount, fmtLacsCountAxis } from '../lib/format'
 import Card from '../components/Card'
 import Kpi from '../components/Kpi'
 import Select from '../components/Select'
@@ -46,12 +46,19 @@ function pctOfTotal(part, total) {
 function fmtPctOrDash(n, decimals = 1) {
   return n == null ? '—' : fmtPct(n, decimals)
 }
+// 2026-08-27: both switched from plain digit-grouped fmtNumber() to the
+// dashboard's standard L-suffix Lakh notation (fmtLacsCount, "56.81 L") —
+// the same visual convention used for currency elsewhere on this app,
+// just without the ₹ symbol since these are transaction counts, not
+// money. Every table cell/KPI value on this page routes through one of
+// these two, so the reformat is a 2-function change, not a per-call-site
+// sweep.
 function fmtDiff(n) {
   if (n == null) return '—'
-  return `${n >= 0 ? '+' : ''}${fmtNumber(n)}`
+  return `${n >= 0 ? '+' : ''}${fmtLacsCount(n)}`
 }
 function fmtCountOrDash(n) {
-  return n == null ? '—' : fmtNumber(n)
+  return n == null ? '—' : fmtLacsCount(n)
 }
 // Compact axis-tick formatter for a % axis — same "no decimals on the tick
 // itself, the axis title carries the unit" convention every ₹ axis in this
@@ -152,15 +159,43 @@ function TotalComparisonRow({ totalPrior, totalThis, totalDiff, totalGrowthPct }
   )
 }
 
-function ContributionCard({ label, thisVal, priorVal, accent }) {
+// `breakdown`: optional array of { label, value, deltaPct } — 2026-08-27,
+// added for the GC Online/Cinema split (see the module-level
+// `giftCardByMode` doc comment below) — mirrors Kpi.jsx's own `breakdown`
+// prop verbatim (same absolute top-right position, same border-l/pl-2/
+// text-[8px]/[10px] sizing, same optional per-item DeltaBadge), since this
+// card needs the identical visual slot Kpi.jsx already has but isn't
+// itself a `<Kpi>` (a bespoke div, so the pattern is duplicated here
+// rather than shared — the two components have no other prop overlap to
+// justify a shared abstraction beyond this one slot).
+function ContributionCard({ label, thisVal, priorVal, accent, breakdown }) {
   const changePct = pctChange(thisVal, priorVal)
   const accentClasses = { teal: 'border-l-teal text-teal-dark', gold: 'border-l-gold text-gold' }[accent] || 'border-l-navy text-navy'
   return (
-    <div className={`bg-card border border-warmgray-border border-l-[6px] rounded-lg px-4 py-3 ${accentClasses.split(' ')[0]}`}>
-      <div className="text-[11px] font-semibold uppercase tracking-wide text-warmgray-muted">{label}</div>
-      <div className={`text-2xl font-serif font-extrabold tracking-tight mt-1 ${accentClasses.split(' ')[1]}`}>{fmtPctOrDash(thisVal, 2)}</div>
-      <div className="mt-1.5">
-        <DeltaBadge pct={changePct} label="" />
+    <div className={`relative bg-card border border-warmgray-border border-l-[6px] rounded-lg px-4 py-3 ${accentClasses.split(' ')[0]}`}>
+      {breakdown && (
+        <div className="absolute top-3 right-4 flex items-start gap-2">
+          <div className="flex flex-col gap-1 pl-2 border-l border-warmgray-border">
+            {breakdown.map((b) => (
+              <div key={b.label} className="leading-tight">
+                <div className="text-[8px] font-medium uppercase tracking-wide text-warmgray-muted">{b.label}</div>
+                <div className="text-[10px] font-semibold text-navy tabular-nums whitespace-nowrap">{b.value}</div>
+                {b.deltaPct !== undefined && (
+                  <div className="mt-0.5">
+                    <DeltaBadge pct={b.deltaPct} label="" />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className={breakdown ? 'pr-24' : ''}>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-warmgray-muted">{label}</div>
+        <div className={`text-2xl font-serif font-extrabold tracking-tight mt-1 ${accentClasses.split(' ')[1]}`}>{fmtPctOrDash(thisVal, 2)}</div>
+        <div className="mt-1.5">
+          <DeltaBadge pct={changePct} label="" />
+        </div>
       </div>
     </div>
   )
@@ -177,6 +212,14 @@ export default function ChannelPerformance() {
   // "unrestricted -> displays every box pre-ticked" convention, so "all
   // shown by default" needed no separate initial-value array of its own.
   const [channelsShown, setChannelsShown] = useState([])
+
+  // 2026-08-27, corrected same day: ONLY the per-month monthSections rows
+  // collapse behind this toggle — the full-period summary block above them
+  // always renders unconditionally, regardless of this flag. Collapsed by
+  // default, since monthSections alone can still run to 28 sections under
+  // "All", while the always-visible full-period block already gives a
+  // useful at-a-glance total without needing to open anything.
+  const [periodTableExpanded, setPeriodTableExpanded] = useState(false)
 
   // 2026-08-29 (Phase 4 dashboard-wide audit): this page was the one
   // remaining page with no MTD/QTD/YTD control at all — every other page
@@ -431,6 +474,92 @@ export default function ChannelPerformance() {
     }
   }, [giftCardTransactionRows, windowCurrentMonths, windowPriorMonths, priorWindowComplete])
 
+  // 2026-08-26 correction — was Online/Box Office (Head-based, dropping
+  // F&B entirely); now Online/Cinema via `redemptionModeOf(RedemptionModeFinal)`
+  // (`lib/redemptionMode.js`), the exact same 2-way, mutually-exclusive
+  // split every other page in this app already uses for a redemption-side
+  // channel breakdown — not a new or page-local split. "Cinema" =
+  // RedemptionModeFinal === 'Physical' = Box Office + F&B combined (the
+  // established meaning of that label dashboard-wide — see
+  // redemptionMode.js's own doc comment), not Box Office alone. Splits the
+  // SAME `giftCardTransactionRows` pool the cards' own headline figures
+  // already read — cancellations are already netted out of it the way
+  // this page has always treated the GC line (that pool is
+  // `redemptionCube.filter(r => r.Head !== 'Cancellation')`, per
+  // FilterContext.jsx's own doc comment — Cancel Redeem rows never reach
+  // either mode-filtered pool below, so there's nothing further to net).
+  // Reuses the exact same sumForMonths/windowCurrentMonths/
+  // windowPriorMonths/priorWindowComplete machinery every other delta on
+  // this page already runs through — no new comparison mechanism.
+  //
+  // 2026-08-29: this page's own display label was briefly renamed
+  // "Cinema" → "Box Office" for the day, then reverted back to "Cinema"
+  // the same day — the page ALSO carries an unrelated "Box Office" column
+  // (`CHANNEL_ORDER`'s `BoxOffice`, from `channelTransactions.json`: ticket
+  // BOOKING-channel counts, market-wide across all payment methods, no
+  // F&B) a few sections up on this same page. Reusing "Box Office" for
+  // this GC-redemption bucket (ticket + F&B combined, gift-card-only) put
+  // two differently-scoped figures under the identical label on one page
+  // — a real risk of a reader assuming one is a subset/percentage of the
+  // other when they aren't even measuring the same thing. "Cinema" is the
+  // dashboard-wide term this app already uses everywhere else for exactly
+  // this bucket, chosen for the same collision-avoidance reason (see the
+  // 2026-08-05 "Final consolidated Source-filter model" entry's own
+  // "Physical" → "Cinema" rename, made to avoid a different collision with
+  // CardType's own real "Physical" value) — reverting to it here removes
+  // the new collision rather than trading one workaround for another.
+  const giftCardOnlineRows = useMemo(() => giftCardTransactionRows.filter((r) => r.RedemptionModeFinal === 'Online'), [giftCardTransactionRows])
+  const giftCardCinemaRows = useMemo(() => giftCardTransactionRows.filter((r) => r.RedemptionModeFinal === 'Physical'), [giftCardTransactionRows])
+  const giftCardByMode = useMemo(() => {
+    const build = (rows) => {
+      const thisVal = sumForMonths(rows, 'RedemptionCount', windowCurrentMonths)
+      const priorVal = priorWindowComplete ? sumForMonths(rows, 'RedemptionCount', windowPriorMonths) : null
+      return { thisVal, priorVal, growthPct: pctChange(thisVal, priorVal) }
+    }
+    return { online: build(giftCardOnlineRows), cinema: build(giftCardCinemaRows) }
+  }, [giftCardOnlineRows, giftCardCinemaRows, windowCurrentMonths, windowPriorMonths, priorWindowComplete])
+  // 2026-08-26: each row is now a % SHARE of the card's own main GC total
+  // (giftCardTotal.thisVal — the same total every one of the 3 cards below
+  // already displays or is directly derived from), not a raw count — a
+  // %-based value consistent with these 3 cards' own %-based nature
+  // (2 of the 3 already show a %; the 3rd, "Gift Card Transactions", is a
+  // count, but Online % + Cinema % here is % of THAT card's own count, so
+  // it still reads correctly there too). Online % + Cinema % sum to
+  // exactly 100% of giftCardTotal.thisVal by construction, since Online
+  // and Cinema (RedemptionModeFinal's only 2 real values on this pool) are
+  // a complete partition of it. Each row's own delta badge is unchanged
+  // from before — still the underlying raw count's own period-over-period
+  // growth (same computation as giftCardByMode above), not a re-derived
+  // growth of the %-share itself, per the request's own "same shared
+  // comparison logic as before".
+  //
+  // 2026-08-28: split into 2 separate arrays instead of 1 shared one —
+  // "Gift Card Transactions" (a count-based KPI) now shows the raw count
+  // with its % in brackets ("3.01 L (72.4%)"; fmtLacsCount is this page's
+  // established Lakh-notation formatter, not a raw digit-grouped number —
+  // see the 2026-08-27 "page-wide L-suffix Lakh notation" entry above,
+  // which this stays consistent with), while both ContributionCards (2
+  // cards whose own main figure is itself a %) keep the percentage-only
+  // value they've had since the 2026-08-26 correction. Both arrays share
+  // the same underlying `giftCardByMode` numbers and the same delta —
+  // only the VALUE string differs per card family, not the computation.
+  const giftCardHeadBreakdownPct = [
+    { label: 'Online', value: fmtPctOrDash(pctOfTotal(giftCardByMode.online.thisVal, giftCardTotal.thisVal)), deltaPct: giftCardByMode.online.growthPct },
+    { label: 'Cinema', value: fmtPctOrDash(pctOfTotal(giftCardByMode.cinema.thisVal, giftCardTotal.thisVal)), deltaPct: giftCardByMode.cinema.growthPct }
+  ]
+  const giftCardHeadBreakdownCount = [
+    {
+      label: 'Online',
+      value: `${fmtCountOrDash(giftCardByMode.online.thisVal)} (${fmtPctOrDash(pctOfTotal(giftCardByMode.online.thisVal, giftCardTotal.thisVal))})`,
+      deltaPct: giftCardByMode.online.growthPct
+    },
+    {
+      label: 'Cinema',
+      value: `${fmtCountOrDash(giftCardByMode.cinema.thisVal)} (${fmtPctOrDash(pctOfTotal(giftCardByMode.cinema.thisVal, giftCardTotal.thisVal))})`,
+      deltaPct: giftCardByMode.cinema.growthPct
+    }
+  ]
+
   // All 28 months, 4 real channels only (Gift Card removed — see the
   // module-level REAL_CHANNELS doc comment) — for Section 1's trend chart.
   // Independent of selectedMonths/priorSelectedMonths; always the full
@@ -524,17 +653,6 @@ export default function ChannelPerformance() {
     [channelTransactionsRows, gcByMonthMap]
   )
 
-  // NEW (2026-08-25) — "PVR INOX Channel Share of Total Market": PVR
-  // INOX's own count ÷ that month's Total (all 4 real channels) — a
-  // market-share question about PVR INOX itself, unrelated to Gift Card.
-  // Full 28-month range, same convention as every chart above.
-  const pvrinoxShareOfTotal = useMemo(
-    () =>
-      [...channelTransactionsRows]
-        .sort((a, b) => (a.YearMonth > b.YearMonth ? 1 : -1))
-        .map((r) => ({ label: monthLabel(r.YearMonth), 'PVR INOX': pctOfTotal(r.PVRINOX, r.Total) })),
-    [channelTransactionsRows]
-  )
 
   // Endpoint-only subtitles for the two Penetration Trend charts — the two
   // numbers/dates the request wants in place of a full explanatory
@@ -549,6 +667,88 @@ export default function ChannelPerformance() {
   }
   const gcTotalEndpoints = endpointLabel(gcPenetrationVsTotal, 'vs. Total')
   const gcPvrinoxEndpoints = endpointLabel(gcPenetrationVsPvrinox, 'vs. PVR INOX')
+
+  // 2026-08-27 — new full-year monthly breakdown: one 12-row (Apr-Mar,
+  // always all 12 regardless of the Month filter — this table is the one
+  // place on the page meant to show a complete FY at a glance) table per
+  // currently-selected FY, stacked when more than one is ticked. FY=All
+  // ([] in filters.fy) is treated the same way Select.jsx's own
+  // "unrestricted looks like every option ticked" convention already
+  // does elsewhere — every real FY present in the data, not zero tables.
+  const selectedFYs = useMemo(() => {
+    const allFYs = [...new Set(channelTransactionsRows.map((r) => fyOf(r.YearMonth)))].sort()
+    if (filters.fy.length === 1 && filters.fy[0] === NONE_SELECTED) return []
+    return filters.fy.length === 0 ? allFYs : allFYs.filter((fy) => filters.fy.includes(fy))
+  }, [channelTransactionsRows, filters.fy])
+
+  // fyOf() always formats as `FY${startYear}-${(startYear+1)%100}` (see
+  // lib/constants.js) — parsing the 4-digit start year back out of that
+  // fixed shape is simpler and more robust than re-deriving it from a
+  // month, since a fully in-the-future FY (all 12 months blank) has no
+  // real month of its own to derive a start year FROM in the first place.
+  function fyStartYear(fy) {
+    return Number(fy.slice(2, 6))
+  }
+
+  // 2026-08-27 fix: each channel cell now carries its own %-contribution-
+  // to-that-month's-Total figure alongside the value, and the whole table
+  // now respects "Channels Shown" (previously it always rendered/summed
+  // all 4 channels regardless of that selector) — both a real
+  // Channels-Shown-only column list AND a Total recomputed from only
+  // those shown channels, per the same "Total/%Contribution must
+  // recompute from only the currently ticked channels" fix the Period
+  // Comparison table itself already got. "Every value" in the request
+  // means every CHANNEL value specifically (this page's own established
+  // vocabulary — REAL_CHANNELS excludes Gift Card by name; see the
+  // module-level doc comment) — Gift Card and the Total column don't get
+  // a %-contribution figure of their own, since Gift Card overlaps with
+  // rather than adds to Total (the same convention this page follows
+  // everywhere else for it), so including it in a "sums to 100%" set
+  // would be a contradiction, not an omission.
+  const fullYearTables = useMemo(() => {
+    const shownChannels = REAL_CHANNELS.filter((k) => isShown(channelsShown, k))
+    return selectedFYs.map((fy) => {
+      const startYear = fyStartYear(fy)
+      const startIdx = monthIndex(`${startYear}-04`)
+      const months = Array.from({ length: 12 }, (_, i) => indexToMonth(startIdx + i))
+      const realMonthCount = months.filter((m) => rowByMonth.has(m)).length
+      const rows = months.map((m) => {
+        const exists = rowByMonth.has(m)
+        const channelRow = exists ? rowByMonth.get(m) : null
+        const gcVal = exists ? gcByMonthMap.get(m) || 0 : null
+        const rowTotal = exists ? shownChannels.reduce((s, k) => s + (channelRow[k] || 0), 0) : null
+        const channels = shownChannels.map((k) => ({
+          key: k,
+          value: exists ? channelRow[k] : null,
+          pct: exists ? pctOfTotal(channelRow[k], rowTotal) : null
+        }))
+        return { month: m, exists, channels, GiftCard: gcVal, Total: rowTotal }
+      })
+      // Column totals sum only the real (existing) months — a partial
+      // FY's total-so-far is a real, meaningful running total (same
+      // "show it, just note it's partial" precedent as Summary.jsx's own
+      // FY-to-date blocks), not something to blank out just because
+      // later months in the same row are still dashes.
+      const totalsByChannel = shownChannels.map((k) => ({
+        key: k,
+        value: rows.reduce((s, r) => (r.exists ? s + (r.channels.find((c) => c.key === k).value || 0) : s), 0)
+      }))
+      const totalsSum = totalsByChannel.reduce((s, c) => s + c.value, 0)
+      const gcTotal = rows.reduce((s, r) => (r.exists ? s + (r.GiftCard || 0) : s), 0)
+      return {
+        fy,
+        isPartial: realMonthCount < 12,
+        realMonthCount,
+        shownChannels,
+        rows,
+        totals: {
+          channels: totalsByChannel.map((c) => ({ ...c, pct: pctOfTotal(c.value, totalsSum) })),
+          GiftCard: gcTotal,
+          Total: totalsSum
+        }
+      }
+    })
+  }, [selectedFYs, rowByMonth, gcByMonthMap, channelsShown])
 
   const hasData = channelTransactionsRows.length > 0
 
@@ -663,7 +863,15 @@ export default function ChannelPerformance() {
                       the per-month breakdown, using the exact same
                       thisLabel/priorLabel calendar-range strings ("Apr 26 –
                       Jul 26") the page's own top caption already uses —
-                      not a new FY-based format. */}
+                      not a new FY-based format.
+                      2026-08-27 fix: the collapse toggle previously hid this
+                      ENTIRE card, full-period summary included — per the
+                      report, only the per-month breakdown groups below
+                      should ever collapse; the full-period summary (title
+                      row through its own Total row) now always renders
+                      unconditionally, and the toggle moved to its own row
+                      immediately below it, gating only the monthSections
+                      loop. */}
                   <table className="w-full text-xs min-w-[760px] border-separate border-spacing-0">
                     <tbody>
                       <tr className="bg-gold-light">
@@ -681,36 +889,49 @@ export default function ChannelPerformance() {
                         totalDiff={overallSection.totalDiff}
                         totalGrowthPct={overallSection.totalGrowthPct}
                       />
-                      {monthSections.map((section) => {
-                        const sectionPriorLabel = monthLabel(section.priorMonth)
-                        const sectionThisLabel = monthLabel(section.month)
-                        return (
-                          <React.Fragment key={section.month}>
-                            {/* 2026-08-26 fix: the whole line is now
-                                italic with consistent casing throughout
-                                ("Jun 26 vs. Jun 25") — previously the outer
-                                <td> forced `uppercase` ("JUN 26") while the
-                                inner <span> forced it back with
-                                `normal-case`, an inconsistent half-caps
-                                line with no italic anywhere. */}
-                            <tr className="bg-cream/70">
-                              <td colSpan={7} className="py-1.5 pl-1 text-[11px] font-bold text-navy italic tracking-wide">
-                                {sectionThisLabel} <span className="font-normal text-warmgray-muted">vs. {sectionPriorLabel}</span>
-                              </td>
-                            </tr>
-                            <ComparisonHeaderRow priorLabel={sectionPriorLabel} thisLabel={sectionThisLabel} />
-                            {section.rows.map((r) => (
-                              <ChannelComparisonRow key={r.key} r={r} />
-                            ))}
-                            <TotalComparisonRow
-                              totalPrior={section.totalPrior}
-                              totalThis={section.totalThis}
-                              totalDiff={section.totalDiff}
-                              totalGrowthPct={section.totalGrowthPct}
-                            />
-                          </React.Fragment>
-                        )
-                      })}
+                      <tr className="bg-cream border-t border-warmgray-border">
+                        <td colSpan={7} className="py-1.5 pl-1">
+                          <button
+                            type="button"
+                            onClick={() => setPeriodTableExpanded((e) => !e)}
+                            className="flex items-center gap-1.5 text-[11px] font-bold text-navy hover:text-gold transition-colors"
+                          >
+                            <span className={`inline-block text-sm transition-transform duration-150 ${periodTableExpanded ? 'rotate-90' : ''}`}>▸</span>
+                            {periodTableExpanded ? 'Hide' : 'Show'} monthly breakdown ({monthSections.length} month{monthSections.length === 1 ? '' : 's'})
+                          </button>
+                        </td>
+                      </tr>
+                      {periodTableExpanded &&
+                        monthSections.map((section) => {
+                          const sectionPriorLabel = monthLabel(section.priorMonth)
+                          const sectionThisLabel = monthLabel(section.month)
+                          return (
+                            <React.Fragment key={section.month}>
+                              {/* 2026-08-26 fix: the whole line is now
+                                  italic with consistent casing throughout
+                                  ("Jun 26 vs. Jun 25") — previously the outer
+                                  <td> forced `uppercase` ("JUN 26") while the
+                                  inner <span> forced it back with
+                                  `normal-case`, an inconsistent half-caps
+                                  line with no italic anywhere. */}
+                              <tr className="bg-cream/70">
+                                <td colSpan={7} className="py-1.5 pl-1 text-[11px] font-bold text-navy italic tracking-wide">
+                                  {sectionThisLabel} <span className="font-normal text-warmgray-muted">vs. {sectionPriorLabel}</span>
+                                </td>
+                              </tr>
+                              <ComparisonHeaderRow priorLabel={sectionPriorLabel} thisLabel={sectionThisLabel} />
+                              {section.rows.map((r) => (
+                                <ChannelComparisonRow key={r.key} r={r} />
+                              ))}
+                              <TotalComparisonRow
+                                totalPrior={section.totalPrior}
+                                totalThis={section.totalThis}
+                                totalDiff={section.totalDiff}
+                                totalGrowthPct={section.totalGrowthPct}
+                              />
+                            </React.Fragment>
+                          )
+                        })}
                     </tbody>
                   </table>
                 </div>
@@ -747,18 +968,21 @@ export default function ChannelPerformance() {
                     subCount={`${fmtCountOrDash(giftCardTotal.priorVal)} (${fmtDiff(giftCardTotal.diff)})`}
                     accent="teal"
                     deltas={[{ label: presetBadgeLabel(activePreset), pct: giftCardTotal.growthPct }]}
+                    breakdown={giftCardHeadBreakdownCount}
                   />
                   <ContributionCard
                     label="GC Contribution — % of Total Market"
                     thisVal={giftCard.contribTotalThis}
                     priorVal={giftCard.contribTotalPrior}
                     accent="teal"
+                    breakdown={giftCardHeadBreakdownPct}
                   />
                   <ContributionCard
                     label="GC Contribution — % of PVR INOX Channel"
                     thisVal={giftCard.contribPvrinoxThis}
                     priorVal={giftCard.contribPvrinoxPrior}
                     accent="gold"
+                    breakdown={giftCardHeadBreakdownPct}
                   />
                 </div>
               </div>
@@ -825,51 +1049,31 @@ export default function ChannelPerformance() {
                 </Card>
               </div>
 
-              {/* NEW (2026-08-25) — raw-count companion to the two ratio
-                  charts above: absolute GC vs. PVR INOX counts, and PVR
-                  INOX's own share of the whole market. Same 2-column row
-                  layout/style as the Penetration Trend pair above. */}
-              <div className="grid md:grid-cols-2 gap-6">
-                <Card title="Gift Card vs. PVR INOX Channel — Raw Trend">
-                  <ResponsiveContainer width="100%" height={340}>
-                    <LineChart data={gcVsPvrinoxRaw} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} interval={1} />
-                      <YAxis
-                        tick={{ fontSize: 11, fill: COLORS.inkMuted }}
-                        axisLine={false}
-                        tickLine={false}
-                        width={68}
-                        tickFormatter={fmtNumber}
-                        label={{ value: 'Transactions', angle: -90, position: 'insideLeft', dx: -8, style: { fontSize: 11, fill: COLORS.inkMuted } }}
-                      />
-                      <Tooltip content={<ChartTooltip formatter={fmtNumber} />} />
-                      <Legend wrapperStyle={{ fontSize: 11 }} />
-                      <Line type="monotone" dataKey="Gift Card" name="Gift Card" stroke={CHANNEL_COLORS['Gift Card']} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
-                      <Line type="monotone" dataKey="PVR INOX" name="PVR INOX" stroke={CHANNEL_COLORS.PVRINOX} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </Card>
-
-                <Card title="PVR INOX Channel Share of Total Market">
-                  <ResponsiveContainer width="100%" height={340}>
-                    <LineChart data={pvrinoxShareOfTotal} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
-                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} interval={1} />
-                      <YAxis
-                        tick={{ fontSize: 11, fill: COLORS.inkMuted }}
-                        axisLine={false}
-                        tickLine={false}
-                        width={56}
-                        tickFormatter={fmtPctAxis}
-                        label={{ value: '% of Total', angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: COLORS.inkMuted } }}
-                      />
-                      <Tooltip content={<ChartTooltip formatter={(v) => fmtPct(v, 2)} />} />
-                      <Line type="monotone" dataKey="PVR INOX" name="PVR INOX" stroke={CHANNEL_COLORS.PVRINOX} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </Card>
-              </div>
+              {/* 2026-08-28: "PVR INOX Channel Share of Total Market"
+                  removed — was the 2nd chart in this row; "Gift Card vs.
+                  PVR INOX Channel — Raw Trend" now takes the full width
+                  the two used to share (grid-cols-2 wrapper removed, since
+                  there's only 1 chart left to lay out). */}
+              <Card title="Gift Card vs. PVR INOX Channel — Raw Trend">
+                <ResponsiveContainer width="100%" height={340}>
+                  <LineChart data={gcVsPvrinoxRaw} margin={{ top: 8, right: 16, left: 8, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={COLORS.gridline} vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 10, fill: COLORS.inkMuted }} axisLine={{ stroke: COLORS.border }} tickLine={false} interval={1} />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: COLORS.inkMuted }}
+                      axisLine={false}
+                      tickLine={false}
+                      width={68}
+                      tickFormatter={fmtLacsCountAxis}
+                      label={{ value: 'Transactions (Lakhs)', angle: -90, position: 'insideLeft', dx: -8, style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                    />
+                    <Tooltip content={<ChartTooltip formatter={fmtLacsCount} />} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Line type="monotone" dataKey="Gift Card" name="Gift Card" stroke={CHANNEL_COLORS['Gift Card']} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
+                    <Line type="monotone" dataKey="PVR INOX" name="PVR INOX" stroke={CHANNEL_COLORS.PVRINOX} strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </Card>
 
               <Card title="Monthly Trend by Channel">
                 <ResponsiveContainer width="100%" height={340}>
@@ -881,10 +1085,10 @@ export default function ChannelPerformance() {
                       axisLine={false}
                       tickLine={false}
                       width={78}
-                      tickFormatter={fmtNumber}
-                      label={{ value: 'Transactions', angle: -90, position: 'insideLeft', dx: -8, style: { fontSize: 11, fill: COLORS.inkMuted } }}
+                      tickFormatter={fmtLacsCountAxis}
+                      label={{ value: 'Transactions (Lakhs)', angle: -90, position: 'insideLeft', dx: -8, style: { fontSize: 11, fill: COLORS.inkMuted } }}
                     />
-                    <Tooltip content={<ChartTooltip formatter={fmtNumber} />} />
+                    <Tooltip content={<ChartTooltip formatter={fmtLacsCount} />} />
                     <Legend wrapperStyle={{ fontSize: 11 }} formatter={(value) => channelLabel(value)} />
                     {REAL_CHANNELS.filter((key) => isShown(channelsShown, key)).map((key) => (
                       <Line key={key} type="monotone" dataKey={key} name={key} stroke={CHANNEL_COLORS[key]} strokeWidth={2} dot={{ r: 2.5 }} activeDot={{ r: 5 }} />
@@ -915,6 +1119,82 @@ export default function ChannelPerformance() {
                   </BarChart>
                 </ResponsiveContainer>
               </Card>
+
+              {/* NEW (2026-08-27), fixed same day — full-year monthly
+                  breakdown, one 12-row (Apr-Mar, always the complete FY
+                  regardless of the Month filter) table per currently-
+                  selected FY, stacked when more than one is ticked
+                  (fullYearTables above). Blank/dash for a month that
+                  doesn't exist yet (e.g. FY2026-27's remaining 8 months)
+                  rather than 0, so a partial FY reads as "not here yet",
+                  not "zero activity". Each channel cell now shows its own
+                  %-contribution-to-that-month's-Total alongside the value
+                  (e.g. "24.26 L (50.3%)"), and the whole table — columns,
+                  values, and %s — now respects "Channels Shown"
+                  (t.shownChannels), matching the exact "Total/%
+                  Contribution must recompute from only the currently
+                  shown channels" precedent the Period Comparison table
+                  itself already follows. Gift Card and Total intentionally
+                  have no %-contribution figure of their own — see
+                  fullYearTables' own doc comment for why. */}
+              {fullYearTables.map((t) => (
+                <Card
+                  key={t.fy}
+                  title={`Full-Year Monthly Breakdown — ${t.fy}`}
+                  subtitle={t.isPartial ? `Partial — ${t.realMonthCount}/12 months on file` : undefined}
+                >
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs min-w-[720px] border-separate border-spacing-0">
+                      <thead>
+                        <tr className="text-[10px] uppercase tracking-wide text-warmgray-muted">
+                          <th className="text-left font-semibold pb-2">Month</th>
+                          {t.shownChannels.map((key) => (
+                            <th key={key} className="text-right font-semibold pb-2">
+                              {channelLabel(key)}
+                            </th>
+                          ))}
+                          <th className="text-right font-semibold pb-2">Gift Card</th>
+                          <th className="text-right font-semibold pb-2">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {t.rows.map((r) => (
+                          <tr key={r.month} className="border-t border-warmgray-border/60 hover:bg-cream/60 transition-colors">
+                            <td className="py-2 text-navy font-medium whitespace-nowrap">{monthLabel(r.month)}</td>
+                            {r.channels.map((c) => (
+                              <td key={c.key} className="py-2 text-right text-navy tabular-nums whitespace-nowrap">
+                                {r.exists ? `${fmtCountOrDash(c.value)} (${fmtPctOrDash(c.pct, 1)})` : '—'}
+                              </td>
+                            ))}
+                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{r.exists ? fmtCountOrDash(r.GiftCard) : '—'}</td>
+                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap font-semibold">{r.exists ? fmtCountOrDash(r.Total) : '—'}</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t border-warmgray-border font-bold">
+                          <td className="py-2 text-navy">Total{t.isPartial ? ' (to date)' : ''}</td>
+                          {/* 2026-08-28: no % on the Total row specifically
+                              (every other row keeps its own %), per an
+                              explicit request — each channel's own cell in
+                              this row is a real, not-necessarily-100% share
+                              of the FY-to-date total (t.totals.channels
+                              still carries that `pct` value, just unused
+                              here), but showing per-channel %s only on the
+                              12 monthly rows and dropping them on the
+                              summary row keeps the Total row reading as a
+                              plain running total, not another breakdown. */}
+                          {t.totals.channels.map((c) => (
+                            <td key={c.key} className="py-2 text-right text-navy tabular-nums whitespace-nowrap">
+                              {fmtCountOrDash(c.value)}
+                            </td>
+                          ))}
+                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(t.totals.GiftCard)}</td>
+                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(t.totals.Total)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              ))}
             </div>
           </div>
         </>

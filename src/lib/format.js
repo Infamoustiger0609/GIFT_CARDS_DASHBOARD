@@ -61,6 +61,26 @@ export function fmtLacsWithPct(amount, total) {
   return `${fmtLacs(amount)} (${fmtPct((amount / total) * 100, 1)})`
 }
 
+// Count-in-Lakhs formatter — the same "divide by 100,000, append ' L'"
+// convention `fmtLacs` already uses for currency, minus the ₹ symbol,
+// since a transaction/card COUNT isn't money. 2026-08-27: added for
+// ChannelPerformance.jsx's "reformat every number using the dashboard's
+// standard L-suffix Lakh notation" request — 2 decimals by default (not
+// fmtLacs's 0) since this page's counts routinely fall well under 1L,
+// where 0-decimal rounding would flatten every sub-Lakh figure to "0 L".
+export function fmtLacsCount(n, decimals = 2) {
+  if (n == null || !isFinite(n)) return '—'
+  return `${(n / 100000).toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })} L`
+}
+
+// Axis-tick counterpart — bare number, no " L" suffix (the axis's own
+// title carries the unit), mirroring fmtLacsAxis's identical role for
+// currency axes. 1 decimal (not fmtLacsAxis's 0) for the same sub-Lakh-
+// value reason fmtLacsCount uses 2 instead of fmtLacs's 0.
+export function fmtLacsCountAxis(n) {
+  return (n / 100000).toLocaleString('en-IN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+}
+
 export function monthLabel(yearMonth) {
   const [y, m] = yearMonth.split('-')
   const d = new Date(Number(y), Number(m) - 1, 1)
