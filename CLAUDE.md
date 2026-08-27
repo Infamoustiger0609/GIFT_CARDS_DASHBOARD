@@ -8131,6 +8131,52 @@ no effect on the underlying computation at any point. Zero console errors
 across every check; clean production build (818.54 kB JS, 224.31 kB
 gzipped, no new warnings beyond the pre-existing 500KB chunk-size notice).
 
+## 2026-08-30 — Full-Year Monthly Breakdown table: 2 new GC market-share
+columns
+
+Added "GC % of Total Market" and "GC % of PVR INOX" to the existing
+Full-Year Monthly Breakdown table — the exact same 2 formulas already
+powering the "GC Contribution — % of Total Market"/"% of PVR INOX
+Channel" cards elsewhere on this page (`giftCard.contribTotalThis`/
+`contribPvrinoxThis`), just evaluated per month instead of over the
+current period's blended window. Per-month: `gcVal / channelRow.Total`
+and `gcVal / channelRow.PVRINOX`, where `gcVal` is `gcByMonthMap`'s
+existing per-month GC `RedemptionCount` lookup (already net of
+cancellations — `giftCardTransactionRows` excludes `Head='Cancellation'`
+at the source, same pool those 2 cards already read). Denominators are
+the raw file's own `Total`/`PVRINOX` fields, deliberately **not**
+`rowTotal` (the "Channels Shown"-filtered sum the 4 real channel cells
+in the same row use) — GC's market share is a market-wide question,
+independent of which channel columns happen to be toggled visible, the
+same reasoning `totalThis`/`pvrinoxThis` already follow for the 2 cards
+this mirrors. A month with no real row still renders "—" for both new
+columns, same as every other column.
+
+**Total row gets a value here too**, unlike the per-channel %-Contribution
+columns (which deliberately dropped their Total-row % in the 2026-08-28
+entry above, since each channel's own Total-row share isn't literally
+"100% by definition" there but reads as redundant next to 12 already-
+non-100% monthly %s). GC's FY-to-date market share is a different kind of
+figure — a single genuine ratio with no such redundancy risk — computed
+as `sum(GC, real months) / sum(raw Total, real months)` and the PVR INOX
+equivalent, both summed over real (existing) months only, same "partial
+FY's total-so-far is a real running total" rule every other column in
+this table already follows.
+
+**Verified against the raw `channelTransactions.json`/`redemptionCube.json`
+by hand first, then live in the app**, FY2026-27: Apr 26 GC ₹65,739 ÷
+Total 48,25,293 = 1.36%, ÷ PVR INOX 3,07,295 = 21.39%; May 26 1.47% /
+22.60%; Jun 26 1.76% / 29.52%; Jul 26 2.96% / 43.47% — all 4 months exact
+matches to the requested targets, and matching the app's own rendered
+cells to the decimal. Bonus cross-check: the Total row's own FY-to-date
+figures (1.93% / 30.11%) matched the pre-existing "GC Contribution — %
+of Total Market"/"% of PVR INOX Channel" cards' own FY2026-27 values
+exactly — confirming the new per-month/per-FY-total computations agree
+with the already-verified blended-period cards, not just internally
+consistent with each other. Zero console errors; clean production build
+(819.45 kB JS, 224.47 kB gzipped, no new warnings beyond the pre-existing
+500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

@@ -722,7 +722,22 @@ export default function ChannelPerformance() {
           value: exists ? channelRow[k] : null,
           pct: exists ? pctOfTotal(channelRow[k], rowTotal) : null
         }))
-        return { month: m, exists, channels, GiftCard: gcVal, Total: rowTotal }
+        // 2026-08-30 — GC's own market-share columns, per month: the same
+        // two formulas already powering "GC Contribution — % of Total
+        // Market"/"% of PVR INOX Channel" elsewhere on this page
+        // (giftCard.contribTotalThis/contribPvrinoxThis), just evaluated
+        // for one month instead of the current period's blended window.
+        // Denominators are the raw file's own Total/PVRINOX fields — same
+        // as those 2 cards, which are NOT "Channels Shown"-filtered — not
+        // `rowTotal` (the shown-channels-only sum the 4 real channel
+        // cells above use), so unticking a channel in "Channels Shown"
+        // narrows those cells but leaves these 2 GC columns unchanged, by
+        // design (GC's market share is a market-wide question, same
+        // reasoning `totalThis`/`pvrinoxThis` already follow for the
+        // cards this mirrors).
+        const gcPctTotal = exists ? pctOfTotal(gcVal, channelRow.Total) : null
+        const gcPctPvrinox = exists ? pctOfTotal(gcVal, channelRow.PVRINOX) : null
+        return { month: m, exists, channels, GiftCard: gcVal, Total: rowTotal, gcPctTotal, gcPctPvrinox }
       })
       // Column totals sum only the real (existing) months — a partial
       // FY's total-so-far is a real, meaningful running total (same
@@ -735,6 +750,15 @@ export default function ChannelPerformance() {
       }))
       const totalsSum = totalsByChannel.reduce((s, c) => s + c.value, 0)
       const gcTotal = rows.reduce((s, r) => (r.exists ? s + (r.GiftCard || 0) : s), 0)
+      // FY-to-date market share for the Total row — a genuine, well-
+      // defined ratio (not "100% by definition" the way the per-channel
+      // Total-row % was, see that fix's own comment above), so it's
+      // shown here, not omitted. Denominators are the raw file's own
+      // Total/PVRINOX (real months only), matching the per-month
+      // gcPctTotal/gcPctPvrinox formula above, not the shown-channels-
+      // only totalsSum.
+      const rawTotalSum = rows.reduce((s, r) => (r.exists ? s + rowByMonth.get(r.month).Total : s), 0)
+      const rawPvrinoxSum = rows.reduce((s, r) => (r.exists ? s + rowByMonth.get(r.month).PVRINOX : s), 0)
       return {
         fy,
         isPartial: realMonthCount < 12,
@@ -744,7 +768,9 @@ export default function ChannelPerformance() {
         totals: {
           channels: totalsByChannel.map((c) => ({ ...c, pct: pctOfTotal(c.value, totalsSum) })),
           GiftCard: gcTotal,
-          Total: totalsSum
+          Total: totalsSum,
+          gcPctTotal: pctOfTotal(gcTotal, rawTotalSum),
+          gcPctPvrinox: pctOfTotal(gcTotal, rawPvrinoxSum)
         }
       }
     })
@@ -1155,6 +1181,13 @@ export default function ChannelPerformance() {
                           ))}
                           <th className="text-right font-semibold pb-2">Gift Card</th>
                           <th className="text-right font-semibold pb-2">Total</th>
+                          {/* 2026-08-30: GC's own market-share columns —
+                              same 2 formulas already powering "GC
+                              Contribution — % of Total Market"/"% of PVR
+                              INOX Channel" above, evaluated per month
+                              instead of per selected period. */}
+                          <th className="text-right font-semibold pb-2">GC % of Total Market</th>
+                          <th className="text-right font-semibold pb-2">GC % of PVR INOX</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1168,6 +1201,8 @@ export default function ChannelPerformance() {
                             ))}
                             <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{r.exists ? fmtCountOrDash(r.GiftCard) : '—'}</td>
                             <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap font-semibold">{r.exists ? fmtCountOrDash(r.Total) : '—'}</td>
+                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{r.exists ? fmtPctOrDash(r.gcPctTotal, 2) : '—'}</td>
+                            <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{r.exists ? fmtPctOrDash(r.gcPctPvrinox, 2) : '—'}</td>
                           </tr>
                         ))}
                         <tr className="border-t border-warmgray-border font-bold">
@@ -1189,6 +1224,12 @@ export default function ChannelPerformance() {
                           ))}
                           <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(t.totals.GiftCard)}</td>
                           <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtCountOrDash(t.totals.Total)}</td>
+                          {/* GC's FY-to-date market share IS shown here —
+                              unlike the per-channel %s above, this is a
+                              genuine, non-trivial ratio, not "100% by
+                              definition". */}
+                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(t.totals.gcPctTotal, 2)}</td>
+                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(t.totals.gcPctPvrinox, 2)}</td>
                         </tr>
                       </tbody>
                     </table>
