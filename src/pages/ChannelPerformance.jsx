@@ -160,7 +160,7 @@ function TotalComparisonRow({ totalPrior, totalThis, totalDiff, totalGrowthPct }
 }
 
 // `breakdown`: optional array of { label, value, deltaPct } — 2026-08-27,
-// added for the GC Online/Cinema split (see the module-level
+// added for the GC Online/Offline split (see the module-level
 // `giftCardByMode` doc comment below) — mirrors Kpi.jsx's own `breakdown`
 // prop verbatim (same absolute top-right position, same border-l/pl-2/
 // text-[8px]/[10px] sizing, same optional per-item DeltaBadge), since this
@@ -475,63 +475,60 @@ export default function ChannelPerformance() {
   }, [giftCardTransactionRows, windowCurrentMonths, windowPriorMonths, priorWindowComplete])
 
   // 2026-08-26 correction — was Online/Box Office (Head-based, dropping
-  // F&B entirely); now Online/Cinema via `redemptionModeOf(RedemptionModeFinal)`
+  // F&B entirely); now Online/Physical via `redemptionModeOf(RedemptionModeFinal)`
   // (`lib/redemptionMode.js`), the exact same 2-way, mutually-exclusive
   // split every other page in this app already uses for a redemption-side
-  // channel breakdown — not a new or page-local split. "Cinema" =
-  // RedemptionModeFinal === 'Physical' = Box Office + F&B combined (the
-  // established meaning of that label dashboard-wide — see
-  // redemptionMode.js's own doc comment), not Box Office alone. Splits the
-  // SAME `giftCardTransactionRows` pool the cards' own headline figures
-  // already read — cancellations are already netted out of it the way
-  // this page has always treated the GC line (that pool is
-  // `redemptionCube.filter(r => r.Head !== 'Cancellation')`, per
-  // FilterContext.jsx's own doc comment — Cancel Redeem rows never reach
-  // either mode-filtered pool below, so there's nothing further to net).
-  // Reuses the exact same sumForMonths/windowCurrentMonths/
-  // windowPriorMonths/priorWindowComplete machinery every other delta on
-  // this page already runs through — no new comparison mechanism.
+  // channel breakdown — not a new or page-local split. The Physical side
+  // = RedemptionModeFinal === 'Physical' = Box Office + F&B combined (the
+  // same underlying set `redemptionMode.js` labels "Cinema" dashboard-
+  // wide), not Box Office alone. Splits the SAME `giftCardTransactionRows`
+  // pool the cards' own headline figures already read — cancellations are
+  // already netted out of it the way this page has always treated the GC
+  // line (that pool is `redemptionCube.filter(r => r.Head !==
+  // 'Cancellation')`, per FilterContext.jsx's own doc comment — Cancel
+  // Redeem rows never reach either mode-filtered pool below, so there's
+  // nothing further to net). Reuses the exact same sumForMonths/
+  // windowCurrentMonths/windowPriorMonths/priorWindowComplete machinery
+  // every other delta on this page already runs through — no new
+  // comparison mechanism.
   //
-  // 2026-08-29: this page's own display label was briefly renamed
-  // "Cinema" → "Box Office" for the day, then reverted back to "Cinema"
-  // the same day — the page ALSO carries an unrelated "Box Office" column
-  // (`CHANNEL_ORDER`'s `BoxOffice`, from `channelTransactions.json`: ticket
-  // BOOKING-channel counts, market-wide across all payment methods, no
-  // F&B) a few sections up on this same page. Reusing "Box Office" for
-  // this GC-redemption bucket (ticket + F&B combined, gift-card-only) put
-  // two differently-scoped figures under the identical label on one page
-  // — a real risk of a reader assuming one is a subset/percentage of the
-  // other when they aren't even measuring the same thing. "Cinema" is the
-  // dashboard-wide term this app already uses everywhere else for exactly
-  // this bucket, chosen for the same collision-avoidance reason (see the
-  // 2026-08-05 "Final consolidated Source-filter model" entry's own
-  // "Physical" → "Cinema" rename, made to avoid a different collision with
-  // CardType's own real "Physical" value) — reverting to it here removes
-  // the new collision rather than trading one workaround for another.
+  // 2026-08-29: this page's own display label for the Physical side has
+  // gone through several page-local renames while the underlying split
+  // stayed the same throughout — "Cinema" (the dashboard-wide term) →
+  // "Box Office" (reverted the same day: collided with the page's own
+  // unrelated `CHANNEL_ORDER.BoxOffice` ticket-booking column, see the
+  // 2026-08-29 "GC breakdown's Physical-side label" CLAUDE.md entry for
+  // the full reasoning) → back to "Cinema" → now **"Offline"**, per an
+  // explicit request. "Offline" avoids the same Box Office collision
+  // while staying more literal than "Cinema" (this bucket is redemption
+  // at a physical location generally — ticket or F&B — not specifically
+  // "at a cinema"). No further collision with any other label on this
+  // page or dashboard-wide (grepped `channelLabel`/`CHANNEL_ORDER`/
+  // `HEAD_ORDER`/`REGION_ORDER` for "Offline" — no hits).
   const giftCardOnlineRows = useMemo(() => giftCardTransactionRows.filter((r) => r.RedemptionModeFinal === 'Online'), [giftCardTransactionRows])
-  const giftCardCinemaRows = useMemo(() => giftCardTransactionRows.filter((r) => r.RedemptionModeFinal === 'Physical'), [giftCardTransactionRows])
+  const giftCardOfflineRows = useMemo(() => giftCardTransactionRows.filter((r) => r.RedemptionModeFinal === 'Physical'), [giftCardTransactionRows])
   const giftCardByMode = useMemo(() => {
     const build = (rows) => {
       const thisVal = sumForMonths(rows, 'RedemptionCount', windowCurrentMonths)
       const priorVal = priorWindowComplete ? sumForMonths(rows, 'RedemptionCount', windowPriorMonths) : null
       return { thisVal, priorVal, growthPct: pctChange(thisVal, priorVal) }
     }
-    return { online: build(giftCardOnlineRows), cinema: build(giftCardCinemaRows) }
-  }, [giftCardOnlineRows, giftCardCinemaRows, windowCurrentMonths, windowPriorMonths, priorWindowComplete])
+    return { online: build(giftCardOnlineRows), offline: build(giftCardOfflineRows) }
+  }, [giftCardOnlineRows, giftCardOfflineRows, windowCurrentMonths, windowPriorMonths, priorWindowComplete])
   // 2026-08-26: each row is now a % SHARE of the card's own main GC total
   // (giftCardTotal.thisVal — the same total every one of the 3 cards below
   // already displays or is directly derived from), not a raw count — a
   // %-based value consistent with these 3 cards' own %-based nature
   // (2 of the 3 already show a %; the 3rd, "Gift Card Transactions", is a
-  // count, but Online % + Cinema % here is % of THAT card's own count, so
-  // it still reads correctly there too). Online % + Cinema % sum to
+  // count, but Online % + Offline % here is % of THAT card's own count,
+  // so it still reads correctly there too). Online % + Offline % sum to
   // exactly 100% of giftCardTotal.thisVal by construction, since Online
-  // and Cinema (RedemptionModeFinal's only 2 real values on this pool) are
-  // a complete partition of it. Each row's own delta badge is unchanged
-  // from before — still the underlying raw count's own period-over-period
-  // growth (same computation as giftCardByMode above), not a re-derived
-  // growth of the %-share itself, per the request's own "same shared
-  // comparison logic as before".
+  // and Physical (RedemptionModeFinal's only 2 real values on this pool)
+  // are a complete partition of it. Each row's own delta badge is
+  // unchanged from before — still the underlying raw count's own
+  // period-over-period growth (same computation as giftCardByMode above),
+  // not a re-derived growth of the %-share itself, per the request's own
+  // "same shared comparison logic as before".
   //
   // 2026-08-28: split into 2 separate arrays instead of 1 shared one —
   // "Gift Card Transactions" (a count-based KPI) now shows the raw count
@@ -545,7 +542,7 @@ export default function ChannelPerformance() {
   // only the VALUE string differs per card family, not the computation.
   const giftCardHeadBreakdownPct = [
     { label: 'Online', value: fmtPctOrDash(pctOfTotal(giftCardByMode.online.thisVal, giftCardTotal.thisVal)), deltaPct: giftCardByMode.online.growthPct },
-    { label: 'Cinema', value: fmtPctOrDash(pctOfTotal(giftCardByMode.cinema.thisVal, giftCardTotal.thisVal)), deltaPct: giftCardByMode.cinema.growthPct }
+    { label: 'Offline', value: fmtPctOrDash(pctOfTotal(giftCardByMode.offline.thisVal, giftCardTotal.thisVal)), deltaPct: giftCardByMode.offline.growthPct }
   ]
   const giftCardHeadBreakdownCount = [
     {
@@ -554,9 +551,9 @@ export default function ChannelPerformance() {
       deltaPct: giftCardByMode.online.growthPct
     },
     {
-      label: 'Cinema',
-      value: `${fmtCountOrDash(giftCardByMode.cinema.thisVal)} (${fmtPctOrDash(pctOfTotal(giftCardByMode.cinema.thisVal, giftCardTotal.thisVal))})`,
-      deltaPct: giftCardByMode.cinema.growthPct
+      label: 'Offline',
+      value: `${fmtCountOrDash(giftCardByMode.offline.thisVal)} (${fmtPctOrDash(pctOfTotal(giftCardByMode.offline.thisVal, giftCardTotal.thisVal))})`,
+      deltaPct: giftCardByMode.offline.growthPct
     }
   ]
 
@@ -1227,9 +1224,23 @@ export default function ChannelPerformance() {
                           {/* GC's FY-to-date market share IS shown here —
                               unlike the per-channel %s above, this is a
                               genuine, non-trivial ratio, not "100% by
-                              definition". */}
-                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(t.totals.gcPctTotal, 2)}</td>
-                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">{fmtPctOrDash(t.totals.gcPctPvrinox, 2)}</td>
+                              definition". It's already the WEIGHTED
+                              average (sum(GC) / sum(denominator) across
+                              real months — see gcPctTotal/gcPctPvrinox's
+                              own computation above, `rawTotalSum`/
+                              `rawPvrinoxSum`), not a simple average of the
+                              12 monthly %s, which is what makes it match
+                              the "GC Contribution" cards above exactly.
+                              "(avg.)" suffix visually marks these 2 cells
+                              as a computed average, distinct from every
+                              other Total-row cell in this table (which are
+                              real sums, not averages). */}
+                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">
+                            {t.totals.gcPctTotal == null ? '—' : `${fmtPctOrDash(t.totals.gcPctTotal, 2)} (avg.)`}
+                          </td>
+                          <td className="py-2 text-right text-navy tabular-nums whitespace-nowrap">
+                            {t.totals.gcPctPvrinox == null ? '—' : `${fmtPctOrDash(t.totals.gcPctPvrinox, 2)} (avg.)`}
+                          </td>
                         </tr>
                       </tbody>
                     </table>

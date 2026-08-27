@@ -8177,6 +8177,66 @@ consistent with each other. Zero console errors; clean production build
 (819.45 kB JS, 224.47 kB gzipped, no new warnings beyond the pre-existing
 500KB chunk-size notice).
 
+## 2026-08-30 — Full-Year Monthly Breakdown table: labeled the Total row's
+2 GC market-share cells as a weighted average
+
+Checked the existing computation before touching anything: the Total
+row's "GC % of Total Market"/"GC % of PVR INOX" values (added in the
+entry directly above) were already `pctOfTotal(gcTotal, rawTotalSum)`/
+`pctOfTotal(gcTotal, rawPvrinoxSum)` — i.e. `sum(GC RedemptionCount,
+real months) ÷ sum(that column's own raw denominator, real months)` —
+the correct weighted average this request asks for, not a simple average
+of the 12 monthly %s. That's exactly why the entry above's own
+verification already found the Total row matching "GC Contribution — %
+of Total Market"/"% of PVR INOX Channel" exactly (1.93% / 30.11% for
+FY2026-27) — a simple average of unequal-volume months would not have
+landed on those same figures. So the only real gap was the missing
+"(avg.)" label distinguishing these 2 cells from the rest of the Total
+row (every other column's Total-row cell is a real sum, not an average) —
+added `${fmtPctOrDash(...)} (avg.)`, guarded to plain "—" for the
+(currently unreachable, since `selectedFYs` only ever includes FYs with
+at least one real month) zero-real-months edge case, so a null value
+never renders as the confusing "— (avg.)".
+
+**Verified live**: FY2026-27's Total row now reads "1.93% (avg.)" and
+"30.11% (avg.)" — byte-identical to the "GC Contribution — % of Total
+Market"/"% of PVR INOX Channel" cards' own values on the same page,
+matching the requested target exactly. Zero console errors; clean
+production build (819.54 kB JS, 224.49 kB gzipped, no new warnings beyond
+the pre-existing 500KB chunk-size notice).
+
+## 2026-08-30 — Channel Performance: GC breakdown's Physical-side label
+renamed "Cinema" → "Offline" (page-local, display-only, 3rd rename this
+week)
+
+The 3 GC cards' Online/Physical breakdown has now been relabeled
+"Cinema" → "Box Office" → "Cinema" → **"Offline"**, per an explicit
+request, with the underlying split untouched throughout every one of
+those renames: `RedemptionModeFinal === 'Online'` vs. `=== 'Physical'`
+(Box Office + F&B combined), via `redemptionModeOf()` — the same
+dashboard-wide 2-way split every other page uses. "Offline" was checked
+against the same collision this label has tripped on before — grepped
+`channelLabel()`/`CHANNEL_ORDER`/`HEAD_ORDER`/`REGION_ORDER` for the
+string "Offline" across the app, zero hits, so no repeat of the
+`CHANNEL_ORDER.BoxOffice` collision the 2026-08-29 revert fixed.
+
+Internal identifiers renamed to match: `giftCardCinemaRows` →
+`giftCardOfflineRows`, `giftCardByMode.cinema` → `giftCardByMode.offline`.
+Both breakdown arrays' `label: 'Cinema'` → `label: 'Offline'`. The
+module-level doc comment consolidates the label's full history (Cinema →
+Box Office → Cinema → Offline) into one place rather than layering a 4th
+paragraph of same-day rename narration on top of the previous three.
+
+**Verified live**: all 3 GC cards ("Gift Card Transactions", both
+"GC Contribution" cards) now read "Online .../ Offline ..." — grepped the
+rendered page body for "Cinema" and "Box Office" post-change, zero hits
+in the GC breakdown panel. Figures unchanged (unfiltered: Online 9.92 L
+(59.8%) / Offline 6.67 L (40.2%) on "Gift Card Transactions"; 59.8%/40.2%
+on both ContributionCards) — confirming this was, again, a pure label
+swap with no effect on the computation. Zero console errors; clean
+production build (819.55 kB JS, 224.49 kB gzipped, no new warnings beyond
+the pre-existing 500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
