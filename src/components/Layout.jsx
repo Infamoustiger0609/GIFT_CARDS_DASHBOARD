@@ -10,15 +10,15 @@ import { useFilters } from '../lib/FilterContext'
 // `false`) on the tab below. The page/route itself is untouched either
 // way — this only ever disables the nav tab, not `/summary` itself.
 const TABS = [
-  { to: '/summary', label: 'Summary', disabled: true },
+  { to: '/summary', label: 'Summary' },
   { to: '/', label: 'Overview', end: true },
   { to: '/channel-performance', label: 'Channel Performance' },
   { to: '/card-journey', label: 'Card Journey' },
-  { to: '/activation', label: 'Activation', disabled: true },
-  { to: '/redemption/box-office', label: 'Redemption · Box Office', disabled: true },
-  { to: '/redemption/fnb', label: 'Redemption · F&B', disabled: true },
-  { to: '/trends', label: 'Trends', disabled: true },
-  { to: '/cancel-redeem', label: 'Cancel Redeem', disabled: true }
+  { to: '/activation', label: 'Activation' },
+  { to: '/redemption/box-office', label: 'Redemption · Box Office' },
+  { to: '/redemption/fnb', label: 'Redemption · F&B' },
+  { to: '/trends', label: 'Trends' },
+  { to: '/cancel-redeem', label: 'Cancel Redeem' }
 ]
 
 function DataStatus({ isLoading, error }) {

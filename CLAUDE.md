@@ -8237,6 +8237,26 @@ swap with no effect on the computation. Zero console errors; clean
 production build (819.55 kB JS, 224.49 kB gzipped, no new warnings beyond
 the pre-existing 500KB chunk-size notice).
 
+## 2026-08-31 — Nav: re-enabled all 9 tabs, reversing the 2026-08-25
+disable
+
+Deleted every `disabled: true` key from `Layout.jsx`'s `TABS` array —
+the exact "one-line edit per tab" reversal that entry's own comment
+described. Summary, Activation, both Redemption pages, Trends, and
+Cancel Redeem are real `<NavLink>`s again, alongside Overview/Channel
+Performance/Card Journey, which were never disabled. No route/page code
+changed — those 5 pages' routes were fully functional the whole time,
+only their nav entries were gated.
+
+**Verified live**: read the actual rendered nav DOM — 9 `<a>` elements, 0
+`<span title="Under development">` labels. Clicked through all 9 in
+order; each navigated to its correct route (`/summary`, `/`,
+`/channel-performance`, `/card-journey`, `/activation`,
+`/redemption/box-office`, `/redemption/fnb`, `/trends`,
+`/cancel-redeem`). Zero console errors across every navigation; clean
+production build (819.48 kB JS, 224.48 kB gzipped, no new warnings beyond
+the pre-existing 500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
