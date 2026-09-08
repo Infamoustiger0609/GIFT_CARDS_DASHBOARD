@@ -781,6 +781,24 @@ export default function ChannelPerformance() {
         <EmptyState />
       ) : (
         <>
+          {/* 2026-09-08 — data-currency gap, made visible rather than
+              hidden: `channelTransactions.json` (BMS/PVR INOX/Paytm-
+              District/Box Office) comes from a separate source pipeline
+              from the gift-card cubes every other page reads, and wasn't
+              part of the 2026-09-08 monthly refresh that extended those
+              cubes through Aug 2026 — this page's own data (and the Gift
+              Card line derived from `giftCardTransactionRows`, which is
+              filtered by `windowCurrentMonths` built from THIS page's own
+              `channelTransactionsRows`, so it's equally capped) still runs
+              through Jul 2026 only. A real, temporary one-month lag behind
+              the rest of the dashboard, not a bug — do NOT backfill August
+              here with gift-card data as a stand-in; remove this note (and
+              nothing else) once a channel-data refresh actually lands. */}
+          <p className="text-xs font-medium text-navy bg-gold-light border border-gold/40 rounded-md px-3 py-2">
+            Note: this page's channel-booking data (BMS / PVR INOX / Paytm-District / Box Office) currently runs through <strong>July 2026</strong> —
+            one month behind the rest of the dashboard, which now includes August 2026. Updated on the next channel-data refresh.
+          </p>
+
           {/* 2026-08-29 (Phase 4 audit): MTD/QTD(Q1-Q4 dropdown)/YTD
               control row + the single top-left comparison-date line —
               copied verbatim from Overview.jsx's own render, same as

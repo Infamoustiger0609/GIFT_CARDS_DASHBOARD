@@ -1,4 +1,6 @@
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect, useRef } from 'react'
+import { asyncBufferFromUrl, parquetReadObjects } from 'hyparquet'
+import { compressors } from 'hyparquet-compressors'
 import { fyOf, WEEKEND_DAYS, WEEKDAY_ORDER, NONE_SELECTED, DENOM_ORDER } from './constants'
 import { REDEMPTION_MODES, redemptionModeOf } from './redemptionMode'
 import { ACTIVATION_SOURCES, sourceOf } from './activationSource'
@@ -228,6 +230,72 @@ function filterCohortByActivation(cube, filters) {
   })
 }
 
+// ---- Card Journey row-level cube (2026-09-07) ----
+// `cardJourneyRowLevel.parquet` — one row per (CardNumber, activation,
+// redemption) pairing, the same shape `cohortCube.json` is pre-aggregated
+// FROM, but kept at row level specifically so a real `CardNumber` field
+// survives. cohortCube.json's own `UniqueCardCount` is a per-ROW distinct
+// count (computed once, at cube-build time, over whatever grain that row's
+// own group-by produced) — summing it across MULTIPLE rows (which is what
+// every `sumBy(..., 'UniqueCardCount')` on Card Journey does, since the
+// page almost never narrows to exactly one cohort-cube row) silently
+// double-counts any card that appears in more than one of those rows
+// (e.g. one card redeeming in 2 different regions, or across 2 different
+// months, within the same filtered selection) — a classic "sum of
+// per-group distinct counts != distinct count of the union" error. This
+// is NOT a cohortCube.json data bug — cohortCube.json's own per-row
+// UniqueCardCount values are individually correct; the bug is entirely in
+// treating a SUM of them as if it were a true distinct count over a wider
+// selection. Confirmed directly: FY2026-27's "Of Those, Redeemed" card
+// count read 257,600 via the old sum, vs. the true 228,202 from an exact
+// COUNT(DISTINCT CardNumber) over this row-level file (an 11.4% overcount)
+// — see the 2026-09-07 CLAUDE.md entry for the full before/after.
+//
+// Scope: only the "Of Those, Redeemed" headline card count (and its direct
+// dependents — the "Transaction Value"/"Additional Revenue" KPI subCounts,
+// the "By Cards" rate, and the top-level flow-diagram node, all of which
+// already read the exact same `redeemedCount` variable) is switched to this
+// exact-count source. The deeper per-BUCKET card counts elsewhere on this
+// page (by Head, by Region, by Weekday, the spillover chart's per-month
+// counts, and the 4 individual flow-diagram child nodes) still read
+// cohortCube.json's UniqueCardCount sums — switching those to exact
+// per-bucket distinct counts is a separate, larger question (per-bucket
+// exact distinct counts do not sum back to the exact distinct count of
+// their own union, the same way `netBucketsProportionally`/`bucketSum`'s
+// existing amount-based bucketing is designed to sum exactly to its own
+// parent total — resolving that tension needs its own decision, not a
+// silent guess here) — flagged, not fixed, in this pass.
+//
+// Fields present: CardNumber, ActivationYearMonth, RedemptionYearMonth,
+// Region_Clean, RedemptionModeFinal, Head, RedemptionAmount, Uptake —
+// confirmed directly against the file (no ActivationModeFinal/CardType/
+// Weekday, unlike cohortCube.json), so this pool can only support the
+// filters below: FY/Month (both date fields, same AND-both-dates rule as
+// filterCohort), Region, Redemption Source, Ticket/F&B. Activation
+// Source/Card Type/Week/Weekday are NOT supported — CardJourney.jsx gates
+// on `cardJourneyRowLevelFiltersSupported` (same hard-gate pattern as
+// `dateRangeAvailable()` above) and falls back to the old approximate sum
+// whenever one of those 4 is active, rather than silently ignoring them.
+function passesCardJourneyRowLevelCommon(row, filters) {
+  if (!matches(filters.region, row.Region_Clean)) return false
+  if (!matches(filters.redemptionSource, redemptionModeOf(row.RedemptionModeFinal))) return false
+  if (!matches(filters.ticketFnb, ticketFnbBucket(row.Head))) return false
+  return true
+}
+function filterCardJourneyRowLevel(rows, filters) {
+  return rows.filter((row) => {
+    if (row.ActivationYearMonth === PRE_EXISTING_ACTIVATION) return false
+    if (!matches(filters.fy, fyOf(row.ActivationYearMonth))) return false
+    if (!matches(filters.month, row.ActivationYearMonth)) return false
+    if (!matches(filters.fy, fyOf(row.RedemptionYearMonth))) return false
+    if (!matches(filters.month, row.RedemptionYearMonth)) return false
+    return passesCardJourneyRowLevelCommon(row, filters)
+  })
+}
+function cardJourneyRowLevelFiltersSupported(filters) {
+  return filters.activationSource.length === 0 && filters.cardType.length === 0 && filters.week.length === 0 && filters.weekday.length === 0
+}
+
 // ---- Date Range (2026-08-21), backed by a 4th pair of cubes ----
 // `dailyActivationCube.json`/`dailyRedemptionCube.json` are day-level
 // (`DateStr`, not `YearMonth`) but otherwise much thinner than the main
@@ -348,6 +416,49 @@ export function FilterProvider({ children }) {
       .then((cube) => setCohortCube(cube))
       .catch((err) => setCohortError(err))
       .finally(() => setCohortLoading(false))
+  }, [])
+
+  // 2026-09-07: same lazy-load-on-first-use pattern as cohortCube above —
+  // only CardJourney.jsx reads this, and it's the one place on the page
+  // that needs a true CardNumber (see filterCardJourneyRowLevel()'s own
+  // doc comment for why). Parsed with hyparquet (pure JS, no WASM/worker,
+  // no server needed — reads the whole ~13MB file into plain row objects
+  // in one pass) rather than a live query engine like DuckDB-WASM: this
+  // file's size (~13MB/1.98M rows) is comfortably in the same class as
+  // cohortCube.json's own ~18.6MB, well within what this app already
+  // parses/filters synchronously via plain `.filter()`, and the only
+  // operation ever run against it (an AND of a handful of equality/
+  // inclusion checks, then a `new Set(...).size` for the distinct count)
+  // doesn't need SQL — a full query engine would be meaningfully heavier
+  // (a separate WASM bundle + worker + async init) for no real benefit at
+  // this size. A pre-aggregated JSON lookup table (the request's other
+  // suggested option) was considered and rejected: an EXACT distinct count
+  // under an arbitrary multi-select Month/Region/etc. combination can't be
+  // derived from any fixed pre-aggregation without also storing per-cell
+  // card-ID sets (to resolve overlap between cells) — which is essentially
+  // the row-level data again, just reshaped, with none of the size
+  // savings a lookup table is supposed to provide.
+  const [cardJourneyRowLevelRows, setCardJourneyRowLevelRows] = useState([])
+  const [cardJourneyRowLevelLoading, setCardJourneyRowLevelLoading] = useState(false)
+  const [cardJourneyRowLevelError, setCardJourneyRowLevelError] = useState(null)
+  const cardJourneyRowLevelFetchStarted = useRef(false)
+  const loadCardJourneyRowLevel = useCallback(() => {
+    if (cardJourneyRowLevelFetchStarted.current) return
+    cardJourneyRowLevelFetchStarted.current = true
+    setCardJourneyRowLevelLoading(true)
+    asyncBufferFromUrl({ url: '/data/cardJourneyRowLevel.parquet' })
+      // hyparquet's base build only decodes Uncompressed/Snappy pages —
+      // this file's own row groups use ZSTD (confirmed directly: hyparquet
+      // threw "unsupported compression codec: ZSTD" without this option),
+      // so the `hyparquet-compressors` companion package's decoders are
+      // required, not optional, for this specific file.
+      .then((file) => parquetReadObjects({ file, compressors }))
+      .then((rows) => setCardJourneyRowLevelRows(rows))
+      .catch((err) => {
+        console.error('loadCardJourneyRowLevel failed:', err)
+        setCardJourneyRowLevelError(err)
+      })
+      .finally(() => setCardJourneyRowLevelLoading(false))
   }, [])
 
   // Same lazy-load-on-first-use pattern as cohortCube above, for the same
@@ -560,6 +671,18 @@ export function FilterProvider({ children }) {
   // bar-pair, not just whichever FY happens to be selected.
   const cohortRowsAllFY = useMemo(() => (cohortCube ? filterCohort(cohortCube, filters, { skipFY: true }) : []), [cohortCube, filters])
 
+  // 2026-09-07 — see filterCardJourneyRowLevel()'s own doc comment above
+  // for what this pool is for and why it's scoped to only 3 of the 7
+  // filters cohortRows itself supports. `cardJourneyRowLevelReady` is
+  // exposed alongside so CardJourney.jsx can tell "not narrowed by X" (the
+  // filters-unsupported case) apart from "still loading" (rows is `[]`
+  // either way, before the fetch resolves).
+  const cardJourneyRowLevelFiltered = useMemo(
+    () => filterCardJourneyRowLevel(cardJourneyRowLevelRows, filters),
+    [cardJourneyRowLevelRows, filters]
+  )
+  const cardJourneyRowLevelReady = cardJourneyRowLevelRows.length > 0 && cardJourneyRowLevelFiltersSupported(filters)
+
   // Date Range's own row pools — see the "Date Range" section above for
   // why these read a 4th pair of cubes instead of activationCube/
   // redemptionCube. `isDateRangeAvailable` false or no `start` picked yet
@@ -723,6 +846,11 @@ export function FilterProvider({ children }) {
     loadCohortCube,
     cohortLoading,
     cohortError,
+    cardJourneyRowLevelFiltered,
+    cardJourneyRowLevelReady,
+    loadCardJourneyRowLevel,
+    cardJourneyRowLevelLoading,
+    cardJourneyRowLevelError,
     dateRangeAvailable: isDateRangeAvailable,
     dailyActivationRows,
     dailyRedemptionRows,

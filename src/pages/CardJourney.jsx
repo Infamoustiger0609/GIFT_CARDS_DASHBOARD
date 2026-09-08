@@ -76,7 +76,10 @@ export default function CardJourney() {
     comparisonMonths,
     loadCohortCube,
     cohortLoading,
-    cohortError
+    cohortError,
+    cardJourneyRowLevelFiltered,
+    cardJourneyRowLevelReady,
+    loadCardJourneyRowLevel
   } = useFilters()
 
   // 2026-08-28: MTD/QTD(Q1-Q4 dropdown)/YTD preset control, brought up to
@@ -108,6 +111,16 @@ export default function CardJourney() {
     loadCohortCube()
   }, [loadCohortCube])
 
+  // 2026-09-07: same lazy-on-visit treatment as cohortCube.json above —
+  // see FilterContext.jsx#loadCardJourneyRowLevel's own doc comment for
+  // why this file is parsed with hyparquet rather than a live query
+  // engine, and filterCardJourneyRowLevel()'s doc comment for exactly
+  // what it fixes (the "Of Those, Redeemed" card count's own inflated
+  // sum-of-per-row-UniqueCardCount bug).
+  useEffect(() => {
+    loadCardJourneyRowLevel()
+  }, [loadCardJourneyRowLevel])
+
   // "Activated in This Period" — identical computation to Overview's own
   // headline Activation KPI (same activationRows pool), unchanged.
   const totalActivation = sumBy(activationRows, 'ActivationAmount')
@@ -136,7 +149,27 @@ export default function CardJourney() {
   // than totalActivationCount, that's a real bug, not expected variance.
   const redeemedAmount = sumBy(cohortRows, 'RedemptionAmount')
   const redeemedNonCancelRows = useMemo(() => cohortRows.filter((r) => !isCancellationRow(r)), [cohortRows])
-  const redeemedCount = sumBy(redeemedNonCancelRows, 'UniqueCardCount')
+  // 2026-09-07 fix: `sumBy(..., 'UniqueCardCount')` sums a PER-ROW distinct
+  // count across however many cohortCube.json rows match the current
+  // filter — silently double-counting any card whose own redemption rows
+  // span more than one of those rows (e.g. across 2 regions in the same
+  // period). Replaced with an exact `COUNT(DISTINCT CardNumber)` over
+  // `cardJourneyRowLevel.parquet`'s row-level data (see
+  // FilterContext.jsx#filterCardJourneyRowLevel's own doc comment for the
+  // full root-cause/fix writeup and the 2026-09-07 CLAUDE.md entry for the
+  // verified before/after figures) whenever that data is loaded and the
+  // active filters are ones it can support (`cardJourneyRowLevelReady` —
+  // false while the ~13MB file is still fetching, or when Activation
+  // Source/Card Type/Week/Weekday is active, since those 4 fields don't
+  // exist on the row-level file) — falling back to the old approximate sum
+  // otherwise, exactly like every other lazy-loaded pool on this page
+  // starts empty/approximate before its own fetch resolves.
+  const redeemedCountExact = useMemo(() => {
+    if (!cardJourneyRowLevelReady) return null
+    const rows = cardJourneyRowLevelFiltered.filter((r) => r.Head !== 'Cancellation')
+    return new Set(rows.map((r) => r.CardNumber)).size
+  }, [cardJourneyRowLevelFiltered, cardJourneyRowLevelReady])
+  const redeemedCount = redeemedCountExact != null ? redeemedCountExact : sumBy(redeemedNonCancelRows, 'UniqueCardCount')
 
   const samePeriodRedemptionRate = totalActivation > 0 ? (redeemedAmount / totalActivation) * 100 : NaN
   // "By Cards" — same question, card-count basis instead of amount:

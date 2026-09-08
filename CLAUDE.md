@@ -8257,6 +8257,213 @@ order; each navigated to its correct route (`/summary`, `/`,
 production build (819.48 kB JS, 224.48 kB gzipped, no new warnings beyond
 the pre-existing 500KB chunk-size notice).
 
+## 2026-09-07 — Card Journey: fixed the "Of Those, Redeemed" card-count
+overcount via a new row-level parquet cube (exact COUNT(DISTINCT
+CardNumber), not a sum of per-row UniqueCardCount)
+
+**Root cause**: `redeemedCount` was `sumBy(redeemedNonCancelRows,
+'UniqueCardCount')` — summing cohortCube.json's own PER-ROW distinct-card
+count across every row matching the current filter. `UniqueCardCount` is
+correct for any *single* cohort-cube row in isolation, but summing it
+across multiple rows silently double-counts any card whose own redemptions
+span more than one of those rows (e.g. a card redeeming in 2 different
+regions, or across 2 different months, within the same filtered selection)
+— a textbook "sum of per-group distinct counts ≠ distinct count of the
+union" error. This was never a cohortCube.json data bug; the bug was
+entirely in treating a SUM of already-correct per-row counts as if it were
+a true distinct count over a wider selection.
+
+**The fix — a new row-level source, not a bigger pre-aggregation**:
+`cardJourneyRowLevel.parquet` (provided independently verified: 1,980,252
+rows, whole-dataset distinct-card total 1,029,133 excluding Cancellation
+rows — matched exactly against a direct pandas/pyarrow read before writing
+any app code) carries one row per (CardNumber, activation, redemption)
+pairing — the same shape cohortCube.json is pre-aggregated FROM, but with
+the actual `CardNumber` field kept. Evaluated the request's own two
+suggested approaches before choosing:
+  - **A pre-aggregated JSON lookup table was rejected**: an exact distinct
+    count under an arbitrary multi-select Month/Region/etc. combination
+    can't be derived from any FIXED pre-aggregation without also storing
+    per-cell card-ID sets (to resolve which cards overlap between cells) —
+    which is essentially the row-level data again, just reshaped, with
+    none of a lookup table's expected size savings.
+  - **DuckDB-WASM was also rejected**, but for the opposite reason —
+    unnecessary weight for what this page actually needs. The file (~13MB)
+    is comfortably in the same size class as `cohortCube.json`'s own
+    ~18.6MB, already parsed/filtered synchronously via plain `.filter()`
+    everywhere else in this app, and the only operation ever run against
+    it is an AND of a handful of equality checks + `new Set(...).size` —
+    it doesn't need a SQL engine. A full DuckDB-WASM bundle (separate WASM
+    binary + worker + async init) would have been meaningfully heavier for
+    no benefit at this size.
+  - **Chosen: `hyparquet`** (pure JS, dependency-free, no WASM/worker/
+    server) decodes the whole file into plain row objects in one pass,
+    lazy-loaded only when Card Journey is visited — the exact same
+    lazy-on-first-use treatment `cohortCube.json` already got (2026-08-16
+    entry above), for the identical reason (only this one page reads it).
+    Hit one real snag before it worked: the file's row groups use ZSTD
+    compression, which hyparquet's base build doesn't decode
+    ("unsupported compression codec: ZSTD") — fixed by adding the
+    companion `hyparquet-compressors` package and passing its
+    `compressors` object into `parquetReadObjects()`.
+
+**New `FilterContext.jsx` additions**: `loadCardJourneyRowLevel()` (lazy
+fetch, ref-guarded idempotent, mirrors `loadCohortCube()` exactly) plus
+`cardJourneyRowLevelRows`/`Loading`/`Error` state;
+`filterCardJourneyRowLevel()` (same AND-both-`ActivationYearMonth`-and-
+`RedemptionYearMonth` rule as `filterCohort()`, plus Region/Redemption
+Source/Ticket-F&B, plus the same hard `PRE_EXISTING_ACTIVATION` exclusion
+`passesCohortCommon()` already applies) and the resulting
+`cardJourneyRowLevelFiltered` pool; `cardJourneyRowLevelFiltersSupported()`
+— the row-level file has no `ActivationModeFinal`/`CardType`/`Weekday`
+columns (confirmed directly against the file, unlike cohortCube.json,
+which has all 3), so Activation Source/Card Type/Week/Weekday can't be
+applied to it. Same hard-gate pattern `dateRangeAvailable()` already uses
+for its own daily-cube field gaps — `cardJourneyRowLevelReady` (rows
+loaded AND those 4 filters unrestricted) decides, in `CardJourney.jsx`,
+whether to use the new exact count or fall back to the old approximate
+sum, rather than silently ignoring an active filter the row-level source
+can't honor.
+
+**Scope, stated explicitly rather than silently assumed**: only the
+headline "Of Those, Redeemed" card count (and its direct dependents — the
+"Transaction Value"/"Additional Revenue" KPI subCounts, the "By Cards"
+rate, and the top-level flow-diagram node, which all already read the same
+`redeemedCount` variable) switched to the exact source. The deeper per-
+BUCKET card counts elsewhere on this page (by Head, by Region, by
+Weekday, the spillover chart's per-month counts, and the 4 individual
+flow-diagram child nodes) still read cohortCube.json's `UniqueCardCount`
+sums, unchanged in this pass — per-bucket exact distinct counts don't sum
+back to the exact distinct count of their own union (the same tension
+`netBucketsProportionally`/`bucketSum`'s amount-based bucketing is
+designed around for amounts, but has no ready answer for counts), which is
+its own separate design question, not something to guess at silently
+here.
+
+**Verified against the raw parquet file by hand first** (pyarrow/pandas,
+not the app), **then live in the app**: FY2026-27 (Apr-Jul 2026 both
+dates) — old approximate sum 2,57,600 cards → new exact count **2,28,202
+cards** (an 11.4% correction), matching the target exactly. Spot-checked
+generalization on 2 further, independently-computed combinations: default
+unfiltered state (all filters cleared) — 9,81,803 cards, matching a direct
+pyarrow distinct-count over the same Pre-existing-exclusion rule exactly;
+Region=NORTH alone — 7,77,480 cards, also an exact match. Confirmed the
+fallback gate works, not just the happy path: applying Activation
+Source=Aggregators (a filter the row-level file can't support) correctly
+switched the display back to the old approximate-sum figure (5,53,321,
+a real, different, correctly-narrowed number) rather than silently
+ignoring the filter or breaking. Zero console errors across every
+scenario; clean production build (995.97 kB JS, 318.34 kB gzipped — a real
+increase, mostly `hyparquet-compressors`' bundled WASM decompressors,
+which are needed unconditionally since this file's ZSTD compression isn't
+optional; worth revisiting with code-splitting if bundle size becomes a
+concern, but out of scope for this fix).
+
+## 2026-09-08 — Monthly data refresh: 28→29 months (through Aug 2026), no
+schema changes
+
+All 7 gift-card files swapped (`activationCube.json`, `redemptionCube.json`,
+`cohortCube.json`, `dailyActivationCube.json`, `dailyRedemptionCube.json`,
+`heroProducts.json`, `cardJourneyRowLevel.parquet`) — same fields, same
+structure as before, one more month appended.
+`channelTransactions.json` deliberately NOT touched (see its own section
+below).
+
+**New unfiltered baseline, verified against the raw files before touching
+any UI**: Total Net Activation ₹8,543.50L, Total Net Redemption ₹7,024.99L
+— both matched exactly once the live app loaded the new files.
+`cohortCube.json`'s own total `RedemptionAmount` (₹7,024.99L) matched
+`redemptionCube.json`'s total exactly, confirming the two stayed in sync
+across the refresh. `cardJourneyRowLevel.parquet` confirmed to cover
+through Aug 2026 (99,076 August redemption rows, matching the stated
+figure exactly) — Card Journey's exact-distinct-count logic (the
+2026-09-07 UniqueCardCount fix) needed zero code changes to work against
+the new file, confirmed live: unfiltered card count 10,29,715, matching a
+direct pyarrow distinct-count over the new parquet exactly. Daily cubes'
+August rollup cross-checked against the main cubes' own August row: both
+Activation (₹276.92L, 40,396 cards) and Redemption (₹329.67L) matched to
+the paisa.
+
+**Two disclosed caveats, documented rather than silently treated as fully
+clean, per the refresh's own notes**:
+  - **January 2026's Cancel-Activate rows are omitted from that month's
+    net activation figure** — a recurring memory-constraint issue on that
+    specific source file, already flagged in the pipeline spec. Described
+    as negligible (tens of rows/month) but not exactly zero. Not something
+    this codebase can detect or correct on its own (the omitted rows
+    aren't present in the file to check against) — noted here so a future
+    reconciliation discrepancy traced to January 2026 isn't mistaken for a
+    new bug.
+  - **`heroProducts.json` was updated by adding August to the existing
+    top-15 by name-match, not a full 29-month re-rank** — the complete
+    item-level ledger a true re-rank would need isn't available. Confirmed
+    safe for now by reading the file directly: 15th place sits at ₹59.44L,
+    and the biggest item excluded from the top-15 only earned ₹3.44L in
+    August (per the refresh's own figures — not independently checkable
+    from this repo, which has no item-level ledger to check against),
+    nowhere near displacing 15th place. **This approach has a shelf
+    life** — flagging now so it isn't silently repeated indefinitely: if
+    several more months get appended this same way without a full
+    re-aggregation, an item that never cracked the original top-15 could
+    eventually outrank one that did, and this incremental method has no
+    way to catch that.
+
+**Anchor/preset logic — confirmed auto-updating, no code change needed**:
+the shared anchor-month resolution (`usePresetWindow()`, `lib/comparisons.js`)
+reads the true chronological max month present in the data, not a
+hardcoded value — verified live rather than assumed: Overview's default
+(FY=All & Month=All) state now shows "Apr 26 – Aug 26 vs. Apr 25 – Aug 25"
+(was Jul 26), and this propagated identically to every other page that
+reads the same hook (Card Journey, Summary, Activation, Trends, Cancel
+Redeem — all screenshotted). QTD's Q2 quarter (Jul-Sep) now correctly
+shows "Q2 (to date)" covering `2026-07, 2026-08` (was frozen at just
+`2026-07`) — confirmed by reading the dropdown's own tooltip text, not
+assumed from the quarter-boundary logic alone.
+
+**"X/12 months" partial-FY labels — grepped the whole `src/` tree, found
+zero hardcoded instances**. Every such label already reads from real data:
+`lib/comparisons.js#computeFYSeries()`'s `isPartial`/`monthsPresent`
+(driving `MetricComparisonCard.jsx`'s "Partial — N/12 months (YTD)" labels
+on Summary) is computed from `entry.months.size` — a real count of
+distinct months actually present in the filtered pool, not a literal
+number — confirmed live: Summary's FY2026-27 cards now read "Partial —
+5/12 months (YTD)" (was 4/12) with zero code changes. `ChannelPerformance.jsx`'s
+own `realMonthCount`/`isPartial` (its Full-Year Monthly Breakdown table)
+is similarly derived from `rowByMonth.has(m)` — correctly UNCHANGED at
+"4/12 months" for FY2026-27, since it reads from `channelTransactionsRows`
+(unaffected by this refresh — see below), which is exactly right, not a
+bug. The only "28-month"/"4 real channels" mentions found anywhere in
+`src/` are either doc comments describing `channelTransactionsRows`
+specifically (still true, untouched) or a fixed pixel-width/count
+THRESHOLD constant (`MAX_ACTIVE_MONTHS_FOR_STACKED_LABEL = 20` in
+`ChartLabels.jsx`, deliberately chosen to sit between the 12-month and
+28-month cases, not equal to either) that remains valid at 29 months
+without any change.
+
+**Channel Performance — a real, disclosed gap, not silently backfilled**:
+`channelTransactions.json` (BMS/PVR INOX/Paytm-District/Box Office) comes
+from a separate source pipeline and was NOT part of this refresh — it
+still runs through Jul 2026 only, one month behind every other page.
+Deliberately did NOT extend this page's own date range using gift-card
+data as a substitute (`giftCardTransactionRows` itself now includes
+August, but the page's own `windowCurrentMonths`/`selectedMonths` are
+still derived entirely from `channelTransactionsRows`' own real months, so
+August gift-card rows are structurally excluded from every figure on this
+page — confirmed, not just assumed, since a stray reference to the wrong
+row pool would have silently leaked August data in). Added a visible
+callout at the very top of the page (`bg-gold-light` bordered box, same
+"make a real gap visible, don't hide it" convention as this page's own
+existing "Insufficient prior-year data" caption) stating the data lag
+explicitly, to be removed once a channel-data refresh actually lands.
+
+**Full regression check**: screenshotted Overview, Card Journey, Summary,
+Activation, both Redemption pages, Trends, Cancel Redeem, and Channel
+Performance in their default (unfiltered) state. Every chart's own date
+axis correctly extended through Aug 2026 (the gift-card pages) or stayed
+capped at Jul 2026 (Channel Performance only); the new July-lag note
+renders cleanly at the top of Channel Performance; zero console errors
+across all 9 pages. Clean production build.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
