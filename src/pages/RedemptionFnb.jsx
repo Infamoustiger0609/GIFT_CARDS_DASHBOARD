@@ -132,41 +132,25 @@ export default function RedemptionFnb() {
     return orderBy(g.map((r) => r.key), REGION_ORDER).map((k) => g.find((r) => r.key === k))
   }, [netFnbRows, fnbRowLevel, redemptionRowLevelReady])
 
-  // 2026-08-14 fix (superseded 2026-09-17, kept for history): used to
-  // pre-filter out Category='N/A' rows before grouping — same root cause
-  // as RedemptionBoxOffice.jsx's matching Format-chart fix, just on
-  // Category instead: every Cancel Redeem row netHeadRows() attributes to
-  // F&B carries no Category of its own ('N/A'), so excluding it dropped
-  // the whole netting correction and inflated this chart's total to the
-  // gross F&B figure (₹1,748.29L) instead of the net total the KPI above
-  // it shows (₹1,432.74L). The 2026-08-14 fix stopped pre-filtering and
-  // let topNWithOther() fold the large negative 'N/A' bucket into "Other"
-  // naturally — correct on the total, but it meant the chart could show
-  // two separate bars both labeled "Other": the real raw Category='Other'
-  // value (its own top-10 entry) and topNWithOther's synthetic overflow
-  // bucket (also keyed 'Other', containing the N/A cancellation
-  // correction folded in with whatever other long-tail categories didn't
-  // make the top 10) — confusing, even though both individually landed on
-  // the correct reserved gray color.
+  // History: 2026-08-14 stopped pre-filtering Category='N/A' rows (the
+  // attributed Cancel Redeem correction netHeadRows() folds into
+  // netFnbRows) so this chart's total would reconcile with the net "F&B
+  // Redemption" KPI above it — letting topNWithOther() absorb the large
+  // negative 'N/A' bucket into its synthetic "Other" overflow. 2026-09-17
+  // briefly gave that correction its own explicit "Cancellations" bar,
+  // then reverted the same day back to folding it into "Other".
   //
-  // 2026-09-17: N/A is now split out BEFORE grouping/topNWithOther, not
-  // folded into the tail — confirmed dashboard-wide that Category='N/A'
-  // on this cube is always the attributed Cancel Redeem correction (8,839
-  // such rows, all Head='Cancellation', never a real F&B row), so this is
-  // a real, always-a-cancellation bucket, not a genuine long-tail
-  // category getting special-cased. The real Category='Other' classifier
-  // value is completely unaffected — it's grouped/topN'd exactly as
-  // before, just without a same-labeled synthetic sibling ever colliding
-  // with it. The N/A group is appended as its own explicit, always-last
-  // 'Cancellations' row (only when non-empty) instead — same "shown
-  // separately, not silently folded into a differently-meaning bucket"
-  // treatment this app already gives Cancel Redeem everywhere else
-  // (Redemption Heads Breakdown, the dedicated /cancel-redeem page, etc.).
-  // Total (sum of all bars) is unchanged by construction: every row still
-  // lands in exactly one bucket (a real category, the synthetic "Other"
-  // overflow, or "Cancellations"), just partitioned differently.
+  // 2026-09-16: reversed again, deliberately — Category='N/A' rows are
+  // filtered out entirely before grouping, confirmed to always be the
+  // attributed Cancel Redeem correction (never a real F&B product row).
+  // This chart is now GROSS F&B by category (cancellations excluded), on
+  // purpose: no synthetic "Other" collision, no negative bar, just the
+  // real product mix. Its bar total will therefore no longer equal the
+  // NET "F&B Redemption" KPI at the top of the page — that KPI still nets
+  // cancellations in, this chart doesn't. That mismatch (~₹325L,
+  // unfiltered) is expected and intentional; don't "fix" it back to
+  // reconciling without checking this comment first.
   const byCategory = useMemo(() => {
-    const cancelRows = netFnbRows.filter((r) => r.Category === 'N/A')
     const realRows = netFnbRows.filter((r) => r.Category !== 'N/A')
     const g = groupSum(realRows, 'Category', ['RedemptionAmount', 'UniqueCardCount'])
     if (redemptionRowLevelReady) {
@@ -176,15 +160,7 @@ export default function RedemptionFnb() {
       )
       for (const r of g) r.UniqueCardCount = exact.find((e) => e.key === r.key)?.count ?? r.UniqueCardCount
     }
-    const result = topNWithOther(g, 10, 'key', 'RedemptionAmount')
-    if (cancelRows.length > 0) {
-      result.push({
-        key: 'Cancellations',
-        RedemptionAmount: sumBy(cancelRows, 'RedemptionAmount'),
-        UniqueCardCount: sumBy(cancelRows, 'UniqueCardCount')
-      })
-    }
-    return result
+    return topNWithOther(g, 10, 'key', 'RedemptionAmount')
   }, [netFnbRows, fnbRowLevel, redemptionRowLevelReady])
 
   // Chart-parity pass (2026-08-12): this page was the one of the three
@@ -396,7 +372,7 @@ export default function RedemptionFnb() {
               <Bar dataKey="RedemptionAmount" name="Redemption" radius={[0, 4, 4, 0]} maxBarSize={22}>
                 <LabelList dataKey="RedemptionAmount" content={HorizontalAmountLabel} />
                 {byCategory.map((r, i) => (
-                  <Cell key={r.key} fill={r.key === 'Cancellations' ? COLORS.warning : categoricalColor(i, r.key === 'Other')} />
+                  <Cell key={r.key} fill={categoricalColor(i, r.key === 'Other')} />
                 ))}
               </Bar>
             </BarChart>
