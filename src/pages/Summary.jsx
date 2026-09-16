@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useEffect } from 'react'
 import { useFilters } from '../lib/FilterContext'
 import { usePresetWindow } from '../lib/comparisons'
 import { netHeadRows, isCancellationRow } from '../lib/aggregate'
@@ -70,8 +70,31 @@ export default function Summary() {
     redemptionRows,
     redemptionRowsForComparison,
     redemptionRowsAllFY,
-    comparisonMonths
+    comparisonMonths,
+    redemptionRowLevelFiltered,
+    redemptionRowLevelAllFY,
+    redemptionRowLevelReady,
+    loadRedemptionRowLevel
   } = useFilters()
+
+  // 2026-09-16: same lazy-load-on-mount pattern as every other page's own
+  // row-level pool — every redemption-side card's own count column and "By
+  // Year" cells switch from a per-row UniqueCardCount sum (inflation-prone)
+  // to an exact COUNT(DISTINCT CardNumber) once this resolves. See the
+  // 2026-09-16 CLAUDE.md entry.
+  useEffect(() => {
+    loadRedemptionRowLevel()
+  }, [loadRedemptionRowLevel])
+  // undefined (not an empty array) while still loading, so
+  // MetricComparisonCard's own `if (exactCountRows)` gate correctly falls
+  // back to the ordinary count until the file resolves, rather than
+  // showing a false "0 cards" from an empty-but-ready pool.
+  const exactRedemptionRows = redemptionRowLevelReady ? redemptionRowLevelFiltered : undefined
+  const exactRedemptionRowsAllFY = redemptionRowLevelReady ? redemptionRowLevelAllFY : undefined
+  const exactBoxOfficeRows = useMemo(() => exactRedemptionRows?.filter((r) => r.Head === 'Box Office'), [exactRedemptionRows])
+  const exactBoxOfficeRowsAllFY = useMemo(() => exactRedemptionRowsAllFY?.filter((r) => r.Head === 'Box Office'), [exactRedemptionRowsAllFY])
+  const exactFnbRows = useMemo(() => exactRedemptionRows?.filter((r) => r.Head === 'F&B'), [exactRedemptionRows])
+  const exactFnbRowsAllFY = useMemo(() => exactRedemptionRowsAllFY?.filter((r) => r.Head === 'F&B'), [exactRedemptionRowsAllFY])
 
   // 2026-08-29: MTD/QTD(Q1-Q4 dropdown)/YTD preset control, called ONCE at
   // the page level (not once per card) — every one of this page's 13
@@ -220,6 +243,8 @@ export default function Summary() {
             comparisonMonths={comparisonMonths}
             activePreset={activePreset}
             selectedMonths={selectedMonths}
+            exactCountRows={exactRedemptionRows}
+            exactCountRowsAllFY={exactRedemptionRowsAllFY}
           />
           <MetricComparisonCard
             title="Activation by Source"
@@ -249,6 +274,8 @@ export default function Summary() {
             selectedMonths={selectedMonths}
             buckets={REDEMPTION_SOURCE_BUCKETS}
             nestedBreakdowns={{ Cinema: { buckets: CINEMA_HEAD_BUCKETS, cancelPredicate: isCancellationRow } }}
+            exactCountRows={exactRedemptionRows}
+            exactCountRowsAllFY={exactRedemptionRowsAllFY}
           />
           <MetricComparisonCard
             title="Activation by Card Type"
@@ -278,6 +305,8 @@ export default function Summary() {
             selectedMonths={selectedMonths}
             buckets={CARD_TYPE_BUCKETS}
             cancelPredicate={isCancellationRow}
+            exactCountRows={exactRedemptionRows}
+            exactCountRowsAllFY={exactRedemptionRowsAllFY}
           />
           <MetricComparisonCard
             title="Activation by Region"
@@ -308,6 +337,8 @@ export default function Summary() {
             selectedMonths={selectedMonths}
             buckets={REDEMPTION_REGION_ONLY_BUCKETS}
             bucketLabelFn={redemptionRegionLabel}
+            exactCountRows={exactRedemptionRows}
+            exactCountRowsAllFY={exactRedemptionRowsAllFY}
           />
         </div>
       </div>
@@ -326,6 +357,8 @@ export default function Summary() {
             comparisonMonths={comparisonMonths}
             activePreset={activePreset}
             selectedMonths={selectedMonths}
+            exactCountRows={exactBoxOfficeRows}
+            exactCountRowsAllFY={exactBoxOfficeRowsAllFY}
           />
           <MetricComparisonCard
             title="F&B Redemption (net)"
@@ -339,6 +372,8 @@ export default function Summary() {
             comparisonMonths={comparisonMonths}
             activePreset={activePreset}
             selectedMonths={selectedMonths}
+            exactCountRows={exactFnbRows}
+            exactCountRowsAllFY={exactFnbRowsAllFY}
           />
         </div>
       </div>
@@ -372,6 +407,8 @@ export default function Summary() {
             activePreset={activePreset}
             selectedMonths={selectedMonths}
             buckets={DENOM_BUCKETS}
+            exactCountRows={exactRedemptionRows}
+            exactCountRowsAllFY={exactRedemptionRowsAllFY}
           />
         </div>
       </div>

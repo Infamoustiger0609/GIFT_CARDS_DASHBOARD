@@ -1,7 +1,7 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useEffect } from 'react'
 import { ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, LabelList } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
-import { groupSum, weekSlotBreakdown } from '../lib/aggregate'
+import { groupSum, weekSlotBreakdown, exactCardCountByBucket, exactWeekSlotCardCounts } from '../lib/aggregate'
 import { usePresetWindow } from '../lib/comparisons'
 import { COLORS } from '../lib/theme'
 import { monthLabel, fmtLacsAxis, fmtNumber } from '../lib/format'
@@ -11,7 +11,16 @@ import ChartTooltip, { countFormatter } from '../components/ChartTooltip'
 import { AmountLabel } from '../components/ChartLabels'
 
 export default function Trends() {
-  const { activationRows, redemptionRows } = useFilters()
+  const { activationRows, redemptionRows, redemptionRowLevelFiltered, redemptionRowLevelReady, loadRedemptionRowLevel } = useFilters()
+
+  // 2026-09-16: same lazy-load-on-mount pattern as every other page's own
+  // row-level pool — this page's own "Monthly Trend — Card Count" chart is
+  // literally titled "Card Count," making its old sum-of-per-row-
+  // UniqueCardCount figure exactly the kind of inflation risk the
+  // 2026-09-16 CLAUDE.md entry audited for.
+  useEffect(() => {
+    loadRedemptionRowLevel()
+  }, [loadRedemptionRowLevel])
 
   // 2026-08-29: MTD/QTD(Q1-Q4 dropdown)/YTD preset control, via the same
   // shared usePresetWindow() hook every other page's KPI ribbon now uses —
@@ -24,6 +33,17 @@ export default function Trends() {
   const { quarterOptions, activePreset, activeQuarter, qtdMenuOpen, setQtdMenuOpen, qtdMenuRef, applyPreset, applyQuarter, windowDateRangeLabel } =
     usePresetWindow()
 
+  // 2026-09-16: exact per-month card counts, shared by both trend charts
+  // below — replaces the old sum-of-per-row-UniqueCardCount figure (see
+  // the 2026-09-16 CLAUDE.md entry for the full audit/before-after).
+  const monthExactCounts = useMemo(() => {
+    if (!redemptionRowLevelReady) return null
+    const months = [...new Set(redemptionRowLevelFiltered.map((r) => r.YearMonth))]
+    return exactCardCountByBucket(
+      redemptionRowLevelFiltered,
+      months.map((m) => ({ key: m, predicate: (r) => r.YearMonth === m }))
+    )
+  }, [redemptionRowLevelFiltered, redemptionRowLevelReady])
   const monthAmountTrend = useMemo(() => {
     const act = groupSum(activationRows, 'YearMonth', ['ActivationAmount', 'ActivationCount'])
     const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionAmount', 'UniqueCardCount'])
@@ -33,13 +53,15 @@ export default function Trends() {
       Activation: act.find((r) => r.key === m)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === m)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === m)?.RedemptionAmount || 0,
-      RedemptionCardCount: red.find((r) => r.key === m)?.UniqueCardCount || 0
+      RedemptionCardCount: monthExactCounts ? monthExactCounts.find((e) => e.key === m)?.count || 0 : red.find((r) => r.key === m)?.UniqueCardCount || 0
     }))
-  }, [activationRows, redemptionRows])
+  }, [activationRows, redemptionRows, monthExactCounts])
 
   // 2026-08-20: "Card Count" per this chart's own title — UniqueCardCount
   // (distinct cards), not RedemptionCount (transaction count), same swap as
-  // every other "X redemptions" display dashboard-wide.
+  // every other "X redemptions" display dashboard-wide. 2026-09-16: now the
+  // exact figure, not a per-row sum — this chart's own title made the old
+  // inflation risk especially visible once found.
   const monthCountTrend = useMemo(() => {
     const act = groupSum(activationRows, 'YearMonth', ['ActivationCount'])
     const red = groupSum(redemptionRows, 'YearMonth', ['UniqueCardCount'])
@@ -47,11 +69,16 @@ export default function Trends() {
     return months.map((m) => ({
       label: monthLabel(m),
       Activation: act.find((r) => r.key === m)?.ActivationCount || 0,
-      Redemption: red.find((r) => r.key === m)?.UniqueCardCount || 0
+      Redemption: monthExactCounts ? monthExactCounts.find((e) => e.key === m)?.count || 0 : red.find((r) => r.key === m)?.UniqueCardCount || 0
     }))
-  }, [activationRows, redemptionRows])
+  }, [activationRows, redemptionRows, monthExactCounts])
 
-  const weekSlot = useMemo(() => weekSlotBreakdown(activationRows, redemptionRows), [activationRows, redemptionRows])
+  const weekSlot = useMemo(() => {
+    const base = weekSlotBreakdown(activationRows, redemptionRows)
+    if (!redemptionRowLevelReady) return base
+    const exact = exactWeekSlotCardCounts(redemptionRowLevelFiltered)
+    return base.map((s) => ({ ...s, RedemptionCardCount: exact[s.slot] ?? s.RedemptionCardCount }))
+  }, [activationRows, redemptionRows, redemptionRowLevelFiltered, redemptionRowLevelReady])
 
   const hasData = activationRows.length > 0 || redemptionRows.length > 0
 

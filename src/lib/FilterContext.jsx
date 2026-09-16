@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useMemo, useState, useCallback, useEffect, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 import { asyncBufferFromUrl, parquetReadObjects } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 import { fyOf, WEEKEND_DAYS, WEEKDAY_ORDER, NONE_SELECTED, DENOM_ORDER } from './constants'
@@ -112,25 +113,6 @@ function filterRedemption(cube, filters, opts) {
   })
 }
 
-// ---- Universal cube (2026-08-22) ----
-// Universal.json — 28 monthly rows, whole-company transaction data (every
-// payment method, not just gift cards): YearMonth/TotalTransactions/
-// TotalRevenue/TotalTicketRevenue/TotalFnbRevenue. Powers Overview.jsx's
-// ATV KPI card only. Deliberately narrower than passesCommon() above: this
-// cube has no Region/CardType/ActivationSource/RedemptionSource/Weekday/
-// DateStr field at all (confirmed directly against the file), so it must
-// ONLY ever be narrowed by FY and Month — applying any of the others would
-// either throw (no such field) or, worse, silently do nothing while
-// looking like it should narrow the pool. `matches()` is reused as-is
-// (same OR-within-dimension/AND-across-dimensions semantics), just against
-// this cube's own two applicable fields.
-function filterUniversal(cube, filters, { skipMonth = false, skipFY = false } = {}) {
-  return cube.filter((row) => {
-    if (!skipFY && !matches(filters.fy, fyOf(row.YearMonth))) return false
-    if (!skipMonth && !matches(filters.month, row.YearMonth)) return false
-    return true
-  })
-}
 
 // Sentinel ActivationModeFinal/ActivationYearMonth value for cohortCube.json
 // rows whose card was activated before this dataset's Apr 2024 start (no
@@ -230,70 +212,133 @@ function filterCohortByActivation(cube, filters) {
   })
 }
 
-// ---- Card Journey row-level cube (2026-09-07) ----
-// `cardJourneyRowLevel.parquet` — one row per (CardNumber, activation,
-// redemption) pairing, the same shape `cohortCube.json` is pre-aggregated
-// FROM, but kept at row level specifically so a real `CardNumber` field
-// survives. cohortCube.json's own `UniqueCardCount` is a per-ROW distinct
-// count (computed once, at cube-build time, over whatever grain that row's
-// own group-by produced) — summing it across MULTIPLE rows (which is what
-// every `sumBy(..., 'UniqueCardCount')` on Card Journey does, since the
-// page almost never narrows to exactly one cohort-cube row) silently
-// double-counts any card that appears in more than one of those rows
-// (e.g. one card redeeming in 2 different regions, or across 2 different
-// months, within the same filtered selection) — a classic "sum of
-// per-group distinct counts != distinct count of the union" error. This
-// is NOT a cohortCube.json data bug — cohortCube.json's own per-row
-// UniqueCardCount values are individually correct; the bug is entirely in
-// treating a SUM of them as if it were a true distinct count over a wider
-// selection. Confirmed directly: FY2026-27's "Of Those, Redeemed" card
-// count read 257,600 via the old sum, vs. the true 228,202 from an exact
-// COUNT(DISTINCT CardNumber) over this row-level file (an 11.4% overcount)
-// — see the 2026-09-07 CLAUDE.md entry for the full before/after.
+// ---- Redemption row-level cube (2026-09-07, upgraded 2026-09-16) ----
+// `redemption_rowlevel.parquet` — one row per real redemption/cancellation
+// transaction, the same shape `redemptionCube.json`/`cohortCube.json` are
+// pre-aggregated FROM, but kept at row level specifically so a real
+// `CardNumber` field survives. Both cubes' own `UniqueCardCount` fields are
+// PER-ROW distinct counts (computed once, at cube-build time, over
+// whatever grain that row's own group-by produced) — summing one across
+// MULTIPLE rows (which is what every `sumBy(..., 'UniqueCardCount')` /
+// `groupSum(..., ['UniqueCardCount'])` call in this app does, since almost
+// no chart narrows to exactly one cube row) silently double-counts any card
+// that appears in more than one of those rows (e.g. one card redeeming in
+// 2 different regions, or across 2 different months, within the same
+// filtered selection) — a classic "sum of per-group distinct counts !=
+// distinct count of the union" error. This is NOT a cube data bug — the
+// per-row UniqueCardCount values are individually correct; the bug is
+// entirely in treating a SUM of them as a true distinct count over a wider
+// selection. First found and fixed for Card Journey's own headline count
+// alone (2026-09-07: FY2026-27's "Of Those, Redeemed" read 257,600 via the
+// old sum vs. the true 228,202 exact count, an 11.4% overcount).
 //
-// Scope: only the "Of Those, Redeemed" headline card count (and its direct
-// dependents — the "Transaction Value"/"Additional Revenue" KPI subCounts,
-// the "By Cards" rate, and the top-level flow-diagram node, all of which
-// already read the exact same `redeemedCount` variable) is switched to this
-// exact-count source. The deeper per-BUCKET card counts elsewhere on this
-// page (by Head, by Region, by Weekday, the spillover chart's per-month
-// counts, and the 4 individual flow-diagram child nodes) still read
-// cohortCube.json's UniqueCardCount sums — switching those to exact
-// per-bucket distinct counts is a separate, larger question (per-bucket
-// exact distinct counts do not sum back to the exact distinct count of
-// their own union, the same way `netBucketsProportionally`/`bucketSum`'s
-// existing amount-based bucketing is designed to sum exactly to its own
-// parent total — resolving that tension needs its own decision, not a
-// silent guess here) — flagged, not fixed, in this pass.
+// 2026-09-16: replaced by a strictly richer file (`redemption_rowlevel
+// .parquet`, superseding `cardJourneyRowLevel.parquet` — same 2,205,239
+// rows, same 1,131,973 distinct CardNumbers, confirmed by direct
+// comparison before switching) that adds Weekday/Format/Category/Denom/
+// CardType/SourceFlag/ActivationMode/ActivationCohort on top of the fields
+// the old file had (CardNumber/ActivationYearMonth/RedemptionYearMonth-as-
+// `YearMonth`/Region_Clean/RedemptionModeFinal/Head/Amount-as-`Amount_num`
+// /Uptake). This closes the exact gap the 2026-09-07 entry's own scope note
+// left open ("the deeper per-bucket counts... are a separate, larger
+// question") — every dimension every redemption-side chart in this app
+// buckets by is now present on the row-level file, so there is no longer
+// a "can't be done exactly" case on the redemption side, only "not yet
+// converted." SIGN WARNING, confirmed directly against the file, not
+// assumed: `Amount_num` uses the OPPOSITE sign convention from
+// `redemptionCube.json`'s own `RedemptionAmount` — normal (Online/Box
+// Office/F&B) transactions are NEGATIVE here, Cancellation rows are
+// POSITIVE. Nothing in this app reads `Amount_num` today (only
+// `CardNumber` identity + the dimension fields), but don't assume symmetry
+// with the main cube's sign if a future feature ever does.
 //
-// Fields present: CardNumber, ActivationYearMonth, RedemptionYearMonth,
-// Region_Clean, RedemptionModeFinal, Head, RedemptionAmount, Uptake —
-// confirmed directly against the file (no ActivationModeFinal/CardType/
-// Weekday, unlike cohortCube.json), so this pool can only support the
-// filters below: FY/Month (both date fields, same AND-both-dates rule as
-// filterCohort), Region, Redemption Source, Ticket/F&B. Activation
-// Source/Card Type/Week/Weekday are NOT supported — CardJourney.jsx gates
-// on `cardJourneyRowLevelFiltersSupported` (same hard-gate pattern as
-// `dateRangeAvailable()` above) and falls back to the old approximate sum
-// whenever one of those 4 is active, rather than silently ignoring them.
-function passesCardJourneyRowLevelCommon(row, filters) {
+// Two filter shapes, matching the two questions this app's redemption-side
+// charts ask (see cohortCube.json's own doc comment above for the same
+// distinction at cube level):
+//   - `filterRedemptionRowLevelCohort()` — both ActivationYearMonth AND
+//     YearMonth (the row's own redemption-event month) must independently
+//     satisfy the current FY/Month selection — the cohort question Card
+//     Journey's own `cohortRows` answers, so this is that page's exact
+//     counterpart to `cohortCube.json`.
+//   - `filterRedemptionRowLevel()` — only the row's own `YearMonth` is
+//     checked (no activation-side date restriction at all) — the plain
+//     "redemptions happening in this period, regardless of when the card
+//     was activated" question `redemptionCube.json`/`redemptionRows`
+//     answers everywhere outside Card Journey (Overview, both dedicated
+//     Redemption pages, Summary).
+// Both share `passesRedemptionRowLevelCommon()` for the dimensions common
+// to every consumer (Region, Redemption Source, Ticket/F&B, Card Type,
+// Activation Source via the same sourceOf() bucketing filterActivation()
+// uses, Week/Weekday) — full parity with every filter this app has, so
+// unlike the old file, no `FiltersSupported()` gate/fallback is needed
+// anywhere this pool is used.
+function passesRedemptionRowLevelCommon(row, filters) {
   if (!matches(filters.region, row.Region_Clean)) return false
   if (!matches(filters.redemptionSource, redemptionModeOf(row.RedemptionModeFinal))) return false
   if (!matches(filters.ticketFnb, ticketFnbBucket(row.Head))) return false
+  if (!matches(filters.cardType, row.CardType)) return false
+  if (!matches(filters.activationSource, sourceOf(row.ActivationMode))) return false
+  if (!matches(filters.week, isWeekend(row.Weekday) ? 'Weekend' : 'Weekday')) return false
+  if (!matches(filters.weekday, row.Weekday)) return false
   return true
 }
-function filterCardJourneyRowLevel(rows, filters) {
+function filterRedemptionRowLevelCohort(rows, filters, { skipMonth = false, skipFY = false } = {}) {
+  return rows.filter((row) => {
+    if (row.ActivationYearMonth === PRE_EXISTING_ACTIVATION) return false
+    if (!skipFY && !matches(filters.fy, fyOf(row.ActivationYearMonth))) return false
+    if (!skipMonth && !matches(filters.month, row.ActivationYearMonth)) return false
+    if (!skipFY && !matches(filters.fy, fyOf(row.YearMonth))) return false
+    if (!skipMonth && !matches(filters.month, row.YearMonth)) return false
+    return passesRedemptionRowLevelCommon(row, filters)
+  })
+}
+// Activation period fixed to the selection, the row's own redemption
+// YearMonth left completely unrestricted — the exact-count counterpart to
+// `filterCohortByActivation()`, for the spillover chart's own per-bucket
+// counts.
+function filterRedemptionRowLevelByActivation(rows, filters) {
   return rows.filter((row) => {
     if (row.ActivationYearMonth === PRE_EXISTING_ACTIVATION) return false
     if (!matches(filters.fy, fyOf(row.ActivationYearMonth))) return false
     if (!matches(filters.month, row.ActivationYearMonth)) return false
-    if (!matches(filters.fy, fyOf(row.RedemptionYearMonth))) return false
-    if (!matches(filters.month, row.RedemptionYearMonth)) return false
-    return passesCardJourneyRowLevelCommon(row, filters)
+    return passesRedemptionRowLevelCommon(row, filters)
   })
 }
-function cardJourneyRowLevelFiltersSupported(filters) {
-  return filters.activationSource.length === 0 && filters.cardType.length === 0 && filters.week.length === 0 && filters.weekday.length === 0
+function filterRedemptionRowLevel(rows, filters, { skipMonth = false, skipFY = false } = {}) {
+  return rows.filter((row) => {
+    if (!skipFY && !matches(filters.fy, fyOf(row.YearMonth))) return false
+    if (!skipMonth && !matches(filters.month, row.YearMonth)) return false
+    return passesRedemptionRowLevelCommon(row, filters)
+  })
+}
+
+// ---- Hero Products row-level cube (2026-09-17) ----
+// heroProductsCube.parquet has its own field names/shape — ItemName/
+// YearMonth/Region_Clean/RedemptionModeFinal/ActivationModeFinal/CardType/
+// Denom/Weekday/ItemBillValue/RedemptionQuantity, one row per (item,
+// redemption) — distinct from every other cube's own field names, so this
+// gets its own filter function rather than reusing passesCommon()/
+// passesRedemptionRowLevelCommon() (which read `RedemptionModeFinal`
+// alongside a `Head` field this cube doesn't have). No per-row Ticket/F&B
+// check is possible or needed — every row here already is F&B by
+// construction (there's no Head field to check) — but if the Ticket/F&B
+// *filter* itself is set to exclude F&B, every row must still be excluded,
+// same as every other F&B-only chart on this page already behaves under
+// that filter.
+function filterHeroProductsRowLevel(rows, filters) {
+  if (!matches(filters.ticketFnb, 'F&B')) return []
+  return rows.filter((row) => {
+    if (!matches(filters.fy, fyOf(row.YearMonth))) return false
+    if (!matches(filters.month, row.YearMonth)) return false
+    if (!matches(filters.region, row.Region_Clean)) return false
+    if (!matches(filters.cardType, row.CardType)) return false
+    if (!matches(filters.denomination, row.Denom)) return false
+    if (!matches(filters.week, isWeekend(row.Weekday) ? 'Weekend' : 'Weekday')) return false
+    if (!matches(filters.weekday, row.Weekday)) return false
+    if (!matches(filters.activationSource, sourceOf(row.ActivationModeFinal))) return false
+    if (!matches(filters.redemptionSource, redemptionModeOf(row.RedemptionModeFinal))) return false
+    return true
+  })
 }
 
 // ---- Date Range (2026-08-21), backed by a 4th pair of cubes ----
@@ -349,7 +394,21 @@ async function loadCube(path) {
   return res.json()
 }
 
+// 2026-09-16 (perf): which routes actually consume each row-level pool —
+// gates the memos below so a filter click on a page that never reads a
+// given pool doesn't pay the cost of re-filtering the full ~2.2M-row
+// redemption_rowlevel.parquet array for it. See each pool's own doc
+// comment above for what it's for and who reads it.
+const COHORT_ROW_LEVEL_ROUTES = ['/card-journey']
+const REDEMPTION_ROW_LEVEL_FILTERED_ROUTES = ['/', '/redemption/box-office', '/redemption/fnb', '/summary', '/trends']
+const REDEMPTION_ROW_LEVEL_ALLFY_ROUTES = ['/', '/summary']
+// 2026-09-17: same reasoning — heroProductsCube.parquet's ~294K rows have
+// exactly one consumer (RedemptionFnb.jsx's Hero Products card), confirmed
+// by grep, so this must not become a 6th pool re-filtering dashboard-wide.
+const HERO_PRODUCTS_ROW_LEVEL_ROUTES = ['/redemption/fnb']
+
 export function FilterProvider({ children }) {
+  const { pathname } = useLocation()
   const [filters, setFilters] = useState(DEFAULT_FILTERS)
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -371,26 +430,36 @@ export function FilterProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false
-    // 2026-08-22: Universal.json (28 monthly rows, whole-company transaction
-    // data — every payment method, not just gift cards) joins the eager
-    // load here rather than getting cohortCube.json's lazy-on-visit
-    // treatment above — it's tiny (28 rows, a few KB) and every page that
-    // reads it (currently just Overview.jsx's ATV card) would gain nothing
-    // from deferring a fetch this small.
     // 2026-08-21: channelTransactions.json (28 monthly rows — BMS/PVRINOX/
     // PaytmDistrict/BoxOffice/Total, a whole-company booking-channel split)
-    // joins the same eager load as Universal.json, for the same reason —
-    // tiny (28 rows), and ChannelPerformance.jsx would gain nothing from
-    // deferring a fetch this small.
-    Promise.all([
-      loadCube('/data/activationCube.json'),
-      loadCube('/data/redemptionCube.json'),
-      loadCube('/data/heroProducts.json'),
-      loadCube('/data/Universal.json'),
-      loadCube('/data/channelTransactions.json')
-    ])
-      .then(([activationCube, redemptionCube, heroProducts, universalCube, channelTransactionsCube]) => {
-        if (!cancelled) setData({ activationCube, redemptionCube, heroProducts, universalCube, channelTransactionsCube })
+    // joins the eager load here rather than getting cohortCube.json's
+    // lazy-on-visit treatment above — it's tiny (28 rows, a few KB) and
+    // ChannelPerformance.jsx would gain nothing from deferring a fetch
+    // this small.
+    //
+    // 2026-09-16: Universal.json (28 monthly rows, whole-company payment-
+    // method split) removed from this load entirely — it powered
+    // Overview.jsx's "Universal ATV" breakdown figure, but that whole KPI
+    // card was replaced by "Breakage" on 2026-08-29/30, and the removal
+    // deliberately left this fetch/filterUniversal()/universalRows plumbing
+    // in place per this file's own "leave the dead export, don't chase it"
+    // precedent — confirmed dead (zero consumers anywhere in src/pages) when
+    // asked directly. Found while verifying the 2026-09-16 exact-card-count
+    // audit that this file no longer exists on disk at all, which broke
+    // every page's data load app-wide (an unconditional Promise.all member
+    // failing fails the whole load) — removed for real this time, since
+    // "leave it, it's harmless" stopped being true the moment the file
+    // disappeared. Not a fabricated fix: nothing recreates the missing
+    // file, since nothing needs it anymore.
+    //
+    // 2026-09-17: heroProducts.json's own eager load removed the same way —
+    // RedemptionFnb.jsx (its one and only consumer, confirmed by grep) now
+    // reads live top-15 hero products from heroProductsCube.parquet instead
+    // (see the "Hero Products row-level cube" section below), so the static
+    // JSON's fetch/field is genuinely unused, not just deferred.
+    Promise.all([loadCube('/data/activationCube.json'), loadCube('/data/redemptionCube.json'), loadCube('/data/channelTransactions.json')])
+      .then(([activationCube, redemptionCube, channelTransactionsCube]) => {
+        if (!cancelled) setData({ activationCube, redemptionCube, channelTransactionsCube })
       })
       .catch((err) => {
         if (!cancelled) setError(err)
@@ -418,47 +487,74 @@ export function FilterProvider({ children }) {
       .finally(() => setCohortLoading(false))
   }, [])
 
-  // 2026-09-07: same lazy-load-on-first-use pattern as cohortCube above —
-  // only CardJourney.jsx reads this, and it's the one place on the page
-  // that needs a true CardNumber (see filterCardJourneyRowLevel()'s own
-  // doc comment for why). Parsed with hyparquet (pure JS, no WASM/worker,
-  // no server needed — reads the whole ~13MB file into plain row objects
-  // in one pass) rather than a live query engine like DuckDB-WASM: this
-  // file's size (~13MB/1.98M rows) is comfortably in the same class as
-  // cohortCube.json's own ~18.6MB, well within what this app already
-  // parses/filters synchronously via plain `.filter()`, and the only
-  // operation ever run against it (an AND of a handful of equality/
+  // 2026-09-07, repointed 2026-09-16: same lazy-load-on-first-use pattern
+  // as cohortCube above — most pages don't need a true CardNumber, only
+  // Card Journey (headline count), Overview, both dedicated Redemption
+  // pages, and Summary do (see the 2026-09-16 exact-card-count audit).
+  // Parsed with hyparquet (pure JS, no WASM/worker, no server needed —
+  // reads the whole ~26MB file into plain row objects in one pass) rather
+  // than a live query engine like DuckDB-WASM: comfortably in the same
+  // class as `redemptionCube.json`'s own ~73MB, well within what this app
+  // already parses/filters synchronously via plain `.filter()`, and the
+  // only operation ever run against it (an AND of a handful of equality/
   // inclusion checks, then a `new Set(...).size` for the distinct count)
-  // doesn't need SQL — a full query engine would be meaningfully heavier
-  // (a separate WASM bundle + worker + async init) for no real benefit at
-  // this size. A pre-aggregated JSON lookup table (the request's other
-  // suggested option) was considered and rejected: an EXACT distinct count
-  // under an arbitrary multi-select Month/Region/etc. combination can't be
-  // derived from any fixed pre-aggregation without also storing per-cell
-  // card-ID sets (to resolve overlap between cells) — which is essentially
-  // the row-level data again, just reshaped, with none of the size
-  // savings a lookup table is supposed to provide.
-  const [cardJourneyRowLevelRows, setCardJourneyRowLevelRows] = useState([])
-  const [cardJourneyRowLevelLoading, setCardJourneyRowLevelLoading] = useState(false)
-  const [cardJourneyRowLevelError, setCardJourneyRowLevelError] = useState(null)
-  const cardJourneyRowLevelFetchStarted = useRef(false)
-  const loadCardJourneyRowLevel = useCallback(() => {
-    if (cardJourneyRowLevelFetchStarted.current) return
-    cardJourneyRowLevelFetchStarted.current = true
-    setCardJourneyRowLevelLoading(true)
-    asyncBufferFromUrl({ url: '/data/cardJourneyRowLevel.parquet' })
-      // hyparquet's base build only decodes Uncompressed/Snappy pages —
-      // this file's own row groups use ZSTD (confirmed directly: hyparquet
-      // threw "unsupported compression codec: ZSTD" without this option),
-      // so the `hyparquet-compressors` companion package's decoders are
-      // required, not optional, for this specific file.
+  // doesn't need SQL. A pre-aggregated JSON lookup table (considered and
+  // rejected the same way when this row-level approach was first chosen)
+  // can't give an EXACT distinct count under an arbitrary multi-select
+  // filter combination without also storing per-cell card-ID sets — which
+  // is essentially the row-level data again, just reshaped.
+  const [redemptionRowLevelRows, setRedemptionRowLevelRows] = useState([])
+  const [redemptionRowLevelLoading, setRedemptionRowLevelLoading] = useState(false)
+  const [redemptionRowLevelError, setRedemptionRowLevelError] = useState(null)
+  const redemptionRowLevelFetchStarted = useRef(false)
+  const loadRedemptionRowLevel = useCallback(() => {
+    if (redemptionRowLevelFetchStarted.current) return
+    redemptionRowLevelFetchStarted.current = true
+    setRedemptionRowLevelLoading(true)
+    asyncBufferFromUrl({ url: '/data/redemption_rowlevel.parquet' })
       .then((file) => parquetReadObjects({ file, compressors }))
-      .then((rows) => setCardJourneyRowLevelRows(rows))
-      .catch((err) => {
-        console.error('loadCardJourneyRowLevel failed:', err)
-        setCardJourneyRowLevelError(err)
+      // hyparquet's base build only decodes Uncompressed/Snappy pages —
+      // this file's own row groups use ZSTD (confirmed directly, same as
+      // its predecessor), so the `hyparquet-compressors` companion
+      // package's decoders are required, not optional, for this file.
+      .then((rows) => {
+        setRedemptionRowLevelRows(rows)
       })
-      .finally(() => setCardJourneyRowLevelLoading(false))
+      .catch((err) => {
+        console.error('loadRedemptionRowLevel failed:', err)
+        setRedemptionRowLevelError(err)
+      })
+      .finally(() => setRedemptionRowLevelLoading(false))
+  }, [])
+
+  // ---- Hero Products row-level cube (2026-09-17) ----
+  // heroProductsCube.parquet — 294,261 rows, one per (item, redemption) —
+  // replaces the old static heroProducts.json top-15 (whole-dataset, never
+  // moved with the filters, explicitly flagged as a known limitation in this
+  // page's own history) with a live top-15 that responds to every filter
+  // this cube can support. Same lazy-load-on-first-use pattern as
+  // redemptionRowLevelRows above (hyparquet + hyparquet-compressors — this
+  // file's own row groups are ZSTD-compressed too, confirmed directly, not
+  // assumed), since only RedemptionFnb.jsx's Hero Products card ever needs
+  // it.
+  const [heroProductsRowLevelRows, setHeroProductsRowLevelRows] = useState([])
+  const [heroProductsLoading, setHeroProductsLoading] = useState(false)
+  const [heroProductsError, setHeroProductsError] = useState(null)
+  const heroProductsFetchStarted = useRef(false)
+  const loadHeroProductsRowLevel = useCallback(() => {
+    if (heroProductsFetchStarted.current) return
+    heroProductsFetchStarted.current = true
+    setHeroProductsLoading(true)
+    asyncBufferFromUrl({ url: '/data/heroProductsCube.parquet' })
+      .then((file) => parquetReadObjects({ file, compressors }))
+      .then((rows) => {
+        setHeroProductsRowLevelRows(rows)
+      })
+      .catch((err) => {
+        console.error('loadHeroProductsRowLevel failed:', err)
+        setHeroProductsError(err)
+      })
+      .finally(() => setHeroProductsLoading(false))
   }, [])
 
   // Same lazy-load-on-first-use pattern as cohortCube above, for the same
@@ -531,31 +627,24 @@ export function FilterProvider({ children }) {
 
   const filteredActivation = useMemo(() => (data ? filterActivation(data.activationCube, filters) : []), [data, filters])
   const filteredRedemption = useMemo(() => (data ? filterRedemption(data.redemptionCube, filters) : []), [data, filters])
-  // FY/Month-only — see filterUniversal()'s own doc comment above for why
-  // every other filter dimension is deliberately not applied here.
-  const universalRows = useMemo(() => (data ? filterUniversal(data.universalCube, filters) : []), [data, filters])
 
   // ---- Channel Transactions cube (ChannelPerformance.jsx, 2026-08-21) ----
   // channelTransactions.json — 28 monthly rows (YearMonth/BMS/PVRINOX/
   // PaytmDistrict/BoxOffice/Total), a whole-company BOOKING-CHANNEL split
   // (how a ticket was purchased — BookMyShow, the PVR INOX app/site, Paytm
-  // Insider/District, or the physical Box Office window). A different
-  // question from Universal.json's payment-method split, and from this
+  // Insider/District, or the physical Box Office window), and from this
   // page's own added "Gift Card" line below (a payment method riding on
   // top of these 4 booking channels, not a 5th channel of the same kind —
   // a deliberate simplification the page itself documents, not an error).
   //
-  // Exposed UNFILTERED, deliberately — not run through filterUniversal()
-  // (even though it's cube-agnostic and would work) because
-  // ChannelPerformance.jsx's own comparison table needs to sum two
-  // arbitrary, independently-chosen month sets (the current period AND the
-  // same months one year earlier — see comparisonMonths/oneYearEarlier),
-  // which by construction reach on both sides of whatever FY/Month happens
-  // to be selected. A single "respects the current FY/Month selection"
-  // pool (this cube's equivalent of universalRows) couldn't answer that on
+  // Exposed UNFILTERED, deliberately: ChannelPerformance.jsx's own
+  // comparison table needs to sum two arbitrary, independently-chosen
+  // month sets (the current period AND the same months one year earlier —
+  // see comparisonMonths/oneYearEarlier), which by construction reach on
+  // both sides of whatever FY/Month happens to be selected. A single
+  // "respects the current FY/Month selection" pool couldn't answer that on
   // its own; the page does its own month-set filtering against this raw
-  // 28-row array instead, the same "small enough that a page can just slice
-  // it directly" treatment heroProducts already gets below.
+  // 28-row array instead.
   const channelTransactionsRows = data?.channelTransactionsCube || []
 
   // Gift Card is added to the Channel Performance page as a 5th, directly
@@ -671,17 +760,89 @@ export function FilterProvider({ children }) {
   // bar-pair, not just whichever FY happens to be selected.
   const cohortRowsAllFY = useMemo(() => (cohortCube ? filterCohort(cohortCube, filters, { skipFY: true }) : []), [cohortCube, filters])
 
-  // 2026-09-07 — see filterCardJourneyRowLevel()'s own doc comment above
-  // for what this pool is for and why it's scoped to only 3 of the 7
-  // filters cohortRows itself supports. `cardJourneyRowLevelReady` is
-  // exposed alongside so CardJourney.jsx can tell "not narrowed by X" (the
-  // filters-unsupported case) apart from "still loading" (rows is `[]`
-  // either way, before the fetch resolves).
-  const cardJourneyRowLevelFiltered = useMemo(
-    () => filterCardJourneyRowLevel(cardJourneyRowLevelRows, filters),
-    [cardJourneyRowLevelRows, filters]
+  // 2026-09-16 — see `redemption_rowlevel.parquet`'s own doc comment above
+  // for what these pools are for. `redemptionRowLevelReady` no longer
+  // needs a `FiltersSupported()` gate (unlike its 2026-09-07 predecessor)
+  // since this file has full parity with every filter this app has — it's
+  // only ever "still loading" (`[]`) or ready.
+  //
+  // 2026-09-17 (perf): gate on a plain boolean, not `pathname` itself, so
+  // navigating between two routes that are BOTH in the same list (e.g.
+  // Overview -> Summary, both in REDEMPTION_ROW_LEVEL_FILTERED_ROUTES)
+  // doesn't change the memo's dependency value and therefore doesn't
+  // re-run the full filter over the ~2.2M-row array — only a real change
+  // (entering/leaving the route set, or `filters`/`redemptionRowLevelRows`
+  // itself changing) does. `pathname` still decides the boolean every
+  // render, so a route actually crossing into/out of a list still flips it
+  // and still recomputes — this only kills the redundant recompute when
+  // the boolean would have come out the same either way.
+  const cohortRouteActive = COHORT_ROW_LEVEL_ROUTES.includes(pathname)
+  const redemptionFilteredRouteActive = REDEMPTION_ROW_LEVEL_FILTERED_ROUTES.includes(pathname)
+  const redemptionAllFYRouteActive = REDEMPTION_ROW_LEVEL_ALLFY_ROUTES.includes(pathname)
+  const cohortRowLevelFiltered = useMemo(
+    () => (cohortRouteActive ? filterRedemptionRowLevelCohort(redemptionRowLevelRows, filters) : []),
+    [redemptionRowLevelRows, filters, cohortRouteActive]
   )
-  const cardJourneyRowLevelReady = cardJourneyRowLevelRows.length > 0 && cardJourneyRowLevelFiltersSupported(filters)
+  const cohortRowLevelByActivation = useMemo(
+    () => (cohortRouteActive ? filterRedemptionRowLevelByActivation(redemptionRowLevelRows, filters) : []),
+    [redemptionRowLevelRows, filters, cohortRouteActive]
+  )
+  // FY restriction lifted on both date fields (Month and every other
+  // filter still applied) — the exact-count counterpart to
+  // `cohortRowsAllFY`, for Card Journey's "Year-on-Year" chart's own
+  // per-FY card counts.
+  const cohortRowLevelAllFY = useMemo(
+    () => (cohortRouteActive ? filterRedemptionRowLevelCohort(redemptionRowLevelRows, filters, { skipFY: true }) : []),
+    [redemptionRowLevelRows, filters, cohortRouteActive]
+  )
+  // Plain (non-cohort) redemption-side pool — the exact-count counterpart
+  // to `redemptionRows`, for Overview/both dedicated Redemption pages/
+  // Summary, none of which ask Card Journey's "activated AND redeemed in
+  // this same period" question.
+  const redemptionRowLevelFiltered = useMemo(
+    () => (redemptionFilteredRouteActive ? filterRedemptionRowLevel(redemptionRowLevelRows, filters) : []),
+    [redemptionRowLevelRows, filters, redemptionFilteredRouteActive]
+  )
+  // FY restriction lifted (Month and every other filter still applied) —
+  // the exact-count counterpart to `redemptionRowsAllFY`, for Summary's
+  // "By Year" bucket x FY matrix cells.
+  const redemptionRowLevelAllFY = useMemo(
+    () => (redemptionAllFYRouteActive ? filterRedemptionRowLevel(redemptionRowLevelRows, filters, { skipFY: true }) : []),
+    [redemptionRowLevelRows, filters, redemptionAllFYRouteActive]
+  )
+  const redemptionRowLevelReady = redemptionRowLevelRows.length > 0
+
+  // Route-gated exactly like the 5 pools above — only Redemption · F&B ever
+  // reads heroProductsCube.parquet, so a filter click on any other page must
+  // not pay to re-filter its ~294K rows. `heroProductsRouteActive` is the
+  // same "plain boolean computed once per render, not the raw pathname"
+  // pattern the 2026-09-17 perf fix applied to the 5 memos above (see their
+  // own doc comment) — navigating between two visits of the same route
+  // (impossible here, since there's only one route in the list, but kept
+  // consistent with the shared pattern) can't cause a spurious recompute.
+  const heroProductsRouteActive = HERO_PRODUCTS_ROW_LEVEL_ROUTES.includes(pathname)
+  const heroProductsRowLevelFiltered = useMemo(
+    () => (heroProductsRouteActive ? filterHeroProductsRowLevel(heroProductsRowLevelRows, filters) : []),
+    [heroProductsRowLevelRows, filters, heroProductsRouteActive]
+  )
+  // Top-15 by ItemBillValue, in Lacs — replaces the old static
+  // heroProducts.json top-15 (whole-dataset, never moved with the filters).
+  // Raw ItemName grouping, no de-dup — same "use the data as-is" convention
+  // this app follows for every other messy string field (Format/Category —
+  // see CLAUDE.md's own "Data reality vs. the original spec" section), so
+  // the unfiltered #1 item no longer needs to match the old static file's
+  // ₹413.13L figure exactly.
+  const heroProductsTop15 = useMemo(() => {
+    const byItem = new Map()
+    for (const r of heroProductsRowLevelFiltered) {
+      byItem.set(r.ItemName, (byItem.get(r.ItemName) || 0) + (r.ItemBillValue || 0))
+    }
+    return [...byItem.entries()]
+      .map(([name, amount]) => ({ name, amount: amount / 100000 }))
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, 15)
+  }, [heroProductsRowLevelFiltered])
+  const heroProductsReady = heroProductsRowLevelRows.length > 0
 
   // Date Range's own row pools — see the "Date Range" section above for
   // why these read a 4th pair of cubes instead of activationCube/
@@ -827,7 +988,6 @@ export function FilterProvider({ children }) {
     resetFilters,
     activationRows: filteredActivation,
     redemptionRows: filteredRedemption,
-    universalRows,
     channelTransactionsRows,
     giftCardTransactionRows,
     activationRowsAllMonths,
@@ -837,7 +997,6 @@ export function FilterProvider({ children }) {
     activationRowsAllFY,
     redemptionRowsAllFY,
     comparisonMonths,
-    heroProducts: data?.heroProducts || [],
     options,
     cohortRows,
     cohortRowsByActivation,
@@ -846,11 +1005,21 @@ export function FilterProvider({ children }) {
     loadCohortCube,
     cohortLoading,
     cohortError,
-    cardJourneyRowLevelFiltered,
-    cardJourneyRowLevelReady,
-    loadCardJourneyRowLevel,
-    cardJourneyRowLevelLoading,
-    cardJourneyRowLevelError,
+    cohortRowLevelFiltered,
+    cohortRowLevelByActivation,
+    cohortRowLevelAllFY,
+    redemptionRowLevelFiltered,
+    redemptionRowLevelAllFY,
+    redemptionRowLevelReady,
+    loadRedemptionRowLevel,
+    redemptionRowLevelLoading,
+    redemptionRowLevelError,
+    heroProductsRowLevelRows,
+    heroProductsTop15,
+    heroProductsReady,
+    loadHeroProductsRowLevel,
+    heroProductsLoading,
+    heroProductsError,
     dateRangeAvailable: isDateRangeAvailable,
     dailyActivationRows,
     dailyRedemptionRows,

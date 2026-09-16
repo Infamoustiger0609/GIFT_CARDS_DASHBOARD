@@ -25,7 +25,14 @@ import { dayLabel } from '../lib/format'
 // Select.jsx's own comment claiming 24px is a separate, wider-blast-radius
 // cleanup than this fix, since it'd change every filter's height, not just
 // this one.
-export default function DateRangeFilter({ value, onChange, min, max, disabled, disabledReason }) {
+// 2026-09-17: `onOpen` (FilterBar.jsx passes `loadDailyCubes` from
+// useFilters()) fires the moment the picker's own button is clicked, not on
+// mount — the daily cubes (~3.3MB combined) used to load unconditionally the
+// instant Overview mounted, even for a visit that never touches this
+// control. `loadDailyCubes` is idempotent (ref-guarded in FilterContext.jsx),
+// so calling it on every open is harmless — the actual fetch only ever
+// happens once per app session, whichever page's picker triggers it first.
+export default function DateRangeFilter({ value, onChange, min, max, disabled, disabledReason, onOpen }) {
   const [open, setOpen] = useState(false)
   const wrapRef = useRef(null)
 
@@ -58,7 +65,10 @@ export default function DateRangeFilter({ value, onChange, min, max, disabled, d
         <button
           type="button"
           disabled={disabled}
-          onClick={() => setOpen((o) => !o)}
+          onClick={() => {
+            onOpen?.()
+            setOpen((o) => !o)
+          }}
           title={disabled ? disabledReason : summary}
           style={{ minHeight: 38 }}
           className={`flex items-center rounded-md border text-[12px] text-navy px-1.5 truncate text-left w-full min-w-0 ${

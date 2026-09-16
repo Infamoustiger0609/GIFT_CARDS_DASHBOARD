@@ -16,7 +16,20 @@ import {
   LabelList
 } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
-import { sumBy, groupSum, weekSlotBreakdown, netCinemaRedemption, netRedemptionHeads, netHeadRows, netBucketsProportionally, REAL_HEAD_BUCKETS, isCancellationRow } from '../lib/aggregate'
+import {
+  sumBy,
+  groupSum,
+  weekSlotBreakdown,
+  netCinemaRedemption,
+  netRedemptionHeads,
+  netHeadRows,
+  netBucketsProportionally,
+  REAL_HEAD_BUCKETS,
+  isCancellationRow,
+  exactCardCount,
+  exactCardCountByBucket,
+  exactWeekSlotCardCounts
+} from '../lib/aggregate'
 import {
   computeComparisons,
   computeCustomWindowComparison,
@@ -186,13 +199,16 @@ export default function Overview() {
     dateRangeAvailable,
     dailyActivationRows,
     dailyRedemptionRows,
-    loadDailyCubes,
     dailyCubesLoaded,
     dailyLoading,
     dailyError,
     cohortRowsForComparison,
     loadCohortCube,
-    cohortLoading
+    cohortLoading,
+    redemptionRowLevelFiltered,
+    redemptionRowLevelAllFY,
+    redemptionRowLevelReady,
+    loadRedemptionRowLevel
   } = useFilters()
 
   // ---- MTD / QTD / YTD preset ribbon (2026-08-24, extracted into the
@@ -224,16 +240,25 @@ export default function Overview() {
   useEffect(() => {
     loadCohortCube()
   }, [loadCohortCube])
-
-  // 2026-08-21: this page is the one and only consumer of the Date Range
-  // filter's daily cubes (see FilterContext.jsx's "Date Range" section) —
-  // same lazy-load-on-mount pattern as CardJourney.jsx's loadCohortCube(),
-  // so every other page's load profile is untouched. Idempotent: harmless
-  // to call again on every remount, the actual fetch only ever happens once
-  // per app session.
+  // 2026-09-16: same lazy-load-on-mount pattern as cohortCube above — this
+  // page's own "known limitation, can't be fixed client-side" premise for
+  // `totalUniqueCards` (see its own doc comment below) predates this file
+  // existing; it's stale now, not a permanent ceiling.
   useEffect(() => {
-    loadDailyCubes()
-  }, [loadDailyCubes])
+    loadRedemptionRowLevel()
+  }, [loadRedemptionRowLevel])
+
+  // 2026-08-21, deferred further 2026-09-17: this page is the one and only
+  // CONSUMER of the Date Range filter's daily cubes (see FilterContext.jsx's
+  // "Date Range" section), but the fetch itself is no longer kicked off by
+  // this page's own mount — it used to run unconditionally here, meaning
+  // just landing on Overview downloaded+parsed ~3.3MB of daily cubes even
+  // for a visit that never opens the Date Range picker. `loadDailyCubes` is
+  // now called from inside DateRangeFilter's own open-button click handler
+  // (via FilterBar.jsx), page-agnostic — it fires the first time the picker
+  // is opened on ANY page, not just Overview. Still idempotent (a ref-guard
+  // inside `loadDailyCubes` itself), so opening the picker more than once,
+  // on this page or another, only ever fetches once per app session.
 
   // True only when the user has actually picked a start day AND none of
   // Card Type/Denomination/Activation Source/Redemption Source is active
@@ -355,19 +380,18 @@ export default function Overview() {
   // redemptions" line) — reintroduced with the correct measure per an
   // explicit request, not a coincidence.
   //
-  // KNOWN LIMITATION (do not "fix" client-side — see below): summing
-  // UniqueCardCount across multiple selected time periods (e.g. an FY or
-  // several months at once) overcounts distinct cards whenever the same
-  // card redeems in more than one of those periods — it's counted once per
-  // period it appears in, not once overall. This is a real mathematical
-  // limit of pre-aggregated data: the cube only carries a per-row distinct
-  // count, never individual card identifiers, so there is no way to
-  // deduplicate a card that shows up in, say, both April and May without
-  // the raw per-transaction data this app deliberately doesn't ship (see
-  // README's "Performance" section on why cubes are pre-aggregated at
-  // all). Single-month figures are exact; multi-month figures are a safe
-  // upper bound, not a precise distinct-card count.
-  const totalUniqueCards = sumBy(redemptionRows, 'UniqueCardCount')
+  // 2026-09-16: the "KNOWN LIMITATION, can't be fixed client-side" this
+  // comment used to document no longer holds — `redemption_rowlevel
+  // .parquet` (FilterContext.jsx) now ships the exact per-transaction data
+  // (a real `CardNumber` field) this note said didn't exist. Switched to
+  // an exact `COUNT(DISTINCT CardNumber)` over `redemptionRowLevelFiltered`
+  // (the row-level pool filtered by every currently-active global filter,
+  // the same set `redemptionRows` itself reflects), falling back to the
+  // old (documented-inflation-prone) sum only while the ~26MB file is still
+  // loading — see the 2026-09-16 CLAUDE.md entry for the full audit and
+  // before/after figures across every location this affected.
+  const totalUniqueCardsExact = redemptionRowLevelReady ? exactCardCount(redemptionRowLevelFiltered) : null
+  const totalUniqueCards = totalUniqueCardsExact != null ? totalUniqueCardsExact : sumBy(redemptionRows, 'UniqueCardCount')
   // Total Redemption Amount + Total Uptake — a combined-total KPI, not a
   // sub-component of another KPI on this ribbon (same "no meaningful
   // parent" reasoning as Revenue/Activation Amount), so it gets deltas but
@@ -516,7 +540,29 @@ export default function Overview() {
   // RedemptionBoxOffice.jsx/RedemptionFnb.jsx can compute the exact same
   // net Box Office/F&B figures instead of their own gross sums (the bug
   // that motivated centralizing this — see the 2026-08-06 CLAUDE.md entry).
-  const positiveHeads = useMemo(() => netRedemptionHeads(redemptionRows), [redemptionRows])
+  // 2026-09-16: card counts for these 3 nodes (Online/Box Office/F&B, and
+  // Cinema below) switched from netRedemptionHeads()'s own summed
+  // UniqueCardCount to an exact COUNT(DISTINCT CardNumber) over
+  // `redemptionRowLevelFiltered` — no netting/attribution needed for a
+  // count the way there is for an amount (`exactCardCount()` already
+  // excludes Cancellation rows entirely, the established "count excludes
+  // cancellations" convention) — see the 2026-09-16 CLAUDE.md entry. Amount
+  // fields are completely untouched, still netRedemptionHeads()'s own
+  // figures.
+  const redemptionHeadExactCounts = useMemo(() => {
+    if (!redemptionRowLevelReady) return null
+    return {
+      Online: exactCardCount(redemptionRowLevelFiltered.filter((r) => r.Head === 'Online')),
+      'Box Office': exactCardCount(redemptionRowLevelFiltered.filter((r) => r.Head === 'Box Office')),
+      'F&B': exactCardCount(redemptionRowLevelFiltered.filter((r) => r.Head === 'F&B')),
+      Cinema: exactCardCount(redemptionRowLevelFiltered.filter((r) => r.Head === 'Box Office' || r.Head === 'F&B'))
+    }
+  }, [redemptionRowLevelFiltered, redemptionRowLevelReady])
+  const positiveHeads = useMemo(() => {
+    const base = netRedemptionHeads(redemptionRows)
+    if (!redemptionHeadExactCounts) return base
+    return base.map((h) => ({ ...h, UniqueCardCount: redemptionHeadExactCounts[h.key] ?? h.UniqueCardCount }))
+  }, [redemptionRows, redemptionHeadExactCounts])
 
   // ---- Uptake bifurcation for the Uptake KPI card: Ticket (Head='Box
   // Office' + Head='Online') vs F&B (Head='F&B'), net of their own Cancel
@@ -583,7 +629,10 @@ export default function Overview() {
   // different but mathematically equivalent routes — see the 2026-08-06
   // CLAUDE.md entry). Online/Box Office/F&B's own individual values below
   // are untouched, still positiveHeads' proportional-netting figures. ----
-  const cinemaTotal = useMemo(() => netCinemaRedemption(redemptionRows), [redemptionRows])
+  const cinemaTotal = useMemo(() => {
+    const base = netCinemaRedemption(redemptionRows)
+    return { ...base, UniqueCardCount: redemptionHeadExactCounts?.Cinema ?? base.UniqueCardCount }
+  }, [redemptionRows, redemptionHeadExactCounts])
   // positiveHeads is always exactly [Online, Box Office, F&B], in that
   // fixed order (see its own definition above) — destructured once here
   // rather than re-filtering the array at each flow-diagram node.
@@ -600,10 +649,12 @@ export default function Overview() {
     () => bucketRegionData(activationRows, activationRowsForComparison, ACTIVATION_REGION_ONLY_BUCKETS, 'ActivationAmount', 'ActivationCount', comparisonMonths),
     [activationRows, activationRowsForComparison, comparisonMonths]
   )
-  const redemptionByRegion = useMemo(
-    () => bucketRegionData(redemptionRows, redemptionRowsForComparison, REDEMPTION_REGION_ONLY_BUCKETS, 'RedemptionAmount', 'UniqueCardCount', comparisonMonths),
-    [redemptionRows, redemptionRowsForComparison, comparisonMonths]
-  )
+  const redemptionByRegion = useMemo(() => {
+    const base = bucketRegionData(redemptionRows, redemptionRowsForComparison, REDEMPTION_REGION_ONLY_BUCKETS, 'RedemptionAmount', 'UniqueCardCount', comparisonMonths)
+    if (!redemptionRowLevelReady) return base
+    const exact = exactCardCountByBucket(redemptionRowLevelFiltered, REDEMPTION_REGION_ONLY_BUCKETS)
+    return base.map((b) => ({ ...b, UniqueCardCount: exact.find((e) => e.key === b.key)?.count ?? b.UniqueCardCount }))
+  }, [redemptionRows, redemptionRowsForComparison, comparisonMonths, redemptionRowLevelFiltered, redemptionRowLevelReady])
 
   // ---- Activation by Source (Aggregators/Corporate [Corporate+Online
   // merged]/Cinema — all 3 real sources, self-reconciling to Total
@@ -622,10 +673,12 @@ export default function Overview() {
     () => bucketRegionData(activationRows, activationRowsForComparison, ACTIVATION_SOURCE_ONLY_BUCKETS, 'ActivationAmount', 'ActivationCount', comparisonMonths),
     [activationRows, activationRowsForComparison, comparisonMonths]
   )
-  const redemptionByHead = useMemo(
-    () => netBucketsProportionally(redemptionRows, REAL_HEAD_BUCKETS, isCancellationRow, 'RedemptionAmount', 'UniqueCardCount'),
-    [redemptionRows]
-  )
+  const redemptionByHead = useMemo(() => {
+    const base = netBucketsProportionally(redemptionRows, REAL_HEAD_BUCKETS, isCancellationRow, 'RedemptionAmount', 'UniqueCardCount')
+    if (!redemptionRowLevelReady) return base
+    const exact = exactCardCountByBucket(redemptionRowLevelFiltered, REAL_HEAD_BUCKETS)
+    return base.map((b) => ({ ...b, UniqueCardCount: exact.find((e) => e.key === b.key)?.count ?? b.UniqueCardCount }))
+  }, [redemptionRows, redemptionRowLevelFiltered, redemptionRowLevelReady])
 
   // ---- Year-on-Year: Activation vs. Redemption per FY, all filters except
   // FY still applied (same skipFY pattern as skipMonth's "all months" pools
@@ -634,6 +687,12 @@ export default function Overview() {
   // which only groups by a literal row field. ----
   const yoyByFY = useMemo(() => {
     const fys = [...new Set([...activationRowsAllFY.map((r) => fyOf(r.YearMonth)), ...redemptionRowsAllFY.map((r) => fyOf(r.YearMonth))])].sort()
+    const exactByFY = redemptionRowLevelReady
+      ? exactCardCountByBucket(
+          redemptionRowLevelAllFY,
+          fys.map((fy) => ({ key: fy, predicate: (r) => fyOf(r.YearMonth) === fy }))
+        )
+      : null
     return fys.map((fy) => {
       const actRows = activationRowsAllFY.filter((r) => fyOf(r.YearMonth) === fy)
       const redRows = redemptionRowsAllFY.filter((r) => fyOf(r.YearMonth) === fy)
@@ -642,17 +701,22 @@ export default function Overview() {
         Activation: sumBy(actRows, 'ActivationAmount'),
         ActivationCount: sumBy(actRows, 'ActivationCount'),
         Redemption: sumBy(redRows, 'RedemptionAmount'),
-        RedemptionCardCount: sumBy(redRows, 'UniqueCardCount')
+        RedemptionCardCount: exactByFY ? exactByFY.find((e) => e.key === fy)?.count || 0 : sumBy(redRows, 'UniqueCardCount')
       }
     })
-  }, [activationRowsAllFY, redemptionRowsAllFY])
+  }, [activationRowsAllFY, redemptionRowsAllFY, redemptionRowLevelAllFY, redemptionRowLevelReady])
 
   // ---- Redemption Trend (Weekday vs. Weekend) — reuses the same
   // weekSlotBreakdown() Trends.jsx's "Week-slot Overview" is built on (both
   // Activation and Redemption come back; this chart only renders the
   // Redemption side) so the two pages can never drift on what counts as a
   // weekend. ----
-  const weekSlot = useMemo(() => weekSlotBreakdown(activationRows, redemptionRows), [activationRows, redemptionRows])
+  const weekSlot = useMemo(() => {
+    const base = weekSlotBreakdown(activationRows, redemptionRows)
+    if (!redemptionRowLevelReady) return base
+    const exact = exactWeekSlotCardCounts(redemptionRowLevelFiltered)
+    return base.map((s) => ({ ...s, RedemptionCardCount: exact[s.slot] ?? s.RedemptionCardCount }))
+  }, [activationRows, redemptionRows, redemptionRowLevelFiltered, redemptionRowLevelReady])
 
   // ---- Activation vs. Redemption amount by Denomination tier. Iterates
   // DENOM_ORDER directly (fixed buckets, 11 magnitude tiers + the honest
@@ -677,29 +741,41 @@ export default function Overview() {
       'Denom',
       ['RedemptionAmount', 'UniqueCardCount']
     )
+    const exactByDenom = redemptionRowLevelReady
+      ? exactCardCountByBucket(
+          redemptionRowLevelFiltered.filter((r) => DENOM_ORDER.includes(r.Denom)),
+          DENOM_ORDER.map((d) => ({ key: d, predicate: (r) => r.Denom === d }))
+        )
+      : null
     return DENOM_ORDER.map((d) => ({
       denom: d,
       Activation: act.find((r) => r.key === d)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === d)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === d)?.RedemptionAmount || 0,
-      RedemptionCardCount: red.find((r) => r.key === d)?.UniqueCardCount || 0
+      RedemptionCardCount: exactByDenom ? exactByDenom.find((e) => e.key === d)?.count || 0 : red.find((r) => r.key === d)?.UniqueCardCount || 0
     }))
-  }, [activationRows, redemptionRows])
+  }, [activationRows, redemptionRows, redemptionRowLevelFiltered, redemptionRowLevelReady])
 
   // ---- Pan-India month-wise trend ----
   const monthTrend = useMemo(() => {
     const act = groupSum(activationRows, 'YearMonth', ['ActivationAmount', 'ActivationCount'])
     const red = groupSum(redemptionRows, 'YearMonth', ['RedemptionAmount', 'UniqueCardCount'])
     const months = [...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])].sort()
+    const exactByMonth = redemptionRowLevelReady
+      ? exactCardCountByBucket(
+          redemptionRowLevelFiltered,
+          months.map((m) => ({ key: m, predicate: (r) => r.YearMonth === m }))
+        )
+      : null
     return months.map((m) => ({
       month: m,
       label: monthLabel(m),
       Activation: act.find((r) => r.key === m)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === m)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === m)?.RedemptionAmount || 0,
-      RedemptionCardCount: red.find((r) => r.key === m)?.UniqueCardCount || 0
+      RedemptionCardCount: exactByMonth ? exactByMonth.find((e) => e.key === m)?.count || 0 : red.find((r) => r.key === m)?.UniqueCardCount || 0
     }))
-  }, [activationRows, redemptionRows])
+  }, [activationRows, redemptionRows, redemptionRowLevelFiltered, redemptionRowLevelReady])
 
   // ---- Activation vs. Redemption by Weekday (2026-08-17) — replaces the
   // removed "Daily Activation & Redemption Trend" (day-of-month) chart.
@@ -720,14 +796,20 @@ export default function Overview() {
   const weekdayTrend = useMemo(() => {
     const act = groupSum(activationRows, 'Weekday', ['ActivationAmount', 'ActivationCount'])
     const red = groupSum(redemptionRows, 'Weekday', ['RedemptionAmount', 'UniqueCardCount'])
+    const exactByWeekday = redemptionRowLevelReady
+      ? exactCardCountByBucket(
+          redemptionRowLevelFiltered,
+          WEEKDAY_ORDER.map((w) => ({ key: w, predicate: (r) => r.Weekday === w }))
+        )
+      : null
     return orderBy([...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])], WEEKDAY_ORDER).map((w) => ({
       key: w,
       Activation: act.find((r) => r.key === w)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === w)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === w)?.RedemptionAmount || 0,
-      RedemptionCardCount: red.find((r) => r.key === w)?.UniqueCardCount || 0
+      RedemptionCardCount: exactByWeekday ? exactByWeekday.find((e) => e.key === w)?.count || 0 : red.find((r) => r.key === w)?.UniqueCardCount || 0
     }))
-  }, [activationRows, redemptionRows])
+  }, [activationRows, redemptionRows, redemptionRowLevelFiltered, redemptionRowLevelReady])
 
   // 2026-08-26: the same card's two weekday pies (Activation, Redemption)
   // read `weekdayTrend` directly, no reshape needed — see the JSX below for
@@ -1044,6 +1126,24 @@ export default function Overview() {
                 </div>
               </FlowBranch>
             </div>
+            {/* 2026-09-16: Box Office/F&B here won't always match every
+                other chart on this dashboard that also splits Cinema into
+                the two — not a bug, see the note below. Added after
+                Summary's own nested Cinema breakdown
+                (netBucketsProportionally, a different heuristic) was found
+                to disagree with this diagram by ~₹48L per side; flagged
+                and confirmed with the user rather than silently picking
+                one, per this file's own standing practice. */}
+            <p className="text-xs text-warmgray-muted italic col-span-full">
+              Box Office/F&B split above uses the Region+Month winner-map
+              heuristic (physicalCancelWinnerMap/netHeadRows — a
+              cancellation's Region+Month goes entirely to whichever of the
+              two had the larger gross that Region+Month). Summary's own
+              "Redemption by Source" nested breakdown uses a different,
+              also-legitimate heuristic (proportional-by-gross-share) for
+              the same ambiguous split — the two won't match to the rupee.
+              Both sum to the same Cinema total.
+            </p>
           </div>
         )}
       </Card>

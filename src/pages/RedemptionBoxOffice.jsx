@@ -1,9 +1,9 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useEffect } from 'react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LabelList } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
-import { sumBy, groupSum, topNWithOther, netHeadRows } from '../lib/aggregate'
+import { sumBy, groupSum, topNWithOther, netHeadRows, exactCardCount, exactCardCountByBucket } from '../lib/aggregate'
 import { computeComparisons, computeCustomWindowComparison, usePresetWindow, kpiDeltas } from '../lib/comparisons'
-import { groupByRedemptionMode } from '../lib/redemptionMode'
+import { groupByRedemptionMode, REDEMPTION_MODES } from '../lib/redemptionMode'
 import { orderBy, REGION_ORDER, WEEKDAY_ORDER, DENOM_ORDER, regionLabel } from '../lib/constants'
 import { COLORS, REGION_COLORS, CARD_TYPE_COLORS, categoricalColor } from '../lib/theme'
 import { fmtLacs, fmtRupees, fmtNumber, fmtPct, fmtLacsAxis } from '../lib/format'
@@ -14,7 +14,28 @@ import ChartTooltip from '../components/ChartTooltip'
 import { AmountLabel, HorizontalAmountLabel, stackTotalLabel } from '../components/ChartLabels'
 
 export default function RedemptionBoxOffice() {
-  const { redemptionRows, redemptionRowsForComparison, comparisonMonths } = useFilters()
+  const {
+    redemptionRows,
+    redemptionRowsForComparison,
+    comparisonMonths,
+    redemptionRowLevelFiltered,
+    redemptionRowLevelReady,
+    loadRedemptionRowLevel
+  } = useFilters()
+
+  // 2026-09-16: same lazy-load-on-mount pattern as CardJourney.jsx/
+  // Overview.jsx's own cohort/row-level cube — every count on this page
+  // switches from a per-row UniqueCardCount sum (inflation-prone, see the
+  // 2026-09-16 CLAUDE.md entry) to an exact COUNT(DISTINCT CardNumber) once
+  // this file has loaded, no fallback gate needed (full filter parity).
+  useEffect(() => {
+    loadRedemptionRowLevel()
+  }, [loadRedemptionRowLevel])
+  // Box Office's own row-level pool, scoped the same way netBoxOfficeRows
+  // is scoped (Head='Box Office'), read from the exact-count source
+  // instead of the netted cube-level pool — no netting/attribution needed
+  // for a count (see exactCardCount()'s own doc comment).
+  const boxOfficeRowLevel = useMemo(() => redemptionRowLevelFiltered.filter((r) => r.Head === 'Box Office'), [redemptionRowLevelFiltered])
 
   // 2026-08-29: MTD/QTD(Q1-Q4 dropdown)/YTD preset control, via the same
   // shared usePresetWindow() hook Overview.jsx/CardJourney.jsx/Activation.jsx
@@ -66,7 +87,7 @@ export default function RedemptionBoxOffice() {
   // Redemption" (revenue per redemption *event*, not per card). Only the
   // "X redemptions" display line switches to the card-based measure.
   const totalCount = sumBy(netBoxOfficeRows, 'RedemptionCount')
-  const totalCardCount = sumBy(netBoxOfficeRows, 'UniqueCardCount')
+  const totalCardCount = redemptionRowLevelReady ? exactCardCount(boxOfficeRowLevel) : sumBy(netBoxOfficeRows, 'UniqueCardCount')
   const deltas = useMemo(
     () => computeComparisons(netBoxOfficeRowsForComparison, 'RedemptionAmount', comparisonMonths),
     [netBoxOfficeRowsForComparison, comparisonMonths]
@@ -81,7 +102,9 @@ export default function RedemptionBoxOffice() {
   )
   const digitalRows = netBoxOfficeRows.filter((r) => r.CardType === 'Digital')
   const digitalAmt = sumBy(digitalRows, 'RedemptionAmount')
-  const digitalCardCount = sumBy(digitalRows, 'UniqueCardCount')
+  const digitalCardCount = redemptionRowLevelReady
+    ? exactCardCount(boxOfficeRowLevel.filter((r) => r.CardType === 'Digital'))
+    : sumBy(digitalRows, 'UniqueCardCount')
   const digitalRowsForComparison = useMemo(
     () => netBoxOfficeRowsForComparison.filter((r) => r.CardType === 'Digital'),
     [netBoxOfficeRowsForComparison]
@@ -103,8 +126,15 @@ export default function RedemptionBoxOffice() {
 
   const byRegion = useMemo(() => {
     const g = groupSum(netBoxOfficeRows, 'Region_Clean', ['RedemptionAmount', 'UniqueCardCount'])
+    if (redemptionRowLevelReady) {
+      const exact = exactCardCountByBucket(
+        boxOfficeRowLevel,
+        g.map((r) => ({ key: r.key, predicate: (row) => row.Region_Clean === r.key }))
+      )
+      for (const r of g) r.UniqueCardCount = exact.find((e) => e.key === r.key)?.count ?? r.UniqueCardCount
+    }
     return orderBy(g.map((r) => r.key), REGION_ORDER).map((k) => g.find((r) => r.key === k))
-  }, [netBoxOfficeRows])
+  }, [netBoxOfficeRows, boxOfficeRowLevel, redemptionRowLevelReady])
 
   // ---- Redemption Source split (Online/Cinema, via RedemptionModeFinal —
   // never ActivationMode), each further split by CardType. Head='Box
@@ -124,16 +154,30 @@ export default function RedemptionBoxOffice() {
     () => groupByRedemptionMode(ticketRows, { modeField: 'RedemptionModeFinal', amountField: 'RedemptionAmount', countField: 'UniqueCardCount' }),
     [ticketRows]
   )
+  // 2026-09-16: exact digital/physical card counts for this chart's own
+  // ticket pool (Box Office + Online, no netting needed — Cancellation
+  // rows are excluded from both Head filters below by construction).
+  const ticketRowLevel = useMemo(
+    () => [...boxOfficeRowLevel, ...redemptionRowLevelFiltered.filter((r) => r.Head === 'Online')],
+    [boxOfficeRowLevel, redemptionRowLevelFiltered]
+  )
   const sourceChartData = useMemo(
     () =>
-      bySource.map((s) => ({
-        key: s.key,
-        digitalAmount: s.digital.amount,
-        physicalAmount: s.physical.amount,
-        digitalCount: s.digital.count,
-        physicalCount: s.physical.count
-      })),
-    [bySource]
+      bySource.map((s) => {
+        if (!redemptionRowLevelReady) {
+          return { key: s.key, digitalAmount: s.digital.amount, physicalAmount: s.physical.amount, digitalCount: s.digital.count, physicalCount: s.physical.count }
+        }
+        const modes = REDEMPTION_MODES.find((m) => m.key === s.key)?.modes || []
+        const modeRows = ticketRowLevel.filter((r) => modes.includes(r.RedemptionModeFinal))
+        return {
+          key: s.key,
+          digitalAmount: s.digital.amount,
+          physicalAmount: s.physical.amount,
+          digitalCount: exactCardCount(modeRows.filter((r) => r.CardType === 'Digital')),
+          physicalCount: exactCardCount(modeRows.filter((r) => r.CardType === 'Physical'))
+        }
+      }),
+    [bySource, ticketRowLevel, redemptionRowLevelReady]
   )
   const hasSourceData = sourceChartData.some((s) => s.digitalAmount || s.physicalAmount)
 
@@ -152,15 +196,33 @@ export default function RedemptionBoxOffice() {
   // "Other" naturally — same "real Other value + synthetic overflow bucket
   // both correctly land on the same gray color" pattern already documented
   // for RedemptionFnb.jsx's Category chart.
+  // 2026-09-16: exact card counts computed BEFORE topNWithOther() folds the
+  // long tail into "Other" — topNWithOther() folds every numeric field
+  // (see its own doc comment), so an exact per-Format count merged in here
+  // first still folds correctly into "Other"'s own summed count.
   const byFormat = useMemo(() => {
     const g = groupSum(netBoxOfficeRows, 'Format', ['RedemptionAmount', 'UniqueCardCount'])
+    if (redemptionRowLevelReady) {
+      const exact = exactCardCountByBucket(
+        boxOfficeRowLevel,
+        g.map((r) => ({ key: r.key, predicate: (row) => row.Format === r.key }))
+      )
+      for (const r of g) r.UniqueCardCount = exact.find((e) => e.key === r.key)?.count ?? r.UniqueCardCount
+    }
     return topNWithOther(g, 10, 'key', 'RedemptionAmount')
-  }, [netBoxOfficeRows])
+  }, [netBoxOfficeRows, boxOfficeRowLevel, redemptionRowLevelReady])
 
   const byWeekday = useMemo(() => {
     const g = groupSum(netBoxOfficeRows, 'Weekday', ['RedemptionAmount', 'UniqueCardCount'])
+    if (redemptionRowLevelReady) {
+      const exact = exactCardCountByBucket(
+        boxOfficeRowLevel,
+        g.map((r) => ({ key: r.key, predicate: (row) => row.Weekday === r.key }))
+      )
+      for (const r of g) r.UniqueCardCount = exact.find((e) => e.key === r.key)?.count ?? r.UniqueCardCount
+    }
     return orderBy(g.map((r) => r.key), WEEKDAY_ORDER).map((k) => g.find((r) => r.key === k))
-  }, [netBoxOfficeRows])
+  }, [netBoxOfficeRows, boxOfficeRowLevel, redemptionRowLevelReady])
 
   // Chart-parity pass (2026-08-12): same DENOM_ORDER 11-bucket list as
   // Activation.jsx's new "by Denomination" chart and Overview's — see that
@@ -184,9 +246,16 @@ export default function RedemptionBoxOffice() {
     const g = groupSum(netBoxOfficeRows, 'Denom', ['RedemptionAmount', 'UniqueCardCount'])
     const named = DENOM_ORDER.map((d) => g.find((r) => r.key === d) || { key: d, RedemptionAmount: 0, UniqueCardCount: 0 })
     const otherRows = netBoxOfficeRows.filter((r) => !DENOM_ORDER.includes(r.Denom))
-    if (otherRows.length === 0) return named
-    return [...named, { key: 'Other', RedemptionAmount: sumBy(otherRows, 'RedemptionAmount'), UniqueCardCount: sumBy(otherRows, 'UniqueCardCount') }]
-  }, [netBoxOfficeRows])
+    const result = otherRows.length === 0 ? named : [...named, { key: 'Other', RedemptionAmount: sumBy(otherRows, 'RedemptionAmount'), UniqueCardCount: sumBy(otherRows, 'UniqueCardCount') }]
+    if (redemptionRowLevelReady) {
+      const exact = exactCardCountByBucket(
+        boxOfficeRowLevel,
+        result.map((r) => (r.key === 'Other' ? { key: 'Other', predicate: (row) => !DENOM_ORDER.includes(row.Denom) } : { key: r.key, predicate: (row) => row.Denom === r.key }))
+      )
+      for (const r of result) r.UniqueCardCount = exact.find((e) => e.key === r.key)?.count ?? r.UniqueCardCount
+    }
+    return result
+  }, [netBoxOfficeRows, boxOfficeRowLevel, redemptionRowLevelReady])
 
   return (
     <div className="flex flex-col gap-6">

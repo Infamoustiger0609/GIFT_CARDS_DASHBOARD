@@ -47,7 +47,7 @@ const CHANNEL_PAGE_DISABLED_REASON =
 export default function FilterBar() {
   // resetFilters is still provided by FilterContext (functionality intact) —
   // just not wired to a visible control right now, per request.
-  const { filters, setFilter, setDateRange, dateRangeAvailable, options } = useFilters()
+  const { filters, setFilter, setDateRange, dateRangeAvailable, loadDailyCubes, options } = useFilters()
   const onChannelPage = useLocation().pathname === CHANNEL_PAGE_PATH
 
   return (
@@ -70,6 +70,7 @@ export default function FilterBar() {
           onChange={setDateRange}
           min={DAILY_CUBE_MIN_DATE}
           max={DAILY_CUBE_MAX_DATE}
+          onOpen={loadDailyCubes}
           disabled={onChannelPage || !dateRangeAvailable}
           disabledReason={
             onChannelPage

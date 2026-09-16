@@ -10,6 +10,8 @@ import {
   computeNettedBucketFYSeries,
   kpiDeltas
 } from '../lib/comparisons'
+import { exactCardCount } from '../lib/aggregate'
+import { fyOf } from '../lib/constants'
 import { fmtLacs, fmtNumber } from '../lib/format'
 
 const TOTAL_BUCKET = [{ key: 'Total', predicate: () => true }]
@@ -112,7 +114,9 @@ export default function MetricComparisonCard({
   nestedBreakdowns,
   accent = 'navy',
   activePreset,
-  selectedMonths
+  selectedMonths,
+  exactCountRows,
+  exactCountRowsAllFY
 }) {
   const accentClasses = ACCENTS[accent] || { border: 'border-l-navy', text: 'text-navy' }
   const [totalRow] = computeBucketComparisons(rows, rowsAllMonths, TOTAL_BUCKET, amountField, countField, comparisonMonths, selectedMonths)
@@ -207,6 +211,64 @@ export default function MetricComparisonCard({
     }
   }
 
+  // 2026-09-16 — optional exact-count override, see the 2026-09-16
+  // CLAUDE.md entry. `exactCountRows`/`exactCountRowsAllFY` are a
+  // row-level pool (`redemption_rowlevel.parquet` via FilterContext.jsx),
+  // already filtered the same way `rows`/`rowsAllFY` are — passed only by
+  // redemption-side cards (Summary.jsx; activation-side cards leave both
+  // undefined and every count below stays exactly what it already was).
+  // Every bucket predicate here (Region_Clean/Head/CardType/Denom/
+  // RedemptionModeFinal) is field-name generic, so the SAME predicate
+  // functions already built for the cube-level buckets work unmodified
+  // against row-level rows too — no second bucket definition needed.
+  // `exactCardCount()` always excludes Head==='Cancellation' rows on its
+  // own, so this needs no netting/attribution logic the way the amount
+  // side does — "how many distinct cards have a real row in this bucket"
+  // is well-defined without it, unlike an amount, which does need
+  // cancellations folded in somewhere.
+  if (exactCountRows) {
+    total.count = exactCardCount(exactCountRows)
+    const bucketList = bucketsWithOther || buckets || []
+    for (const b of bucketRows) {
+      const bucket = bucketList.find((bb) => bb.key === b.key)
+      if (bucket) b.count = exactCardCount(exactCountRows.filter(bucket.predicate))
+    }
+  }
+  if (exactCountRowsAllFY) {
+    const bucketList = bucketsWithOther || buckets || []
+    for (const br of bucketFYRows) {
+      const bucket = bucketList.find((bb) => bb.key === br.key)
+      if (!bucket) continue
+      for (const fy of Object.keys(br.byFY)) {
+        br.byFY[fy].count = exactCardCount(exactCountRowsAllFY.filter((r) => fyOf(r.YearMonth) === fy && bucket.predicate(r)))
+      }
+    }
+  }
+  if ((exactCountRows || exactCountRowsAllFY) && nestedBreakdowns && buckets) {
+    for (const [parentKey, nested] of Object.entries(nestedBreakdowns)) {
+      const parentBucket = buckets.find((b) => b.key === parentKey)
+      const nb = nestedByParentKey[parentKey]
+      if (!parentBucket || !nb) continue
+      if (exactCountRows) {
+        const parentExactRows = exactCountRows.filter(parentBucket.predicate)
+        for (const cr of nb.current) {
+          const cb = nested.buckets.find((bb) => bb.key === cr.key)
+          if (cb) cr.count = exactCardCount(parentExactRows.filter(cb.predicate))
+        }
+      }
+      if (exactCountRowsAllFY) {
+        const parentExactRowsAllFY = exactCountRowsAllFY.filter(parentBucket.predicate)
+        for (const br of nb.byYear) {
+          const cb = nested.buckets.find((bb) => bb.key === br.key)
+          if (!cb) continue
+          for (const fy of Object.keys(br.byFY)) {
+            br.byFY[fy].count = exactCardCount(parentExactRowsAllFY.filter((r) => fyOf(r.YearMonth) === fy && cb.predicate(r)))
+          }
+        }
+      }
+    }
+  }
+
   const hasAnyData = rows.length > 0 || rowsAllFY.length > 0
 
   return (
@@ -278,6 +340,25 @@ export default function MetricComparisonCard({
                   ))}
                 </tbody>
               </table>
+              {nestedBreakdowns && (
+                // 2026-09-16: this card's nested breakdown(s) use
+                // netBucketsProportionally (proportional-by-gross-share) —
+                // a different, also-legitimate heuristic from the one
+                // Overview's flow diagram uses for the same Box Office/F&B
+                // split (a Region+Month winner-map). Both sum to the same
+                // parent total; only the split between the two children
+                // differs, by ~₹48L each way on the current data. Added
+                // after the divergence was found and confirmed with the
+                // user rather than silently reconciled to match Overview.
+                <p className="text-[11px] text-warmgray-muted italic mt-2">
+                  Nested rows above (↳) net Cancel Redeem in proportionally,
+                  by each row's own share of gross — Overview's flow
+                  diagram splits the same ambiguous Box Office/F&B
+                  attribution differently (a Region+Month winner-take-all),
+                  so the two won't match to the rupee. Both reconcile to
+                  their own parent row exactly.
+                </p>
+              )}
             </div>
           )}
 

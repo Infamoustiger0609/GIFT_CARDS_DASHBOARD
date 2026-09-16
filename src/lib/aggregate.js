@@ -10,6 +10,108 @@ export function sumBy(rows, field) {
   return total
 }
 
+// 2026-09-16 — exact distinct-card count from a row-level pool (a real
+// `CardNumber` field, e.g. `redemption_rowlevel.parquet`'s rows via
+// FilterContext's `redemptionRowLevelFiltered`/`cohortRowLevelFiltered`/
+// etc.), the shared replacement for every `sumBy(cubeRows,
+// 'UniqueCardCount')`/`groupSum(cubeRows, dim, ['UniqueCardCount'])` call
+// across the app — see the 2026-09-16 CLAUDE.md entry for the full audit
+// this was built for. `UniqueCardCount` on `redemptionCube.json`/
+// `cohortCube.json` is a PER-ROW distinct count; summing it across more
+// than one row (which is what almost every chart/KPI does, since almost
+// none narrow to exactly one cube row) silently double-counts any card
+// that appears in more than one of those rows. A `Set` over real
+// `CardNumber` values has no such failure mode regardless of how many
+// underlying rows a card spans. Always excludes `Head === 'Cancellation'`
+// rows — the same "amount nets cancellations in, count excludes them"
+// convention already established dashboard-wide (e.g. Card Journey's own
+// `redeemedCount`) — a cancellation is a reversal event, not a second
+// distinct card to count.
+export function exactCardCount(rows) {
+  const seen = new Set()
+  for (const r of rows) {
+    if (r.Head === 'Cancellation') continue
+    seen.add(r.CardNumber)
+  }
+  return seen.size
+}
+
+// Per-bucket exact counts — for every "by Region"/"by Head"/"by Format"/
+// etc. breakdown that used to pair a `groupSum(..., ['UniqueCardCount'])`
+// count with its own amount. Each bucket's `count` is computed
+// independently via `exactCardCount()` on just that bucket's own rows —
+// deliberately NOT required to sum to a single "total distinct count",
+// the same accepted tension `netBucketsProportionally()`'s amount-side
+// folding exists to sidestep for amounts (a card appearing in 2 buckets
+// is a real, meaningful fact for a *count* breakdown, not a bug to paper
+// over — e.g. a card redeemed at both Box Office and F&B in the same
+// period is correctly 1 toward each bucket's own count).
+// 2026-09-16 perf fix: this used to be `buckets.map(b => exactCardCount(
+// rows.filter(b.predicate)))` — one full `.filter()` pass over `rows` PLUS
+// one more pass (building the Set) per bucket, so a caller with B buckets
+// walked a multi-million-row array 2*B times. Card Journey calls this (and
+// the sibling exactWeekSlotCardCounts below) upward of a dozen times per
+// render once its row-level pool is ready, which made CardJourney.jsx
+// perform 40+ full passes over ~2.1M-row arrays per render — confirmed via
+// Playwright instrumentation as the cause of a 10-20+ second render hang
+// (see the 2026-09-16 CLAUDE.md entry). Rewritten to a single pass over
+// `rows`, testing every bucket's predicate per row and adding to that
+// bucket's own Set — same O(rows × buckets) predicate-evaluation count
+// (unavoidable, since each row genuinely needs checking against each
+// bucket), but exactly ONE array traversal instead of 2*B, with no
+// intermediate `.filter()` array allocations.
+export function exactCardCountByBucket(rows, buckets) {
+  const sets = buckets.map(() => new Set())
+  for (const r of rows) {
+    if (r.Head === 'Cancellation') continue
+    for (let i = 0; i < buckets.length; i++) {
+      if (buckets[i].predicate(r)) sets[i].add(r.CardNumber)
+    }
+  }
+  return buckets.map((b, i) => ({ key: b.key, count: sets[i].size }))
+}
+
+// Single-key variant of exactCardCountByBucket(), for the case where every
+// row belongs to exactly one bucket determined by one derived value (e.g.
+// fiscal year) rather than N independent predicates to test per row — e.g.
+// Card Journey's Year-on-Year chart, which used to run exactCardCountByBucket
+// with one predicate per FY (each calling fyOf() again), tripling the
+// per-row work for no reason once every bucket is really just "group by
+// keyFn(row)". Calls `keyFn` exactly once per row instead of once per
+// bucket per row.
+export function exactCardCountByKey(rows, keyFn) {
+  const sets = new Map()
+  for (const r of rows) {
+    if (r.Head === 'Cancellation') continue
+    const key = keyFn(r)
+    if (key == null) continue
+    let s = sets.get(key)
+    if (!s) {
+      s = new Set()
+      sets.set(key, s)
+    }
+    s.add(r.CardNumber)
+  }
+  return Object.fromEntries([...sets].map(([k, s]) => [k, s.size]))
+}
+
+// Exact-count counterpart to weekSlotBreakdown()'s own Weekday/Weekend
+// split — shared by Overview.jsx/Trends.jsx/CardJourney.jsx, whichever of
+// them has a row-level pool loaded, so a Weekday/Weekend card count can be
+// merged into weekSlotBreakdown()'s own (amount-correct) output without
+// re-deriving the weekend/weekday split a second time.
+// 2026-09-16 perf fix: same single-pass rewrite as exactCardCountByBucket
+// above (was 2 separate `.filter()` + Set-build passes).
+export function exactWeekSlotCardCounts(rows) {
+  const weekday = new Set()
+  const weekend = new Set()
+  for (const r of rows) {
+    if (r.Head === 'Cancellation') continue
+    ;(WEEKEND_DAYS.has(r.Weekday) ? weekend : weekday).add(r.CardNumber)
+  }
+  return { Weekday: weekday.size, Weekend: weekend.size }
+}
+
 export function groupSum(rows, keyField, valueFields) {
   const map = new Map()
   for (const r of rows) {

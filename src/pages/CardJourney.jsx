@@ -1,7 +1,20 @@
 import React, { useEffect, useMemo } from 'react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell, LabelList } from 'recharts'
 import { useFilters } from '../lib/FilterContext'
-import { sumBy, groupSum, weekSlotBreakdown, netBucketsProportionally, netHeadRows, netCinemaRedemption, REAL_HEAD_BUCKETS, isCancellationRow } from '../lib/aggregate'
+import {
+  sumBy,
+  groupSum,
+  weekSlotBreakdown,
+  netBucketsProportionally,
+  netHeadRows,
+  netCinemaRedemption,
+  REAL_HEAD_BUCKETS,
+  isCancellationRow,
+  exactCardCount,
+  exactCardCountByBucket,
+  exactCardCountByKey,
+  exactWeekSlotCardCounts
+} from '../lib/aggregate'
 import {
   computeComparisons,
   computeCohortComparisons,
@@ -77,9 +90,11 @@ export default function CardJourney() {
     loadCohortCube,
     cohortLoading,
     cohortError,
-    cardJourneyRowLevelFiltered,
-    cardJourneyRowLevelReady,
-    loadCardJourneyRowLevel
+    cohortRowLevelFiltered,
+    cohortRowLevelByActivation,
+    cohortRowLevelAllFY,
+    redemptionRowLevelReady,
+    loadRedemptionRowLevel
   } = useFilters()
 
   // 2026-08-28: MTD/QTD(Q1-Q4 dropdown)/YTD preset control, brought up to
@@ -111,15 +126,15 @@ export default function CardJourney() {
     loadCohortCube()
   }, [loadCohortCube])
 
-  // 2026-09-07: same lazy-on-visit treatment as cohortCube.json above —
-  // see FilterContext.jsx#loadCardJourneyRowLevel's own doc comment for
-  // why this file is parsed with hyparquet rather than a live query
-  // engine, and filterCardJourneyRowLevel()'s doc comment for exactly
-  // what it fixes (the "Of Those, Redeemed" card count's own inflated
-  // sum-of-per-row-UniqueCardCount bug).
+  // 2026-09-07, upgraded 2026-09-16: same lazy-on-visit treatment as
+  // cohortCube.json above — see FilterContext.jsx's `redemption_rowlevel
+  // .parquet` doc comment for why this file is parsed with hyparquet
+  // rather than a live query engine, and for exactly what it fixes (every
+  // "sum of per-row UniqueCardCount" inflation risk on this page, not just
+  // the headline anymore).
   useEffect(() => {
-    loadCardJourneyRowLevel()
-  }, [loadCardJourneyRowLevel])
+    loadRedemptionRowLevel()
+  }, [loadRedemptionRowLevel])
 
   // "Activated in This Period" — identical computation to Overview's own
   // headline Activation KPI (same activationRows pool), unchanged.
@@ -149,26 +164,23 @@ export default function CardJourney() {
   // than totalActivationCount, that's a real bug, not expected variance.
   const redeemedAmount = sumBy(cohortRows, 'RedemptionAmount')
   const redeemedNonCancelRows = useMemo(() => cohortRows.filter((r) => !isCancellationRow(r)), [cohortRows])
-  // 2026-09-07 fix: `sumBy(..., 'UniqueCardCount')` sums a PER-ROW distinct
-  // count across however many cohortCube.json rows match the current
-  // filter — silently double-counting any card whose own redemption rows
-  // span more than one of those rows (e.g. across 2 regions in the same
-  // period). Replaced with an exact `COUNT(DISTINCT CardNumber)` over
-  // `cardJourneyRowLevel.parquet`'s row-level data (see
-  // FilterContext.jsx#filterCardJourneyRowLevel's own doc comment for the
-  // full root-cause/fix writeup and the 2026-09-07 CLAUDE.md entry for the
-  // verified before/after figures) whenever that data is loaded and the
-  // active filters are ones it can support (`cardJourneyRowLevelReady` —
-  // false while the ~13MB file is still fetching, or when Activation
-  // Source/Card Type/Week/Weekday is active, since those 4 fields don't
-  // exist on the row-level file) — falling back to the old approximate sum
-  // otherwise, exactly like every other lazy-loaded pool on this page
-  // starts empty/approximate before its own fetch resolves.
+  // 2026-09-07 fix, upgraded 2026-09-16: `sumBy(..., 'UniqueCardCount')`
+  // sums a PER-ROW distinct count across however many cohortCube.json rows
+  // match the current filter — silently double-counting any card whose own
+  // redemption rows span more than one of those rows (e.g. across 2
+  // regions in the same period). Replaced with an exact `COUNT(DISTINCT
+  // CardNumber)` over `redemption_rowlevel.parquet`'s row-level data
+  // (`cohortRowLevelFiltered` — FilterContext.jsx's cohort-scoped exact
+  // pool) via the shared `exactCardCount()` helper (lib/aggregate.js) —
+  // see the 2026-09-07/2026-09-16 CLAUDE.md entries for the verified
+  // before/after figures. `redemptionRowLevelReady` gates only on the file
+  // being loaded now (no filter-support fallback needed since 2026-09-16 —
+  // the upgraded row-level file has full parity with every filter this
+  // page has).
   const redeemedCountExact = useMemo(() => {
-    if (!cardJourneyRowLevelReady) return null
-    const rows = cardJourneyRowLevelFiltered.filter((r) => r.Head !== 'Cancellation')
-    return new Set(rows.map((r) => r.CardNumber)).size
-  }, [cardJourneyRowLevelFiltered, cardJourneyRowLevelReady])
+    if (!redemptionRowLevelReady) return null
+    return exactCardCount(cohortRowLevelFiltered)
+  }, [cohortRowLevelFiltered, redemptionRowLevelReady])
   const redeemedCount = redeemedCountExact != null ? redeemedCountExact : sumBy(redeemedNonCancelRows, 'UniqueCardCount')
 
   const samePeriodRedemptionRate = totalActivation > 0 ? (redeemedAmount / totalActivation) * 100 : NaN
@@ -348,19 +360,51 @@ export default function CardJourney() {
   // netHeadRows() calls below, but reusing the one pool for both keeps
   // this page's netting inputs from ever drifting apart on which alias
   // they saw.
+  // 2026-09-16: card counts for these 4 flow-diagram nodes switched from
+  // netHeadRows()'s own summed UniqueCardCount (a per-row distinct count,
+  // inflation-prone the same way every other UniqueCardCount sum on this
+  // page used to be) to an exact COUNT(DISTINCT CardNumber) over
+  // `cohortRowLevelFiltered` — same pool, same filter state as the
+  // headline "Of Those, Redeemed" fix, just filtered further by Head. No
+  // netting/attribution logic is needed for a count the way it is for an
+  // amount: `exactCardCount()` already excludes Cancellation rows entirely
+  // (the established "count excludes cancellations, amount nets them in"
+  // convention), so the exact count is simply "distinct cards with a real
+  // row for this Head," never a proportional/winner-map guess. Amount
+  // fields are completely untouched — still netHeadRows()/
+  // netCinemaRedemption()'s own figures.
+  // 2026-09-16 perf fix: was 4 separate `.filter()` + `exactCardCount()`
+  // calls (8 full passes over the row-level pool) — collapsed to one
+  // exactCardCountByBucket() call, a single pass. See lib/aggregate.js's
+  // own doc comment on that function for why this mattered (this was one
+  // of ~10 such call sites on this page compounding into a 10-20+ second
+  // render hang).
+  const cohortHeadExactCounts = useMemo(() => {
+    if (!redemptionRowLevelReady) return null
+    const buckets = exactCardCountByBucket(cohortRowLevelFiltered, [
+      { key: 'Online', predicate: (r) => r.Head === 'Online' },
+      { key: 'Box Office', predicate: (r) => r.Head === 'Box Office' },
+      { key: 'F&B', predicate: (r) => r.Head === 'F&B' },
+      { key: 'Cinema', predicate: (r) => r.Head === 'Box Office' || r.Head === 'F&B' }
+    ])
+    return Object.fromEntries(buckets.map((b) => [b.key, b.count]))
+  }, [cohortRowLevelFiltered, redemptionRowLevelReady])
   const cohortOnlineHead = useMemo(() => {
     const rows = netHeadRows(cohortRowsForNetting, 'Online')
-    return { RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: sumBy(rows, 'UniqueCardCount') }
-  }, [cohortRowsForNetting])
+    return { RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: cohortHeadExactCounts?.Online ?? sumBy(rows, 'UniqueCardCount') }
+  }, [cohortRowsForNetting, cohortHeadExactCounts])
   const cohortBoxOfficeHead = useMemo(() => {
     const rows = netHeadRows(cohortRowsForNetting, 'Box Office')
-    return { RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: sumBy(rows, 'UniqueCardCount') }
-  }, [cohortRowsForNetting])
+    return { RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: cohortHeadExactCounts?.['Box Office'] ?? sumBy(rows, 'UniqueCardCount') }
+  }, [cohortRowsForNetting, cohortHeadExactCounts])
   const cohortFnbHead = useMemo(() => {
     const rows = netHeadRows(cohortRowsForNetting, 'F&B')
-    return { RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: sumBy(rows, 'UniqueCardCount') }
-  }, [cohortRowsForNetting])
-  const cohortCinemaTotal = useMemo(() => netCinemaRedemption(cohortRowsForNetting), [cohortRowsForNetting])
+    return { RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: cohortHeadExactCounts?.['F&B'] ?? sumBy(rows, 'UniqueCardCount') }
+  }, [cohortRowsForNetting, cohortHeadExactCounts])
+  const cohortCinemaTotal = useMemo(() => {
+    const base = netCinemaRedemption(cohortRowsForNetting)
+    return { ...base, UniqueCardCount: cohortHeadExactCounts?.Cinema ?? base.UniqueCardCount }
+  }, [cohortRowsForNetting, cohortHeadExactCounts])
 
   // ---- "Year-on-Year: Activated vs. Redeemed" ----
   // Activation side is Overview's own computation verbatim — same
@@ -385,20 +429,37 @@ export default function CardJourney() {
     () => cohortRowsAllFY.filter((r) => fyOf(r.ActivationYearMonth) === fyOf(r.RedemptionYearMonth)),
     [cohortRowsAllFY]
   )
+  // Row-level counterpart to cohortYoyByFY above — same same-FY constraint
+  // (fyOf(ActivationYearMonth) === fyOf(YearMonth), the row-level pool's
+  // own name for the redemption-event month), built from
+  // `cohortRowLevelAllFY` (FilterContext.jsx) rather than `cohortRowsAllFY`.
+  const cohortYoyByFYRowLevel = useMemo(
+    () => cohortRowLevelAllFY.filter((r) => fyOf(r.ActivationYearMonth) === fyOf(r.YearMonth)),
+    [cohortRowLevelAllFY]
+  )
+  // 2026-09-16 perf fix: the exact-count branch used to re-filter
+  // cohortYoyByFYRowLevel once per FY inside the outer .map() (2 full
+  // passes per FY) — precomputed once via a single exactCardCountByBucket()
+  // pass (one bucket per FY actually present), looked up per FY below.
+  const yoyExactByFY = useMemo(() => {
+    if (!redemptionRowLevelReady) return null
+    return exactCardCountByKey(cohortYoyByFYRowLevel, (row) => fyOf(row.ActivationYearMonth))
+  }, [cohortYoyByFYRowLevel, redemptionRowLevelReady])
   const yoyByFY = useMemo(() => {
     const fys = [...new Set([...activationRowsAllFY.map((r) => fyOf(r.YearMonth)), ...cohortYoyByFY.map((r) => fyOf(r.ActivationYearMonth))])].sort()
     return fys.map((fy) => {
       const actRows = activationRowsAllFY.filter((r) => fyOf(r.YearMonth) === fy)
       const redRows = cohortYoyByFY.filter((r) => fyOf(r.ActivationYearMonth) === fy)
+      const exactCount = yoyExactByFY?.[fy] ?? null
       return {
         fy,
         Activation: sumBy(actRows, 'ActivationAmount'),
         ActivationCount: sumBy(actRows, 'ActivationCount'),
         Redemption: sumBy(redRows, 'RedemptionAmount'),
-        RedemptionCardCount: sumBy(redRows, 'UniqueCardCount')
+        RedemptionCardCount: exactCount != null ? exactCount : sumBy(redRows, 'UniqueCardCount')
       }
     })
-  }, [activationRowsAllFY, cohortYoyByFY])
+  }, [activationRowsAllFY, cohortYoyByFY, yoyExactByFY])
 
   // 2026-08-15: was a plain groupSum(cohortRows, 'Head', ...) including
   // Cancellation as its own 4th bar — Cancellation should only ever be a
@@ -408,10 +469,12 @@ export default function CardJourney() {
   // to "Of Those, Redeemed" above, by construction — that KPI is
   // sumBy(cohortRows, 'RedemptionAmount'), the same total this netting
   // redistributes without dropping or double-counting any of it.
-  const byHead = useMemo(
-    () => netBucketsProportionally(cohortRows, REAL_HEAD_BUCKETS, isCancellationRow, 'RedemptionAmount', 'UniqueCardCount'),
-    [cohortRows]
-  )
+  const byHead = useMemo(() => {
+    const base = netBucketsProportionally(cohortRows, REAL_HEAD_BUCKETS, isCancellationRow, 'RedemptionAmount', 'UniqueCardCount')
+    if (!redemptionRowLevelReady) return base
+    const exact = exactCardCountByBucket(cohortRowLevelFiltered, REAL_HEAD_BUCKETS)
+    return base.map((b) => ({ ...b, UniqueCardCount: exact.find((e) => e.key === b.key)?.count ?? b.UniqueCardCount }))
+  }, [cohortRows, cohortRowLevelFiltered, redemptionRowLevelReady])
 
   // ---- 2026-08-23 additions ----
   // THE ONE RULE for every chart below: Activation-side series come from
@@ -434,10 +497,12 @@ export default function CardJourney() {
     () => bucketSum(activationRows, ACTIVATION_REGION_ONLY_BUCKETS, 'ActivationAmount', 'ActivationCount'),
     [activationRows]
   )
-  const redemptionByRegion = useMemo(
-    () => bucketSum(cohortRows, REDEMPTION_REGION_ONLY_BUCKETS, 'RedemptionAmount', 'UniqueCardCount'),
-    [cohortRows]
-  )
+  const redemptionByRegion = useMemo(() => {
+    const base = bucketSum(cohortRows, REDEMPTION_REGION_ONLY_BUCKETS, 'RedemptionAmount', 'UniqueCardCount')
+    if (!redemptionRowLevelReady) return base
+    const exact = exactCardCountByBucket(cohortRowLevelFiltered, REDEMPTION_REGION_ONLY_BUCKETS)
+    return base.map((b) => ({ ...b, UniqueCardCount: exact.find((e) => e.key === b.key)?.count ?? b.UniqueCardCount }))
+  }, [cohortRows, cohortRowLevelFiltered, redemptionRowLevelReady])
   const activationBySource = useMemo(
     () => bucketSum(activationRows, ACTIVATION_SOURCE_ONLY_BUCKETS, 'ActivationAmount', 'ActivationCount'),
     [activationRows]
@@ -454,29 +519,51 @@ export default function CardJourney() {
   // by Region" this chart's own 2 bars reconcile exactly to "Of Those,
   // Redeemed" (redeemedAmount) by construction — verified against the raw
   // cube before writing this (see CLAUDE.md).
-  const redemptionBySource = useMemo(
-    () =>
-      REDEMPTION_MODES.map(({ key, modes }) => {
-        const rows = cohortRows.filter((r) => modes.includes(r.RedemptionModeFinal))
-        return { key, RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: sumBy(rows, 'UniqueCardCount') }
-      }).filter((r) => r.RedemptionAmount !== 0),
-    [cohortRows]
-  )
+  // 2026-09-16 perf fix: the redemptionRowLevelReady branch used to
+  // re-filter cohortRowLevelFiltered once per REDEMPTION_MODES key (2
+  // full passes + 2 Set-build passes) — collapsed to one
+  // exactCardCountByBucket() call, a single pass.
+  const redemptionBySource = useMemo(() => {
+    const base = REDEMPTION_MODES.map(({ key, modes }) => {
+      const rows = cohortRows.filter((r) => modes.includes(r.RedemptionModeFinal))
+      return { key, RedemptionAmount: sumBy(rows, 'RedemptionAmount'), UniqueCardCount: sumBy(rows, 'UniqueCardCount') }
+    }).filter((r) => r.RedemptionAmount !== 0)
+    if (!redemptionRowLevelReady) return base
+    const exact = exactCardCountByBucket(
+      cohortRowLevelFiltered,
+      REDEMPTION_MODES.map(({ key, modes }) => ({ key, predicate: (r) => modes.includes(r.RedemptionModeFinal) }))
+    )
+    return base.map((b) => ({ ...b, UniqueCardCount: exact.find((e) => e.key === b.key)?.count ?? b.UniqueCardCount }))
+  }, [cohortRows, cohortRowLevelFiltered, redemptionRowLevelReady])
   const weekdayTrend = useMemo(() => {
     const act = groupSum(activationRows, 'Weekday', ['ActivationAmount', 'ActivationCount'])
     const red = groupSum(cohortRows, 'Weekday', ['RedemptionAmount', 'UniqueCardCount'])
+    const exactByWeekday = redemptionRowLevelReady
+      ? exactCardCountByBucket(
+          cohortRowLevelFiltered,
+          WEEKDAY_ORDER.map((w) => ({ key: w, predicate: (r) => r.Weekday === w }))
+        )
+      : null
     return orderBy([...new Set([...act.map((r) => r.key), ...red.map((r) => r.key)])], WEEKDAY_ORDER).map((w) => ({
       key: w,
       Activation: act.find((r) => r.key === w)?.ActivationAmount || 0,
       ActivationCount: act.find((r) => r.key === w)?.ActivationCount || 0,
       Redemption: red.find((r) => r.key === w)?.RedemptionAmount || 0,
-      RedemptionCardCount: red.find((r) => r.key === w)?.UniqueCardCount || 0
+      RedemptionCardCount: exactByWeekday ? exactByWeekday.find((e) => e.key === w)?.count || 0 : red.find((r) => r.key === w)?.UniqueCardCount || 0
     }))
-  }, [activationRows, cohortRows])
+  }, [activationRows, cohortRows, cohortRowLevelFiltered, redemptionRowLevelReady])
   // Same weekSlotBreakdown() Overview.jsx/Trends.jsx already share — called
   // with cohortRows as the "redemption rows" argument instead of the main
-  // redemptionCube-derived pool, per the one rule above.
-  const cohortWeekSlot = useMemo(() => weekSlotBreakdown(activationRows, cohortRows), [activationRows, cohortRows])
+  // redemptionCube-derived pool, per the one rule above. RedemptionCardCount
+  // merged in from exactWeekSlotCardCounts() (lib/aggregate.js), the exact
+  // counterpart shared by all 3 pages — amount fields are weekSlotBreakdown's
+  // own, untouched.
+  const cohortWeekSlot = useMemo(() => {
+    const base = weekSlotBreakdown(activationRows, cohortRows)
+    if (!redemptionRowLevelReady) return base
+    const exact = exactWeekSlotCardCounts(cohortRowLevelFiltered)
+    return base.map((s) => ({ ...s, RedemptionCardCount: exact[s.slot] ?? s.RedemptionCardCount }))
+  }, [activationRows, cohortRows, cohortRowLevelFiltered, redemptionRowLevelReady])
 
   // ---- Bonus: spillover ---- cards activated in the selected period,
   // grouped by whichever month they actually got redeemed in — including
@@ -542,6 +629,19 @@ export default function CardJourney() {
     [cohortRowsByActivation]
   )
 
+  // 2026-09-16: exact per-month card counts for the spillover tail, from
+  // `cohortRowLevelByActivation` (FilterContext.jsx) grouped by the row's
+  // own `YearMonth` — that file's field name for the redemption event's own
+  // month (the row-level counterpart to cohortRowsByActivation's
+  // `RedemptionYearMonth`).
+  const spilloverExactByMonth = useMemo(() => {
+    if (!redemptionRowLevelReady) return null
+    const months = [...new Set(cohortRowLevelByActivation.map((r) => r.YearMonth))]
+    return exactCardCountByBucket(
+      cohortRowLevelByActivation,
+      months.map((m) => ({ key: m, predicate: (r) => r.YearMonth === m }))
+    )
+  }, [cohortRowLevelByActivation, redemptionRowLevelReady])
   const spillover = useMemo(() => {
     const actByMonth = groupSum(activationRows, 'YearMonth', ['ActivationAmount', 'ActivationCount'])
     const redByMonth = groupSum(cohortRowsByActivation, 'RedemptionYearMonth', ['RedemptionAmount', 'UniqueCardCount'])
@@ -552,18 +652,19 @@ export default function CardJourney() {
       const redemptionAmount = red?.RedemptionAmount || 0
       const activationAmount = act?.ActivationAmount || 0
       const sameMonthRedeemed = sameMonthByActivation.find((r) => r.key === m)?.RedemptionAmount || 0
+      const exactCount = spilloverExactByMonth?.find((e) => e.key === m)?.count
       return {
         key: m,
         label: monthLabel(m),
         Activation: activationAmount,
         ActivationCount: act?.ActivationCount || 0,
         Redemption: redemptionAmount,
-        RedemptionCardCount: red?.UniqueCardCount || 0,
+        RedemptionCardCount: exactCount != null ? exactCount : red?.UniqueCardCount || 0,
         SameMonthRedeemed: sameMonthRedeemed,
         SameMonthPct: activationAmount ? (sameMonthRedeemed / activationAmount) * 100 : null
       }
     })
-  }, [activationRows, cohortRowsByActivation, sameMonthByActivation])
+  }, [activationRows, cohortRowsByActivation, sameMonthByActivation, spilloverExactByMonth])
 
   // 2026-08-24 fix: `spillover.length` (total categories, activation +
   // spillover-only tail months) is the wrong density signal for the

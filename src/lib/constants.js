@@ -127,10 +127,27 @@ export const NONE_SELECTED = '__none_selected__'
 // needs no code change here, just more months in the cube. Indian FY runs
 // April to March, so a calendar month belongs to the FY that starts the
 // most recent April on or before it.
+// 2026-09-16 perf fix: memoized — `yearMonth` is always a real data field
+// value (a `YearMonth`/`ActivationYearMonth`/etc. string), and the whole
+// dataset only ever has a few dozen distinct such strings, so this cache
+// can never grow unbounded. Pure function, same output for the same
+// input every time, so caching changes nothing about behavior. Added
+// because the new row-level parquet pools (up to ~2.2M rows) call this
+// per row, sometimes 2-3x per row (e.g. Card Journey's Year-on-Year exact
+// counts) — at that volume, the string-split/array-map/template-literal
+// work this function used to redo on every single call was the dominant
+// cost behind a 10-20+ second render hang (confirmed via direct timing
+// instrumentation, see the 2026-09-16 CLAUDE.md entry) — memoizing
+// collapses millions of calls down to a few dozen real computations.
+const FY_OF_CACHE = new Map()
 export function fyOf(yearMonth) {
+  const cached = FY_OF_CACHE.get(yearMonth)
+  if (cached !== undefined) return cached
   const [y, m] = yearMonth.split('-').map(Number)
   const startYear = m >= 4 ? y : y - 1
-  return `FY${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`
+  const result = `FY${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`
+  FY_OF_CACHE.set(yearMonth, result)
+  return result
 }
 
 export function orderBy(values, order) {

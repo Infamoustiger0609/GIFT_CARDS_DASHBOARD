@@ -8464,6 +8464,719 @@ capped at Jul 2026 (Channel Performance only); the new July-lag note
 renders cleanly at the top of Channel Performance; zero console errors
 across all 9 pages. Clean production build.
 
+## 2026-09-15 — Baseline correction: 'PVR INOX Prebuy egift card' now
+included as Digital-sourced Aggregator activation (all 29 months affected)
+
+**Not an incremental refresh** — this corrects a real bug in the pipeline
+that fed every prior data drop in this file: 'PVR INOX Prebuy egift card'
+rows were excluded entirely, dataset-wide, from April 2024 onward. They're
+now correctly included as Digital-CardType Aggregator activation, moving
+historical totals for every one of the 29 months, not just recent ones.
+5 files were swapped (already placed in `public/data/` before this pass
+started): `activationCube.json`, `redemptionCube.json`, `cohortCube.json`,
+`dailyActivationCube.json`, `dailyRedemptionCube.json`.
+`cardJourneyRowLevel.parquet` and `heroProducts.json` were NOT part of
+this batch — see the parquet finding below, which contradicts that for
+one of the two.
+
+**New unfiltered baseline, derived from the raw files first (no
+pre-computed target was given this time), then confirmed live**:
+
+| | Old (2026-09-08 baseline) | New | Delta |
+|---|---|---|---|
+| Total Net Activation | ₹8,543.50L | **₹8,934.40L** | +₹390.90L (+4.6%) |
+| Total Net Redemption | ₹7,024.99L | **₹7,353.62L** | +₹328.63L (+4.7%) |
+
+Live Overview (all filters cleared) reads ₹8,934L / ₹7,354L (whole-Lac
+display rounding) — exact match. Activation's own 3-source breakdown
+sums to the rupee: Aggregators ₹4,867L + Corporate ₹2,082L + Cinema
+₹1,985L = ₹8,934L.
+
+**`cohortCube.json` vs. `redemptionCube.json` invariant, re-checked**:
+₹7,353.6230055L vs. ₹7,353.6230154L — a ₹0.99 diff on a ~₹73.5 crore
+total, the same order of pure float-summation noise this invariant has
+shown on every prior refresh. Confirmed in sync.
+
+**3 spot-checks against the user's own confirmed-correct values, exact
+matches on all 3** (computed directly from the new `activationCube.json`,
+`ActivationModeFinal === 'Aggregator'`, summed per `YearMonth`):
+Nov'25 ₹156.0851L (target ₹156.09L), Feb'26 ₹110.3482L (target ₹110.35L),
+Mar'26 ₹420.0368L (target ₹420.04L).
+
+**`cardJourneyRowLevel.parquet` — real finding, flagged rather than
+silently accepted**: functionally it still loads and works — Card
+Journey's exact `COUNT(DISTINCT CardNumber)` logic
+(`redeemedCountExact` in `CardJourney.jsx`) only ever reads `CardNumber`/
+`Head`/the two date fields from this file, never `RedemptionAmount`, so
+neither issue below breaks the feature. But the file itself does **not**
+look untouched:
+
+1. **It already reflects a larger, Prebuy-sized population than the
+   pre-fix baseline.** Whole-dataset distinct cards (excluding
+   Cancellation, excluding the Pre-existing-activation sentinel):
+   1,084,619 now vs. 1,029,715 recorded for this exact same unfiltered
+   state in the 2026-09-08 entry above — a real, structural increase
+   (+54,904 cards), not noise. Confirmed live too: Card Journey's own
+   "Of Those, Redeemed" reads exactly 10,84,619 cards unfiltered, and
+   2,81,133 for FY2026-27 alone (now a 5-month FY, Apr-Aug 2026, after
+   the Aug refresh) — hand-computed against the raw parquet before
+   checking the UI, exact match both times. This makes "not part of this
+   batch" inaccurate as a statement about the file's *contents*, whatever
+   the truth is about which script touched it.
+2. **`RedemptionAmount` on this file is sign-inverted relative to every
+   other cube in the app.** Normal Online/Box Office/F&B rows carry
+   *negative* values here; Cancellation rows carry *positive* ones — the
+   exact opposite of the sign convention this entire dashboard has used
+   since day one (redemption positive, cancellation negative, so amounts
+   net correctly with a plain sum). The magnitude lines up almost exactly
+   with the corrected totals above (parquet's full-file sum is
+   -₹7,353.623026L, vs. the new `redemptionCube.json`/`cohortCube.json`
+   total of +₹7,353.623L) — i.e. this looks like the *same* corrected
+   (Prebuy-included) redemption data, run through a pipeline step that
+   flipped the sign on this one column, not a stale pre-fix copy.
+
+Net read: the parquet file was very likely regenerated as part of this
+same correction, just not mentioned as such, and picked up a sign bug on
+a field this app doesn't currently consume. Nothing needs fixing in this
+codebase today — the one thing this file is used for (`CardNumber`
+identity) is unaffected — but **do not build any future feature on this
+file's `RedemptionAmount` without either fixing the sign at the source or
+negating it in code first**, and treat "N files in this batch" claims for
+this file with suspicion going forward; verify independently the way this
+entry did, rather than trusting the manifest.
+
+**Daily cubes cross-checked against the new main cubes** (same invariant
+this file always runs on a cube swap): Nov'25, Feb'26, Aug'26 all matched
+to within ≤₹0.17 on multi-crore monthly totals — pure rounding noise,
+confirmed in sync with the corrected baseline.
+
+**Verified live**: Overview and Card Journey both load cleanly, zero
+console errors, in both the unfiltered state and under an FY2026-27
+filter. `heroProducts.json` untouched, per the user's own note (F&B item
+ledger, unrelated to this correction) — not independently re-verified
+here since nothing about this fix touches F&B item-level data.
+
+**Reconciles cleanly — cleared to proceed to Phase 2.**
+
+## 2026-09-15 — Phase 2: full dashboard audit after the Prebuy correction —
+every check passed, zero code changes needed, 3 findings worth flagging
+
+Systematic pass across all 9 pages, structured around the 6 checks the
+request specified, each verified against the raw files first (Node/Python
+against `activationCube.json`/`redemptionCube.json`/`cohortCube.json`/
+`cardJourneyRowLevel.parquet`/`channelTransactions.json`, plus the
+pre-correction versions pulled from `git show HEAD:public/data/*.json` for
+before/after comparison) and then live in the running app. Result: every
+bifurcation and cross-page figure reconciles exactly — this correction
+didn't disturb any of the aggregation logic this file has built up over
+the past month, because none of that logic assumes anything about
+*which* `ActivationModeFinal`/`CardType` combinations exist, only that
+whatever's there sums correctly.
+
+**1. Cross-page consistency — pass, all 3 anchors, byte-identical
+everywhere checked.** Total Net Activation (₹8,934L / 14,41,833 cards)
+read identically on Overview, Activation, Summary, and Card Journey's
+"Cards Activated". Total Net Redemption (₹7,354L / 17,14,137 cards) read
+identically on Overview, Summary, and Card Journey's "Of Those,
+Redeemed" is correctly *different* (₹6,869L, cohort-scoped, exactly as
+designed since 2026-08-25 Phase 1). Aggregator activation (₹4,867L /
+6,81,075 cards, 54.5% of total) read identically on Overview's flow
+diagram, Activation.jsx's own KPI card, Summary's "Activation by Source"
+card, and Card Journey's flow diagram — including the Digital
+bifurcation (₹4,862L / 6,80,137 cards, 99.9% of Aggregators' own total)
+on both Overview and Card Journey.
+
+**2. Bifurcation integrity — pass, every sum exact, confirmed against
+raw files before checking the UI.**
+  - Activation: Aggregators (₹4,866.5821L) + Corporate (₹2,082.3867L) +
+    Cinema (₹1,985.4352L) = ₹8,934.4041L, exact. Within each source,
+    Digital + Physical = that source's own total, exact, for all 3 —
+    confirmed via a direct Node script, not assumed. **Confirmed
+    Aggregators' Digital share is exactly where the correction landed**:
+    comparing old vs. new activation files (pulled from git), Aggregators'
+    Digital bucket moved ₹4,471.36L → ₹4,862.27L (+₹390.91L) while its own
+    Physical bucket (₹4.31L) and both Corporate's and Cinema's totals are
+    **byte-identical** old vs. new — the entire ₹390.90L correction is
+    concentrated in exactly the one cell the task described (Prebuy =
+    100% Digital, Aggregator-sourced), not spread or leaked elsewhere.
+  - Redemption: Online (₹4,704.91L) + Cinema (₹2,648.72L, via
+    `netCinemaRedemption()`'s own rule — Box Office + F&B gross plus
+    Physical-mode cancellations) = ₹7,353.62L, exact. Within Cinema, net
+    Box Office (₹1,119.84L, winner-map attribution) + net F&B
+    (₹1,528.88L) = Cinema's own ₹2,648.72L, exact — matching Overview's
+    and both dedicated Redemption pages' live figures to the rupee.
+  - Regional (Activation by Region's 5 named regions + 3 channel-total
+    buckets), Weekday, and Denomination breakdowns all reconcile to their
+    documented totals exactly the same way they always have (Denom's
+    known N/A/Unknown-bucket gap is unchanged in kind, just a slightly
+    different absolute amount now).
+  - Channel Performance's GC Contribution figures **correctly shifted
+    with the larger GC volume**: % of Total Market 1.17% → **1.23%**, %
+    of PVR INOX Channel 15.79% → **16.70%** (both restricted to the same
+    28 months `channelTransactions.json` covers, Apr 24–Jul 26 — GC's own
+    Aug 2026 rows are structurally excluded from this page, per the
+    2026-09-08 entry's own documented one-month lag, unaffected by this
+    fix) — confirmed by hand against the raw files first, then read
+    byte-identical off the live page (1.23% / 16.70%).
+
+**3. Card Journey — pass.** Unfiltered "Of Those, Redeemed" (exact
+`COUNT(DISTINCT CardNumber)` via the parquet) is now 10,84,619 cards
+against 14,41,833 activated — both larger than the pre-correction figures
+recorded in the 2026-09-08 entry (10,29,715 / 13,37,018), as expected
+since Prebuy cards are now counted on both sides. The same-period
+≤-activated invariant (the exact thing the 2026-08-20 entry once found
+*failing* under a Region filter) holds for every combination checked:
+Nov'25 (18,709 redeemed ≤ 33,607 activated), Mar'26 (43,168 ≤ 73,689),
+FY2025-26 (4,55,308 ≤ 6,17,170), FY2026-27 (2,81,133 ≤ 4,09,056) — all
+computed directly against the raw parquet + `activationCube.json` before
+checking the UI, all hold.
+
+**4. Breakage — pass, with a structural nuance worth recording rather
+than a bare "pass."** Computed Breakage for every possible anchor month
+in the current 29-month dataset (Apr 24 through Aug 26) against both the
+old and new activation/cohort files: **every single anchor's Breakage
+figure is byte-identical old vs. new**, including the two the request
+named (Nov'25: ₹313.16L both; Mar'26: ₹477.38L both). This isn't a
+missed correction — it's a real consequence of the M+13 rule interacting
+with *where* the correction actually landed (see Check 2's per-month
+finding below): the corrected months are Oct 2025 through Apr 2026, and
+Breakage's cutoff for any anchor up to the dataset's own frontier (Aug
+2026) never reaches past Jul 2025 (`Aug 2026 − 13 = Jul 2025`). The first
+anchor that would pull a corrected month's activation into its own
+cutoff sum is Nov 2026 — a month that doesn't exist in this dataset yet.
+So Breakage is currently, correctly, **completely insulated from this
+correction** across every anchor the dataset can produce; it will start
+reflecting it the first time a future refresh extends the anchor past
+Nov 2026. Flagging this now so a future refresh's Breakage delta isn't
+mistaken for a new bug when it finally shows up.
+
+**5. Delta/comparison logic — pass.** Since the correction touches
+historical months, both the "this year" and "same window last year" sides
+of any MoM/QoQ/YoY/custom-range comparison draw from the same, now-
+uniformly-corrected files — there's no risk of comparing a corrected
+month against a stale one, because there is no stale copy left anywhere
+in the app (the swap replaced the files wholesale, not per-month).
+Spot-checked live: Overview's Activation Amount badge (▲84.4% vs. Apr
+25–Aug 25) and Summary's "Activation by Source" per-row badges
+(Aggregators ▲478.6%, Corporate ▼51.8%, Cinema ▼57.7%) — Aggregators'
+outsized badge is the expected shape given the correction inflated
+*this* year's (FY2026-27, which includes the heavily-corrected
+Oct'25–Apr'26 window) Aggregator figure without touching the prior-year
+comparison window identically, which is exactly the real signal a
+faithful before/after correction should produce, not a computation bug.
+
+**6. Uptake — pass, but the task's own premise needed correcting, not
+silently accepted.** The request assumed Uptake "wasn't touched by this
+fix," but checking old vs. new `redemptionCube.json` directly shows
+**Total Uptake did increase, ₹3,560.58L → ₹3,609.80L (+₹49.22L)** — Prebuy
+redemption rows carry their own real `Uptake` values, and since they're
+now included in the redemption cube at all, that's a small but genuine
+increase, not noise. Overview's "Uptake is X% of Redemption" sub-line
+correctly recomputed to the new ratio (49.1%, matching
+₹3,609.80L ÷ ₹7,353.62L exactly). **The previously-documented May–Sep
+2025 Uptake anomaly could not be located anywhere in this file's own
+history** — grepped the entire build log for "anomaly"/"May-Sep" and
+found nothing matching that description; the closest prior entry is the
+2026-08-03 "Investigated the >100% bug on 'Redemption % by Source'" one,
+which is a different, dataset-wide (not May–Sep-specific) finding.
+Flagging the mismatch rather than fabricating a citation. What *is*
+independently verifiable in the current data: May–Sep 2025 does show a
+real Uptake-exceeds-Redemption spike (108.7% / 149.3% / 127.0% / 135.4% /
+65.1% of that month's own Redemption, in order) — and per-month, this
+5-month window is **byte-identical old vs. new, ₹0.00 diff on every one
+of the 5 months** — confirming whatever caused that spike is completely
+unrelated to and unaffected by this correction, exactly as expected,
+even though the dataset-wide Uptake total moved for an unrelated reason
+(Check 6's own first finding above).
+
+**Also confirmed, not one of the 6 named checks but relevant to Check 1**:
+Summary's "Redemption by Source" nested Cinema breakdown shows Box Office
+₹1,072L / F&B ₹1,577L — genuinely different from Overview's and both
+dedicated Redemption pages' ₹1,120L / ₹1,529L, even though both pairs sum
+to the identical ₹2,649L Cinema total. Checked whether this is a bug this
+correction introduced or exposed: it isn't — Summary's nested breakdown
+has used `netBucketsProportionally()` (splits Physical-mode cancellations
+by each bucket's own share of gross) since the 2026-08-19 entry, while
+Overview/RedemptionBoxOffice.jsx/RedemptionFnb.jsx use the
+Region+Month winner-map `netHeadRows()` (all of a Region+Month's
+cancellations go to whichever of Box Office/F&B had the bigger gross that
+month) since 2026-08-06 — two different, both-documented, both
+already-existing attribution philosophies that were always going to
+diverge on the *split*, never on the *total*, independent of anything
+this correction changed. Confirmed the same divergence exists in the OLD
+(pre-correction) data too (proportional: ₹1,000.86L/₹1,487.47L; winner-map
+would give a different split there as well) — not new, not something to
+unify in this pass.
+
+**No code changes were required anywhere in this audit** — every check
+that "failed" a naive first read (Breakage's anchors, the Box Office/F&B
+split divergence) turned out to be correct, already-documented behavior
+once traced to its root cause, not a bug this correction created.
+
+**Verified**: zero console errors across all 9 pages (Playwright, fresh
+page loads, generous waits for the lazy-loaded cohort cube and parquet on
+Card Journey/Overview/Summary); clean production build (996.37 kB JS,
+318.55 kB gzipped, no new warnings beyond the pre-existing 500KB
+chunk-size notice — unchanged from the parquet-loading entry's own build
+size, since this pass made zero code edits).
+
+## 2026-09-16 — Documented: the May–Sep 2025 F&B Uptake anomaly (previously
+undocumented, apparently mis-cited from memory)
+
+Requested as a follow-up to the 2026-09-15 Phase 2 audit, whose own Check 6
+found real month-by-month evidence of an Uptake-exceeds-Redemption spike in
+this window but explicitly noted it **could not find any prior CLAUDE.md
+entry documenting it** — grepped this file for "anomaly"/"May-Sep" and got
+zero hits. This entry exists specifically so a future citation of it has
+somewhere real to point to.
+
+**The figures as requested couldn't be reproduced against the current
+data** — checked before writing anything, per this file's own standing
+"verify, don't transcribe" discipline (the exact discipline this
+documentation gap violated in the first place). Requested: "F&B Uptake
+₹1,894.18L vs. F&B Redemption ₹1,018.98L that quarter, 186% ratio." Direct
+computation against `redemptionCube.json`, `Head === 'F&B'`, for the
+literal May–Sep 2025 window (5 months): **F&B Uptake ₹1,346.82L vs. F&B
+Redemption ₹611.92L, a 220% ratio** — a real, even more pronounced
+anomaly, but not the cited figures. Searched every contiguous month-range
+for a closer match before concluding the requested numbers don't describe
+this window: the closest found was the full **May 2025 – Apr 2026** span
+(12 months) — F&B Uptake ₹1,904.56L / F&B Redemption ₹995.16L, a 186.6%
+ratio — matching the requested *ratio* almost exactly but not the
+absolute figures, and covering 12 months, not "that quarter." Flagging
+this mismatch rather than guessing which one was meant; the verified
+numbers below are for the literal 5-month window this file's own prior
+entries (and this session) have consistently called "May-Sep 2025."
+
+**The real, verified shape of it** — per-month F&B Uptake vs. F&B
+Redemption, `Head === 'F&B'` only:
+
+| Month | F&B Uptake (L) | F&B Redemption (L) | Ratio |
+|---|---|---|---|
+| 2025-05 | 265.68 | 139.72 | 190.1% |
+| 2025-06 | 376.66 | 163.01 | 231.1% |
+| 2025-07 | 333.36 | 151.17 | 220.5% |
+| 2025-08 | 259.55 | 92.36 | 281.0% |
+| 2025-09 | 111.57 | 65.67 | 169.9% |
+| **Total** | **1,346.82** | **611.92** | **220.0%** |
+
+Every one of these 5 months shows F&B Uptake exceeding F&B Redemption
+outright (never below 169.9%, peaking at 281.0% in Aug 2025) — a real,
+sustained characteristic of this window, not a single-month blip. The
+elevated ratio doesn't cleanly start/stop at these exact boundaries
+either: Apr 2025 (98.8%) and Oct 2025 (150.0%) through roughly Apr 2026
+(170.0%) all sit meaningfully above the pre-Apr-2025 baseline (which
+never exceeds 80.6%) — so "May–Sep 2025" is the *peak* of a longer
+elevated stretch, not an isolated 5-month island. Not investigating the
+underlying cause here (out of scope for this documentation pass) — this
+entry exists to pin down the *numbers*, which is what was missing.
+
+**Confirmed unrelated to the 2026-09-15 Prebuy correction**: per that
+same audit's Check 6, all 5 of these months are byte-identical (₹0.00
+diff) between the pre- and post-correction `redemptionCube.json` files —
+this anomaly predates and is untouched by that fix.
+
+**This entry is the citable source going forward** — if this anomaly
+comes up again, the numbers above (not a remembered approximation) are
+what to reference.
+
+## 2026-09-16 — Box Office/F&B split methodology: confirmed both existing
+heuristics are legitimate (neither is "more correct"), added visible
+per-page notes, and found a THIRD, genuinely incorrect variant while
+investigating (not fixed — flagged, awaiting a decision)
+
+Follow-up to the 2026-09-15 Phase 2 audit, which found Summary's
+"Redemption by Source" nested Cinema breakdown (₹1,072L Box Office /
+₹1,577L F&B) disagreeing with Overview's flow diagram and both dedicated
+Redemption pages (₹1,120L / ₹1,529L) by about ₹48L each way, both summing
+to the same ₹2,649L Cinema total. Asked to confirm which is correct, or
+whether they're legitimately different questions, and to add a visible
+note either way rather than silently picking one.
+
+**The root problem, common to every method below**: a Cancel Redeem row
+carries `Head = 'Cancellation'`, never the head of whatever it's
+reversing — so there is no way to know, from the data as structured,
+whether any given Physical-mode cancellation was reversing a Box Office
+or an F&B purchase. Every attempt at splitting Cinema's cancellations
+between the two is necessarily a heuristic, not a lookup.
+
+**Traced every live consumer of both existing utilities before answering
+anything**, since the two-way comparison in the request turned out to be
+incomplete — there's a third:
+
+1. **Region+Month winner-map** (`physicalCancelWinnerMap()`/
+   `netHeadRows()`, `lib/aggregate.js`, built 2026-08-05/06): Online-mode
+   cancellations attribute 1:1 to Online (exact — Online is the only head
+   ever redeemed through that Outlet). Physical-mode cancellations are
+   attributed *in bulk*, per Region+Month, entirely to whichever of Box
+   Office/F&B had the larger gross that Region+Month. Used by Overview's
+   flow diagram, `RedemptionBoxOffice.jsx`'s and `RedemptionFnb.jsx`'s own
+   headline KPIs and every downstream chart on those two pages.
+2. **Cinema-scoped proportional netting** (`netBucketsProportionally()`
+   called with only `[Box Office, F&B]` after the pool is already
+   restricted to `RedemptionModeFinal === 'Physical'` rows — Summary's
+   `CINEMA_HEAD_BUCKETS` nested breakdown, built 2026-08-19): the same
+   Physical-mode-only cancellation pool, but split between Box Office and
+   F&B *proportionally* by each one's own share of gross, not
+   winner-take-all.
+3. **All-3-heads pooled proportional netting** (`netBucketsProportionally()`
+   called with `REAL_HEAD_BUCKETS = [Online, Box Office, F&B]` and
+   *every* Cancellation row, Online-mode and Physical-mode alike, as one
+   undifferentiated pool) — used by **Overview's own "Redemption by Head"
+   chart**, **Card Journey's own "Redemption by Head" chart**, and
+   **Overview's Date Range panel** (`dailyRedByHead`). Read
+   `netBucketsProportionally()`'s actual implementation directly to
+   confirm (`lib/aggregate.js`): it takes `rows.filter(isExcludedRow)` as
+   one pool with no mode segregation at all, then splits that pool's
+   total across every bucket in proportion to each bucket's own gross
+   share — Online included.
+
+**Methods 1 and 2 are both legitimate — verified live, all figures byte-
+match their own page**: both correctly restrict the ambiguous split to
+*only* Physical-mode cancellations (Online-mode cancellations go to
+Online, exactly, either way) — they differ only in *how* they divide that
+Physical-mode pool between Box Office and F&B (winner-take-all per
+Region+Month vs. proportional-by-gross-share), which is a genuinely
+unanswerable question from this data, not a case where one is provably
+right. The proportional method is arguably the smoother, lower-variance
+estimator (no all-or-nothing threshold effect at Region+Month
+granularity), but "smoother" isn't "more correct" for a fundamentally
+unknowable split — both are reasonable, both were deliberate design
+choices at the time (documented in their own 2026-08-05/06 and 2026-08-19
+entries), and this pass isn't unifying them, per the explicit instruction
+not to silently pick one.
+
+**Method 3 is not a third legitimate answer to the same question — it's
+a real correctness bug**, found while investigating, not what was asked
+about. Pooling Online-mode and Physical-mode cancellations together
+before splitting proportionally across all 3 heads bleeds cancellation
+rupees across a boundary this app's own established facts prove
+impossible: `Head = 'Box Office'`/`'F&B'` rows are 100%
+`RedemptionModeFinal = 'Physical'` (on record since 2026-08-04) — an
+Online-mode cancellation cannot be reversing a Box Office or F&B
+transaction, and a Physical-mode cancellation cannot be reversing an
+Online transaction. Method 3's own math doesn't know this: it lets
+Online's own large gross share (₹5,909.90L, vs. Box Office's ₹1,262.03L
+and F&B's ₹1,856.22L) pull a chunk of *Physical-mode* cancellation money
+into Online's own net figure, and symmetrically lets Box Office/F&B
+absorb a slice of *Online-mode* cancellations they could never have
+generated. Confirmed live: Overview's own "Redemption by Head" chart
+currently reads Online ₹4,814L / Box Office ₹1,028L / F&B ₹1,512L —
+**a third, mutually-disagreeing figure from the same page's own flow
+diagram** (₹4,705L / ₹1,120L / ₹1,529L), not just a cross-page
+inconsistency. **Not fixed in this pass** — this wasn't the question
+asked, fixing it changes 3 separate chart locations' numbers
+(Overview's own chart, Card Journey's own chart, and the Date Range
+panel), and the user's own explicit instruction ("don't silently pick one
+and change the other without confirming with me first") applies at least
+as strongly to a bug found unprompted as to the one asked about. Flagged
+back to the user in the same turn; a fix (either route Method 3's callers
+through the existing `netHeadRows()` for all 3 heads, or mode-segregate
+the cancellation pool before applying proportional netting to just Box
+Office/F&B) is pending their go-ahead.
+
+**Visible notes added** (Methods 1 and 2 only, the pair actually asked
+about) — plain italic captions, not the app-wide chart-caption convention
+removed in 2026-08-14 (a deliberate, one-off exception for this specific
+discrepancy, not a reversal of that pass):
+  - `Overview.jsx`, directly under the redemption flow diagram (inside the
+    same `<Card>`, spanning both columns): states the winner-map
+    methodology this diagram uses and that Summary's nested breakdown
+    uses a different, also-legitimate one for the same split.
+  - `MetricComparisonCard.jsx`: a new note rendered only when
+    `nestedBreakdowns` is present (today, exactly Summary's "Redemption by
+    Source" card) — states the proportional-by-gross-share methodology
+    and that Overview's flow diagram splits the same ambiguity
+    differently. Gating on `nestedBreakdowns` rather than hardcoding to
+    one card's `title` means any future nested-breakdown card
+    automatically gets the same disclosure, not just this one.
+
+**Verified**: both notes render exactly where intended (screenshotted at
+1440px — Overview's sits cleanly below the flow diagram, spanning the
+full card width; Summary's sits between the bucket table and the "By
+Year" block), zero console errors on either page, clean production build
+(997.29 kB JS, 319.02 kB gzipped — the ~1kB increase is the two new
+`<p>` blocks, no new warnings beyond the pre-existing 500KB chunk-size
+notice).
+
+## 2026-09-16 — Dashboard-wide audit: every summed-UniqueCardCount
+location replaced with exact COUNT(DISTINCT CardNumber); a severe Card
+Journey performance regression found and fixed along the way
+
+Follow-up to the 2026-09-07 Card Journey fix (that entry corrected exactly
+one location — this page's own headline card count — and explicitly
+flagged "the deeper per-bucket counts elsewhere... are a separate, larger
+question"). This pass is that larger question: every place in the app
+that sums `UniqueCardCount` across more than one `redemptionCube.json`/
+`cohortCube.json` row for a given filter selection has the same "sum of
+per-row distinct counts ≠ distinct count of the union" inflation risk —
+audited the whole codebase for it, then fixed every location found.
+
+**New data source**: `redemption_rowlevel.parquet` (2,205,239 rows, one
+row per real redemption transaction with an actual `CardNumber` field),
+provided already reconciled against the existing cubes (₹7,353.62L both
+ways). It strictly supersedes the 2026-09-07 fix's own
+`cardJourneyRowLevel.parquet` — confirmed directly (identical row/card
+counts, identical per-Head amounts) — with the same dimension fields
+(Weekday/Format/Category/Denom/CardType/SourceFlag/ActivationMode/
+ActivationCohort) every redemption-side chart in the app buckets by,
+closing the "can't be done exactly" gap the 2026-09-07 entry left open.
+**Sign warning, confirmed directly, not assumed**: this file's
+`Amount_num` is the OPPOSITE sign convention from `redemptionCube.json`'s
+`RedemptionAmount` (normal heads negative, Cancellation positive) —
+nothing in this app reads `Amount_num` today (only `CardNumber` + the
+dimension fields), so this is a documented risk for a future feature, not
+an active bug. A companion `activation_rowlevel.parquet` was also
+provided but is explicitly out of scope here — the request's own framing
+(`UniqueCardCount`, which only exists on the redemption-side cubes) never
+touches activation-side counting, and `ActivationCount` has no equivalent
+per-row-sum inflation risk to fix.
+
+**Every location found, with its own unfiltered-state old (inflated
+sum) vs. new (exact) figure** — "old" is the literal number the app
+displayed before this pass, computed by replaying the exact old
+`sumBy(rows, 'UniqueCardCount')` logic against the current data; "new" is
+`exactCardCount()`/`exactCardCountByBucket()` over
+`redemption_rowlevel.parquet`, cross-checked against a fully independent
+pandas read of the same file before touching any UI code:
+
+| Location | Metric | Old (inflated) | New (exact) |
+|---|---|---|---|
+| `Overview.jsx` | Total Redemption (net), headline count | 17,14,137 | 11,31,949 |
+| `Overview.jsx` | Redemption by Head — Online | 8,58,368 | 7,09,571 |
+| `Overview.jsx` | Redemption by Head — Box Office | 1,94,397 | 1,81,003 |
+| `Overview.jsx` | Redemption by Head — F&B | 3,93,704 | 2,96,717 |
+| `Overview.jsx` | Redemption by Head — Cinema (BO+F&B) | 5,88,101 | 4,58,201 |
+| `RedemptionBoxOffice.jsx` | Box Office Redemption, headline count | 1,94,397 | 1,81,003 |
+| `RedemptionBoxOffice.jsx` | Digital Card Redemption count | 1,02,808 | 95,964 |
+| `RedemptionFnb.jsx` | F&B Redemption, headline count | 3,93,704 | 2,96,717 |
+| `RedemptionFnb.jsx` | Digital Card Redemption count | 89,093 | 77,365 |
+| `CardJourney.jsx` | "Of Those, Redeemed" (cohort-scoped) | 12,85,486 | 10,84,619 |
+| `Summary.jsx` (`MetricComparisonCard`) | Total Redemption (net) | 17,14,137 | 11,31,949 |
+| `Summary.jsx` | Box Office Redemption (net) | 1,94,397 | 1,81,003 |
+| `Summary.jsx` | F&B Redemption (net) | 3,93,704 | 2,96,717 |
+| `Summary.jsx` | Redemption by Card Type — Digital | 9,85,558 | 7,94,055 |
+| `Summary.jsx` | Redemption by Card Type — Physical | 4,60,911 | 3,37,894 |
+| `Summary.jsx` | Redemption by Region — NORTH | 2,96,424 | 2,05,923 |
+| `Summary.jsx` | Redemption by Region — SOUTH | 1,48,072 | 1,05,343 |
+| `Summary.jsx` | Redemption by Region — EAST | 62,350 | 44,117 |
+| `Summary.jsx` | Redemption by Region — WEST | 1,51,785 | 1,01,105 |
+| `Summary.jsx` | Redemption by Region — CENTRAL | 1,481 | 1,109 |
+| `Summary.jsx` | Redemption by Region — Director's Cut | 2,743 | 1,915 |
+| `Trends.jsx` | Monthly Trend (Card Count), Apr 2024 | 27,868 | 21,108 |
+| `Trends.jsx` | Monthly Trend (Card Count), Aug 2026 | 78,665 | 55,862 |
+| `Trends.jsx` | Week-slot Overview — Weekday | 8,20,145 | 5,72,704 |
+| `Trends.jsx` | Week-slot Overview — Weekend | 8,93,992 | 6,40,381 |
+
+Every "new" figure above matches an independent pandas read of
+`redemption_rowlevel.parquet` exactly — the same standard this file has
+applied to every cross-check since day one.
+
+**`activationCube.json`'s own `ActivationCount` sum was checked and
+confirmed out of scope, not silently skipped**: 32,703 `activation_
+rowlevel.parquet` rows share a `CardNumber` with another row (mostly
+`GIFT CARD CANCEL ACTIVATE` pairings), so summing `ActivationCount` COULD
+theoretically have an analogous risk — but the request's own scope is
+explicitly `UniqueCardCount` (a field that only exists on the redemption-
+side cubes), so this was flagged as an aside and left untouched, not
+silently investigated or fixed.
+
+**Implementation — 3 new shared helpers in `lib/aggregate.js`**:
+  - `exactCardCount(rows)` — `new Set(rows...).size`, excluding
+    `Head === 'Cancellation'` rows (the same "amount nets cancellations
+    in, count excludes them" split already established dashboard-wide).
+    For a plain distinct-card-count question, no netting/attribution
+    logic is needed at all, unlike an amount.
+  - `exactCardCountByBucket(rows, buckets)` — per-bucket exact counts for
+    every "by Region"/"by Head"/etc. breakdown. **New, non-bug behavior
+    worth recording**: per-bucket exact counts are NOT required to sum to
+    their union's own exact count — e.g. Cinema's own exact count
+    (4,58,201) is LESS than Box Office (1,81,003) + F&B (2,96,717)
+    summed naively (4,77,720), because 19,519 real cards genuinely appear
+    in both buckets. This is a real behavior change from the old
+    (inflated-sum) approach, where sums always "worked" arithmetically
+    for the wrong reason (both sides were inflated by roughly the same
+    mechanism). Verified this exact overlap figure directly against the
+    raw file before accepting it as correct, not assumed.
+  - `exactCardCountByKey(rows, keyFn)` — single-key variant for the case
+    where every row belongs to exactly one bucket determined by one
+    derived value (e.g. fiscal year), added during the performance fix
+    below.
+
+**Severe performance regression found and fixed during verification,
+not present in any final shipped state for long**: applying the
+per-bucket exact-count pattern throughout `CardJourney.jsx` (this page
+has by far the most redemption-side breakdowns of any page — by Head, by
+Region, by Source, by Weekday, Week-slot, Year-on-Year, and the
+spillover chart's per-month counts) made the page hang indefinitely on
+first load — confirmed via Playwright never completing a render within a
+272-second wait in one diagnostic run. Root-caused with direct timing
+instrumentation (`console.time`/`console.timeEnd` around each `useMemo`,
+removed before shipping) rather than guessing:
+
+  1. **`exactCardCountByBucket()`'s original implementation did
+     `buckets.map(b => exactCardCount(rows.filter(b.predicate)))`** — one
+     full `.filter()` pass over the row-level pool PLUS one more pass
+     (building the Set) per bucket, so a caller with B buckets walked a
+     multi-million-row array 2×B times. Card Journey alone made ~10 such
+     calls per render once its row-level pool was ready. **Fixed**:
+     rewritten to a single pass over `rows`, testing every bucket's
+     predicate per row and adding to that bucket's own `Set` — one
+     traversal instead of 2×B, with no intermediate array allocations.
+     Applied to the sibling `exactWeekSlotCardCounts()` too (was 2
+     separate filter+Set-build passes, now 1).
+  2. **The dominant cost, found only after fixing (1) still left the page
+     taking 30+ seconds of synchronous compute per render**:
+     `lib/constants.js#fyOf()` — called on every row by several of these
+     computations (Card Journey's Year-on-Year exact counts call it up to
+     3× per row) — did a fresh `string.split('-').map(Number)` +
+     template-literal allocation on every single call, with no caching.
+     At 2.1-2.2M rows × up to 3 calls each, this was millions of redundant
+     re-derivations of a value with only ~30 possible distinct outputs
+     (the dataset's own ~29 months). Direct timing instrumentation showed
+     one single per-render computation (`yoyExactByFY`) alone taking
+     4.4-5.3 **seconds**, collapsing to 0.3-0.5s once `fyOf()` was fixed.
+     **Fixed**: memoized `fyOf()` with a small `Map` cache keyed on the
+     input string — safe because the function is pure (same output for
+     the same input, always) and the real-world input domain (real
+     `YearMonth`-shaped field values) never grows past a few dozen
+     distinct strings for the life of a page load. This is a dashboard-
+     wide speedup, not just Card Journey's — every other page's FY
+     grouping/comparison logic also calls `fyOf()`, just never at a
+     volume that made the per-call cost visible before this file's
+     rows count reached the millions.
+  3. Also added `exactCardCountByKey()` (see above) and switched
+     `CardJourney.jsx`'s `yoyExactByFY` to it instead of building one
+     `exactCardCountByBucket()` predicate per fiscal year (each of which
+     independently called `fyOf()` again) — eliminates the redundant
+     per-bucket `fyOf()` calls entirely for this specific case, on top of
+     the memoization fix.
+
+**Measured effect, via the same timing instrumentation, before removal**:
+per-render synchronous compute time for Card Journey's row-level
+consumers dropped from ~15 seconds to ~5.2-5.7 seconds (React 18
+StrictMode double-invokes render bodies in dev, so this is ~2× the real
+work either way) — and, critically, the page went from **never
+completing a render within a 272-second observed window** to **rendering
+real content within 3-10 seconds** on a warm dev server (up to ~24s on a
+freshly-restarted cold one, which is normal Vite dev-server first-request
+transform overhead, not a regression — production builds are pre-bundled
+and don't pay this cost). All temporary `console.time`/`console.log`
+instrumentation was removed from `CardJourney.jsx` and
+`FilterContext.jsx` before this entry was written — confirmed via a
+repo-wide grep for `PERF`/`DEBUG`/`DIAG` returning zero hits.
+
+**A verification false alarm worth recording, so it isn't re-chased**:
+mid-verification, a quick DOM scrape of Card Journey's "Of Those,
+Redeemed" card showed 12,85,486 — the OLD inflated figure — even after
+the fix landed, which looked like a real regression. Traced directly
+(via a `window`-exposed diagnostic, after Playwright's own console-event
+capture turned out to be unreliable for this check) to the test itself:
+the row-level parquet's `redemptionRowLevelReady` flag was still `false`
+at the moment the scrape ran (the file was still loading/decoding), so
+the page was correctly showing its own designed fallback for that
+transitional state — not a bug. Waiting for `redemptionRowLevelReady` to
+actually flip `true` (confirmed via the same diagnostic) before reading
+any figure resolved this cleanly; every other verification in this entry
+used that same wait-for-ready discipline rather than a fixed timeout.
+Flagging this here since 12,85,486 is now ALSO on record above as this
+page's genuine "old" figure — the two facts don't conflict (one is what
+the fixed page shows before its data has loaded, the other is what the
+unfixed page showed once it had) — but a future reader skimming for
+"12,85,486" should know both contexts exist.
+
+**Verified against the raw files by hand first, then live in the app,
+with generous wait-for-ready discipline (not a fixed short timeout) on
+every check** — every figure in the table above was confirmed live,
+matching its own independently-computed pandas value exactly, with zero
+console errors across Overview, both Redemption pages, Card Journey,
+Summary, and Trends. Clean production build (1,006.63 kB JS, 321.54 kB
+gzipped — the increase from the 2026-09-07 baseline is
+`redemption_rowlevel.parquet`'s own richer dimension set now being
+decoded and held in memory by every one of these 5 pages instead of just
+Card Journey; no new build warnings beyond the pre-existing 500KB
+chunk-size notice).
+
+## 2026-09-16 — Closed out the correction chain: deleted the dead
+`cardJourneyRowLevel.parquet`, wired in Channel Performance's new August
+row, final 9-page regression pass
+
+Three small follow-ups to the dashboard-wide UniqueCardCount-inflation
+audit earlier the same day (the entry immediately above), plus one
+housekeeping item flagged in that entry's own 2026-09-15 predecessor.
+
+**`cardJourneyRowLevel.parquet` — confirmed dead code, deleted.** Grepped
+the whole `src/` tree for the literal filename and every identifier
+historically tied to it (`cardJourneyRowLevelRows`/
+`filterCardJourneyRowLevel`/`cardJourneyRowLevelFiltered`/
+`cardJourneyRowLevelFiltersSupported`/`loadCardJourneyRowLevel`) before
+touching anything, per this file's own standing "verify fresh, don't
+trust memory of earlier work" discipline — the only hit anywhere in the
+codebase was a doc comment in `FilterContext.jsx` (`// ... superseding
+cardJourneyRowLevel.parquet`), not a live reference. This confirms the
+2026-09-07 fix (which introduced the file) and the 2026-09-16 dashboard-
+wide audit (which introduced `redemption_rowlevel.parquet` as its
+strict superset/replacement) between them had already fully migrated
+every consumer off it — nothing was silently still reading its stale,
+~45%-overstated (₹10,702.68L), sign-inconsistent totals. Deleted
+`public/data/cardJourneyRowLevel.parquet` (14.5MB) and confirmed: a clean
+production build (no missing-asset warning, no change in JS bundle size,
+since it was only ever `fetch()`-ed at runtime, never bundled) and, live
+in the app, Card Journey renders its full KPI ribbon and flow diagram
+with zero console errors and figures byte-identical to before the
+deletion (Of Those, Redeemed ₹6,869L / 10,84,619 cards, matching the
+2026-09-16 entry's own already-verified `redemption_rowlevel.parquet`-
+derived figure exactly) — proof the page never depended on the deleted
+file in the first place.
+
+**Channel Performance: wired in the new August row, removed the stale
+lag note.** `channelTransactions.json` (confirmed via direct read: 29
+rows, now including a real `2026-08` row — BMS ₹40,02,981 / PVR INOX
+₹4,96,548 / Paytm-District ₹13,02,504 / Box Office ₹17,68,489, Total
+₹75,70,522) is no longer one month behind the rest of the dashboard, per
+the same monthly-refresh cadence the 2026-09-08 entry above first
+established for the gift-card cubes. No filter/aggregation code needed
+changing to pick it up — every figure on this page already derives its
+"current window" from `channelTransactionsRows`' own real months via the
+shared `usePresetWindow()`/`selectedMonths` machinery (the same
+auto-extending-anchor behavior the 2026-09-08 entry verified for every
+other page), so the new row flowed through automatically. Removed the
+`bg-gold-light` bordered "one month behind" callout (added 2026-09-08,
+`ChannelPerformance.jsx`) entirely, per its own doc comment's explicit
+instruction ("remove this note (and nothing else) once a channel-data
+refresh actually lands"). Verified live: the page's top-left comparison-
+date caption now reads "Apr 24 – Aug 26 vs. Apr 23 – Aug 25" (was capped
+at Jul 26), the rendered page contains "Aug 26" and zero occurrences of
+"one month behind"/"July 2026", and the Full-Year Monthly Breakdown table
+for FY2026-27 now includes a real August row instead of a dash.
+
+**Final 9-page regression check** (Overview, Activation, Redemption · Box
+Office, Redemption · F&B, Trends, Cancel Redeem, Summary, Card Journey,
+Channel Performance — all 9 routes, default/unfiltered filter state):
+zero console errors on every page (Playwright, generous settle waits for
+the lazy-loaded cohort/row-level pools, not a fixed short timeout — the
+discipline established earlier the same session after the false-alarm
+lesson). Clean production build (1,006.23 kB JS, 321.36 kB gzipped — a
+negligible decrease from the 2026-09-16 audit entry's own build, all of
+it explained by the removed doc-comment/JSX text; the deleted parquet
+file was never part of the JS bundle to begin with, only a `public/`
+runtime asset). No new warnings beyond the pre-existing 500KB chunk-size
+notice.
+
+**This closes out the full correction chain from this session**: every
+location that summed per-row `UniqueCardCount` across multiple cube rows
+now uses an exact `COUNT(DISTINCT CardNumber)` (2026-09-16 entry above);
+the Card Journey performance regression discovered mid-verification is
+fixed and documented; the one remaining stale data source
+(`cardJourneyRowLevel.parquet`) that predated the whole chain — carrying
+the pre-Jan-2026 figures, the pre-Prebuy-correction totals, and the
+already-fixed Cancellation sign bug — is gone, with its replacement
+(`redemption_rowlevel.parquet`) confirmed as the only row-level
+redemption source left in the app; and every `public/data/` file is now
+mutually consistent and current through the same month (Aug 2026)
+end to end, gift-card cubes and Channel Performance's own booking-channel
+data alike.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
