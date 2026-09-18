@@ -9177,6 +9177,119 @@ mutually consistent and current through the same month (Aug 2026)
 end to end, gift-card cubes and Channel Performance's own booking-channel
 data alike.
 
+## 2026-09-18 — 77-month history backfill: Apr 2020 – Aug 2026 (was Apr
+2024 – Aug 2026, 29 months), new baseline ₹13,629.46L / ₹10,826.08L
+
+**Data swap**: `activationCube.json`, `redemptionCube.json`,
+`cohortCube.json`, `activation_rowlevel.parquet`,
+`redemption_rowlevel.parquet`, `heroProductsCube.parquet`,
+`dailyActivationCube.json`, `dailyRedemptionCube.json` all replaced —
+already placed in `public/data/` before this pass started, same
+"user swaps the files, this session reconciles the app against them"
+pattern as every prior refresh in this file. Row counts roughly tripled
+(activation 21,176 rows / redemption 333,534 rows) as the window widened
+from 29 months to 77 (Apr 2020–Aug 2026), adding 4 new fiscal years
+(FY2020-21 through FY2023-24) ahead of the previously-earliest FY2024-25.
+Per the request's own explicit scope, **`cardJourneyRowLevel.parquet` and
+`heroProducts.json` were deliberately NOT part of this swap** — both
+already confirmed fully dead in the 2026-09-16 "closed out the correction
+chain" entry above (the former deleted from disk that same day; the
+latter never referenced by any component, only by doc comments) — and
+grepping `src/` again this pass turned up nothing new pointing at either,
+so no code change was needed to keep excluding them.
+
+**New unfiltered baseline, verified against the raw files first, then
+live in the app**: Total Net Activation ₹13,629.46L / 24,12,610 cards,
+Total Net Redemption ₹10,826.08L / 26,80,019 cards (net count) —
+matching the target exactly. `cohortCube.json`'s own total
+`RedemptionAmount` (₹10,826.0829L) matches `redemptionCube.json`'s total
+(₹10,826.08L) to the same sub-rupee rounding every prior refresh's
+version of this cross-check has shown, confirming the two stayed in sync
+across the swap.
+
+**Verification performed, all items from the request**:
+- Grepped `src/` for every old-baseline figure (`8,878.74`/`8878.74`/
+  `7,298.03`/`7298.03`) — zero hits, confirming those numbers were never
+  hardcoded anywhere in application code to begin with (they only ever
+  existed as historical figures in this file's own earlier entries, which
+  is expected and untouched).
+- Overview (all filters cleared): Activation Amount card reads
+  ₹13,629 L / 24,12,610 cards; Redemption Amount card reads ₹10,826 L /
+  26,80,019 cards. Summary's "Total Activation"/"Total Redemption (net)"
+  cards read byte-identical figures, confirming both pages still read
+  through the same shared `activationRows`/`redemptionRows` pools.
+- Financial Year dropdown confirmed, by reading the actual rendered
+  option list (not assumed from `fyOf()`'s code alone), to show exactly
+  7 entries: FY2020-21, FY2021-22, FY2022-23, FY2023-24, FY2024-25,
+  FY2025-26, FY2026-27 — derived live from the data's own real
+  `YearMonth` values via `lib/constants.js#fyOf()` (the generalized
+  Apr–Mar arithmetic version built in the 2026-08-05 data-refresh entry
+  above specifically so a wider date range needs no code change), not a
+  hardcoded list.
+- Exact card-count spot check (Card Journey's "Of Those, Redeemed",
+  which sources `COUNT(DISTINCT CardNumber)` from
+  `redemption_rowlevel.parquet` per the 2026-09-16 fix): app renders
+  18,01,097 cards unfiltered; independently recomputed the identical
+  query directly against the new parquet file with pandas/pyarrow
+  (`ActivationYearMonth != 'Pre-existing...' AND Head != 'Cancellation'`,
+  distinct `CardNumber`) — 1,801,097, an exact match. Confirms the
+  exact-count machinery generalizes to the wider 77-month file with zero
+  code changes.
+- F&B Category chart (`RedemptionFnb.jsx`): renders 11 buckets (Popcorn,
+  Other, Food, Beverages, Combos, Hot Beverages, Add-ons, Ice Cream,
+  Confectionery, Snacks, Other) — the two "Other" entries are the real
+  `Category='Other'` value and `topNWithOther`'s synthetic overflow
+  bucket (folding in "Alcohol", the sole 11th-place category), both
+  correctly rendered in the same reserved gray, per the already-
+  documented 2026-08-14/2026-09-16 convention. Hand-checked all 11
+  category amounts directly against `redemptionCube.json` — zero
+  negative values (the 2026-09-16 fix already excludes `Category='N/A'`
+  Cancel Redeem-correction rows before grouping, so this chart is gross-
+  by-design and was never going to show a negative bar regardless of the
+  new data's size).
+- Hero Products (`heroProductsCube.parquet`, `RedemptionFnb.jsx`):
+  confirmed responsive to filters — the unfiltered top-15 list and a
+  Region=NORTH-only list differ both in figures and in rank order (e.g.
+  "MPOP" enters the NORTH-only top-15 while several unfiltered top-10
+  items drop out), confirming the list still recomputes live from
+  `heroProductsRowLevelFiltered` rather than serving a static cut.
+
+**Load time, cold cache, production build** (the number this task said
+would decide whether Parquet conversion is needed next): built with
+`npm run build` (clean, 1,007.79 kB JS / 321.86 kB gzipped, only the
+pre-existing >500kB chunk-size advisory) and served via `vite preview`
+(confirmed gzip `Content-Encoding` on `/data/*.json`, matching what
+Vercel already does in production per the 2026-07-31 entry above), then
+measured with Chromium DevTools Protocol cache disabled:
+  - **On an unconstrained (effectively LAN-speed) connection**: Overview's
+    KPI ribbon shows real figures (₹13,629 L) at **~4.2s** after
+    navigation start.
+  - **Throttled to a realistic office-broadband profile (10 Mbps down,
+    40ms RTT)**: **~5.5s** to the same real-figures milestone.
+  The ~1.3s gap between the two is almost entirely accounted for by the
+  gzip-compressed transfer size (`redemptionCube.json` alone is 112.83MB
+  raw → 4.16MB gzipped, activationCube.json 3.75MB → 0.18MB gzipped,
+  plus the ~322KB gzipped JS bundle — roughly matching 10 Mbps'
+  theoretical transfer time for that payload), meaning **JSON parse time
+  on the already-transferred data, not network transfer, is now the
+  larger single cost** at this row count (21,176 activation rows /
+  333,534 redemption rows, up from 6,608/85,248 at the dataset's
+  original size). This is exactly the kind of signal the request said
+  would matter for a future Parquet-conversion decision for the two
+  eagerly-loaded JSON cubes — noted here as data, not a recommendation,
+  since deciding whether to act on it is explicitly out of scope for this
+  pass.
+
+**Full regression check**: clean production build; zero console errors
+across all 9 routes (Overview, Summary, Channel Performance, Card
+Journey, Activation, Redemption · Box Office, Redemption · F&B, Trends,
+Cancel Redeem), checked both against the Vite dev server and again
+against the production build served via `vite preview`, with generous
+settle waits for the lazy-loaded `cohortCube.json`/
+`redemption_rowlevel.parquet`/`heroProductsCube.parquet` pools rather
+than a fixed short timeout (per the 2026-09-16 entry's own "wait for
+ready, don't guess" lesson).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
