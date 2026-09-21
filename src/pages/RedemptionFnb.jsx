@@ -150,8 +150,32 @@ export default function RedemptionFnb() {
   // cancellations in, this chart doesn't. That mismatch (~₹325L,
   // unfiltered) is expected and intentional; don't "fix" it back to
   // reconciling without checking this comment first.
+  //
+  // 2026-09-18 bug found and fixed: the 77-month data refresh silently
+  // changed this exact attributed-cancellation sentinel from the string
+  // 'N/A' to JSON `null` (verified dashboard-wide: `Category === 'N/A'`
+  // now matches 0 rows anywhere in redemptionCube.json; every attributed
+  // cancellation row carries `Category: null` instead — 206,174 of them
+  // total, all non-F&B heads by construction, F&B's own rows never null).
+  // The old `!== 'N/A'` filter below silently stopped matching anything,
+  // so every one of netFnbRows' null-Category attributed cancellations
+  // flowed straight through into groupSum's own `null`-keyed bucket,
+  // sorted to the very bottom by amount, and got swept into
+  // topNWithOther's synthetic "Other" overflow — reproduced live as a
+  // real -₹325L "Other" bar before this fix, not the intended gross
+  // product mix. Widened to `r.Category != null && r.Category !== 'N/A'`
+  // so it survives either sentinel form, current or future. Checked the
+  // sibling Format (Box Office)/Denom/CardType/SourceFlag fields the same
+  // way against the new data — none of them made the same string-to-null
+  // switch, so this was scoped to Category alone, not a wider drift.
+  //
+  // Category==='N/A' rows (Cancel Redeem correction) are deliberately
+  // excluded here — this chart is gross F&B by category, NOT net. Its bar
+  // total will not equal the net "F&B Redemption" KPI above it by the
+  // cancellation amount — that's intentional (2026-09-18), do not "fix"
+  // by re-including these rows.
   const byCategory = useMemo(() => {
-    const realRows = netFnbRows.filter((r) => r.Category !== 'N/A')
+    const realRows = netFnbRows.filter((r) => r.Category != null && r.Category !== 'N/A')
     const g = groupSum(realRows, 'Category', ['RedemptionAmount', 'UniqueCardCount'])
     if (redemptionRowLevelReady) {
       const exact = exactCardCountByBucket(

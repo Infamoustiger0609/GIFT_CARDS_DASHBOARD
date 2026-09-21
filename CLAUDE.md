@@ -9290,6 +9290,95 @@ settle waits for the lazy-loaded `cohortCube.json`/
 than a fixed short timeout (per the 2026-09-16 entry's own "wait for
 ready, don't guess" lesson).
 
+## 2026-09-18 — F&B Category chart: found the N/A-exclusion filter had
+gone silently inert (77-month refresh changed the sentinel from 'N/A' to
+null), fixed it, and re-confirmed the gross-not-net decision it protects
+
+The request assumed this chart might be missing its documented
+`Category !== 'N/A'` exclusion (added 2026-09-16, see that entry above)
+and asked to check before re-adding it. It was already present
+(`RedemptionFnb.jsx`'s `byCategory` memo) — but investigating "why it
+might not be applying" turned up a real, current bug rather than a false
+alarm: the same-day 77-month data backfill (see the entry immediately
+above this one) silently changed the sentinel this filter targets.
+
+**Root cause, confirmed directly against the new `redemptionCube.json`
+before touching any code**: `Category === 'N/A'` now matches **zero**
+rows anywhere in the file — the string sentinel is gone. Every row that
+used to carry `Category: 'N/A'` (the Cancel Redeem correction
+`netHeadRows()` attributes into `netFnbRows` — see the 2026-08-14/
+2026-09-16 history on this chart above) now carries `Category: null`
+instead (206,174 such rows dataset-wide, split across Box Office/
+Cancellation/Online heads, never F&B's own rows). The old
+`r.Category !== 'N/A'` filter doesn't match `null`, so it silently
+stopped excluding anything — every attributed-cancellation row flowed
+straight into `groupSum`'s own `null`-keyed bucket, sorted to the very
+bottom by amount, and got folded into `topNWithOther`'s synthetic "Other"
+overflow. Reproduced live before the fix: the chart's last bar (the
+synthetic "Other") read **-₹325 L**, not the expected small positive
+Alcohol residual — a real negative bar, exactly the symptom the original
+2026-08-14/2026-09-16 fixes existed to prevent.
+
+**Checked whether this sentinel drift was wider than Category, before
+calling it done**: grepped `src/` for every `Category` reference — the
+one line in `RedemptionFnb.jsx` is the only place in the whole codebase
+that reads it, so no other chart needed checking on this specific field.
+Separately inspected `Format` (Box Office's equivalent field),
+`Denom`, `CardType`, and `SourceFlag` directly against the new data —
+all four still use their original string sentinels (`'N/A'` for Format/
+SourceFlag, `'Unknown (pre-existing)'` for Denom's pre-existing case,
+real `Digital`/`Physical` values for CardType, no `null` anywhere) — this
+drift was isolated to `Category` alone, not a dashboard-wide pattern.
+
+**The fix**: widened the filter to
+`r.Category != null && r.Category !== 'N/A'` — catches both the current
+(`null`) and prior (`'N/A'` string) sentinel forms, so it can't go silently
+inert again if a future refresh reverts to the string form. Added the
+requested comment directly above the memo, appended after the existing
+2026-08-14/2026-09-16/2026-09-17 history rather than replacing it (same
+"keep history visible, don't edit it away" convention this file follows
+throughout):
+
+> Category==='N/A' rows (Cancel Redeem correction) are deliberately
+> excluded here — this chart is gross F&B by category, NOT net. Its bar
+> total will not equal the net "F&B Redemption" KPI above it by the
+> cancellation amount — that's intentional (2026-09-18), do not "fix" by
+> re-including these rows.
+
+**One thing flagged rather than silently claimed fixed**: the request's
+own verification target ("single 'Other' bar only") does not hold today,
+and never did — this is unrelated to the null/'N/A' bug above. The real
+classifier already has its own named `Category = 'Other'` value (₹746L,
+the dataset's 2nd-largest F&B category), and `topNWithOther()` always
+appends a *second*, separately-keyed `'Other'` entry for whatever falls
+past the top 10 (here, just `Alcohol`, ₹2L) — it never checks whether
+`'Other'` is already present in the top N before adding its own. This
+was already investigated and explicitly accepted as intentional in the
+2026-08-05 "color differentiation audit" entry above ("the chart
+legitimately shows gray twice... both correctly land on CATEGORICAL_GRAY
+... not a bug"), and `topNWithOther()` is shared by several other charts
+(Box Office's "by Format," Overview's/Summary's Denomination breakdowns),
+so changing its dedup behavior now would be a separate, wider-blast-radius
+decision — not something to fold silently into this fix. Not touched;
+flagging here so "single Other bar" isn't assumed true from this entry
+alone.
+
+**Verified against the raw cube by hand first, then live in the app**:
+unfiltered — 11 real F&B categories, all positive (Popcorn ₹805L, Other
+₹746L, Food ₹417L, Beverages ₹317L, Combos ₹193L, Hot Beverages ₹74L,
+Add-ons ₹17L, Ice Cream ₹11L, Confectionery ₹9L, Snacks ₹5L, synthetic
+Other/Alcohol ₹2L) — every figure matched a direct hand computation
+against `netFnbRows` (replicating `netHeadRows`/`physicalCancelWinnerMap`)
+exactly, X-axis now starts at 0 (was -350 before the fix). Re-verified
+under Region=NORTH: values recompute (Popcorn ₹364L, real "Other" moves
+ahead of it to ₹416L, synthetic Other rounds to ₹0L) with zero negative
+bars — confirms filtering still works correctly post-fix, not just the
+unfiltered baseline. Zero console errors across all 9 pages, checked
+against the production build (`vite preview`, not just dev); clean build
+(1,007.81 kB JS, 321.86 kB gzipped, no new warnings beyond the
+pre-existing 500KB chunk-size notice — a comment-and-one-line-filter
+change, no measurable size difference).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
