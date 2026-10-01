@@ -127,77 +127,108 @@ export function fyQuarterMonths(anchor) {
   })
 }
 
-// 2026-08-30 — "Breakage": the cumulative unredeemed remainder across
-// every activation cohort that's past its 13-month validity window (a
-// card activated in month M is valid through M+12 inclusive, expired
-// starting M+13) — NOT a single month's cohort, every month from the
-// dataset's own start through the cutoff, summed. `anchorMonth` is the
-// same anchor concept MTD/QTD/YTD/custom already share
-// (`usePresetWindow()`'s own `anchorMonth`, below); the cutoff is derived
-// from it as `anchorMonth − 13` months, via the same `monthIndex()`/
-// `indexToMonth()` arithmetic every other window builder in this file
-// already uses — no new month arithmetic invented for this.
+// 2026-10-01 — "Breakage" redefined from a single cumulative balance (as
+// of one anchor month) to a windowed figure scoped to whatever FY/Month
+// period is currently selected — "of the cohorts that EXPIRED during this
+// selected period, how much is permanently unredeemed." A card activated
+// in month M is valid through M+12 inclusive, expired starting M+13 — so
+// for a selected period [periodStart, periodEnd], the activation cohorts
+// that expire somewhere inside it are exactly those activated in
+// [periodStart−13, periodEnd−13] (the whole period shifted back 13 months
+// wholesale, both ends). `period` is `{ start, end }` — see
+// `usePresetWindow()`'s own `breakagePeriod` below for exactly how that's
+// derived from the current FY/Month filters; this function itself has no
+// filter-reading logic, just the month arithmetic.
 //
-// `activationRows` should be a Month/FY-unrestricted pool (e.g.
-// `activationRowsForComparison`) — this calculation is *inherently* about
-// activation months almost always outside whatever's currently selected
-// (the cutoff sits 13 months behind the anchor), so restricting to the
-// current Month/FY would silently zero it out. `cohortRows` should
-// likewise be Month/FY-unrestricted (`cohortRowsForComparison`) with
-// `RedemptionYearMonth` left completely open — "however much of that
-// cohort has been redeemed to date, any redemption month" is exactly the
-// same activation-fixed/redemption-unbounded shape the spillover chart's
-// own `cohortRowsByActivation` already uses, just evaluated for every
-// historical activation month at once instead of just the currently
-// selected one. Both pools already exclude the cohort cube's
-// "Pre-existing" sentinel rows unconditionally (`passesCohortCommon()` in
-// FilterContext.jsx), so no extra exclusion is needed here.
+// This is a strict generalization of the original cumulative definition,
+// not a different concept replacing it: when no FY/Month filter is active
+// at all, `period` spans the entire dataset, so `periodStart−13` clamps to
+// the dataset's own earliest activation month (see the clamp below) and
+// the computation collapses to exactly the old "every expired cohort
+// since the dataset began" figure. A single FY selected (Month left at
+// "All") narrows `period` to that FY's own real months-to-date; an
+// explicit Month range narrows it to exactly that range.
+//
+// `activationRows`/`cohortRows` should be Month/FY-unrestricted pools
+// (`activationRowsForComparison`/`cohortRowsForComparison`) — the shifted
+// window almost never coincides with the currently-selected period itself
+// (it sits 13 months behind it), so restricting either pool to the active
+// Month/FY would silently zero this out. `cohortRows`' own
+// `RedemptionYearMonth` is left completely unbounded — "however much of
+// that cohort has been redeemed to date, any redemption month" — same
+// activation-fixed/redemption-unbounded shape the spillover chart's own
+// `cohortRowsByActivation` already uses. Both pools already exclude the
+// cohort cube's "Pre-existing" sentinel rows unconditionally
+// (`passesCohortCommon()` in FilterContext.jsx).
 //
 // Because summation is linear, "sum each month's (activation − redeemed)"
-// across every qualifying month equals "(sum of all qualifying
+// across every month in the window equals "(sum of all qualifying
 // activation) − (sum of all qualifying redeemed-to-date)" — no per-month
 // grouping/matching needed, just two independently-filtered sums.
 //
-// Returns `{ amount, cutoffMonth, hasCohorts }`. `hasCohorts` is false
-// whenever the cutoff falls before the dataset's own earliest activation
-// month (derived from `activationRows` itself, not hardcoded, so a future
-// data refresh needs no code change) — no cohort has reached expiry yet,
-// so `amount` is 0 rather than computed from an empty/nonsensical window
-// (verified: anchor Apr 2025 or earlier → cutoff Mar 2024 or earlier, one
-// month short of this dataset's Apr 2024 start → ₹0). `amount` is also
-// floored at 0 generally, never negative, per an explicit "show ₹0, don't
-// go negative" instruction — aggregate redemption CAN exceed aggregate
-// activation for a slice of this dataset (see this file's own ">100% bug"
-// investigation elsewhere in CLAUDE.md), so this guard is a real safety
-// net, not a defensive no-op.
-export function computeBreakage(activationRows, cohortRows, anchorMonth) {
-  if (!anchorMonth || activationRows.length === 0) return { amount: 0, cutoffMonth: null, hasCohorts: false }
-  const cutoffIdx = monthIndex(anchorMonth) - 13
-  const cutoffMonth = indexToMonth(cutoffIdx)
+// Returns `{ amount, windowStart, windowEnd, hasCohorts }`. `windowStart`/
+// `windowEnd` are the real, clamped boundaries actually used — when the
+// unclamped `periodStart−13` falls before the dataset's own earliest
+// activation month, `windowStart` is clamped to that real earliest month
+// instead (so a caller's label can say "Cards activated between {real
+// start} and {end}," never a pre-dataset date the dataset can't actually
+// speak to). `hasCohorts` is false in two distinct cases a caller needs to
+// tell apart: `period` itself is `null` (no FY/Month selection to derive a
+// window from at all — `windowStart`/`windowEnd` are also `null` in this
+// case) vs. a real period whose entire shifted window still falls before
+// the dataset begins (no cohort has reached expiry yet — `windowStart`/
+// `windowEnd` ARE set here, just with `amount: 0`). `amount` is floored at
+// 0, never negative, per an explicit "show ₹0, don't go negative"
+// instruction — aggregate redemption CAN exceed aggregate activation for
+// a slice of this dataset (see this file's own ">100% bug" investigation
+// elsewhere in CLAUDE.md), so this guard is a real safety net, not a
+// defensive no-op.
+export function computeBreakage(activationRows, cohortRows, period) {
+  if (!period || activationRows.length === 0) return { amount: 0, windowStart: null, windowEnd: null, hasCohorts: false }
+  const windowStartIdxRaw = monthIndex(period.start) - 13
+  const windowEndIdx = monthIndex(period.end) - 13
   const datasetStartIdx = Math.min(...activationRows.map((r) => monthIndex(r.YearMonth)))
-  if (cutoffIdx < datasetStartIdx) return { amount: 0, cutoffMonth, hasCohorts: false }
-  const activationTotal = sumBy(activationRows.filter((r) => monthIndex(r.YearMonth) <= cutoffIdx), 'ActivationAmount')
-  const redeemedToDate = sumBy(cohortRows.filter((r) => monthIndex(r.ActivationYearMonth) <= cutoffIdx), 'RedemptionAmount')
-  return { amount: Math.max(0, activationTotal - redeemedToDate), cutoffMonth, hasCohorts: true }
+  if (windowEndIdx < datasetStartIdx) {
+    return { amount: 0, windowStart: indexToMonth(windowStartIdxRaw), windowEnd: indexToMonth(windowEndIdx), hasCohorts: false }
+  }
+  const windowStartIdx = Math.max(windowStartIdxRaw, datasetStartIdx)
+  const activationTotal = sumBy(
+    activationRows.filter((r) => { const idx = monthIndex(r.YearMonth); return idx >= windowStartIdx && idx <= windowEndIdx }),
+    'ActivationAmount'
+  )
+  const redeemedToDate = sumBy(
+    cohortRows.filter((r) => { const idx = monthIndex(r.ActivationYearMonth); return idx >= windowStartIdx && idx <= windowEndIdx }),
+    'RedemptionAmount'
+  )
+  return {
+    amount: Math.max(0, activationTotal - redeemedToDate),
+    windowStart: indexToMonth(windowStartIdx),
+    windowEnd: indexToMonth(windowEndIdx),
+    hasCohorts: true
+  }
 }
 
-// Breakage's own delta — "compare against the equivalent cumulative figure
-// using last year's anchor (same A−13 rule, one year earlier)". Breakage
-// is a point-in-time cumulative BALANCE, not a flow quantity summed over a
-// selected window, so MoM/QoQ sub-windows the way computeComparisons()
-// derives them don't apply here — there is only ever this one meaningful
-// comparison. Rendered as a single fixed "YoY"-labeled badge on both pages
-// (via a plain `deltas={[{label:'YoY', pct: ...}]}`, not `kpiDeltas()`),
-// same single-badge visual convention every other KPI's delta already
-// uses, just without the preset-dependent label switch that only makes
-// sense for a flow quantity. `pctChange`'s own "hide on a zero/missing
-// previous value" rule already covers the "no cohorts yet" case (both
-// sides computing to 0) with no extra guard needed here.
-export function computeBreakageYoyPct(activationRows, cohortRows, anchorMonth) {
-  if (!anchorMonth) return null
-  const current = computeBreakage(activationRows, cohortRows, anchorMonth)
-  const priorAnchor = indexToMonth(monthIndex(anchorMonth) - 12)
-  const prior = computeBreakage(activationRows, cohortRows, priorAnchor)
+// Breakage's own delta — the SAME windowed figure, but with the entire
+// selected period (not the already-shifted expiry window) moved back 12
+// months before re-deriving its own expiry window the normal way — e.g.
+// period Apr 2026 – Aug 2026 compares against Apr 2025 – Aug 2025, which
+// itself resolves to the Mar 2024 – Jul 2024 expiry window. Breakage is a
+// point-in-time windowed figure, not a flow quantity accumulated over an
+// anchor-derived MoM/QoQ sub-window the way computeComparisons() derives
+// them, so those sub-windows don't apply here — there is only ever this
+// one meaningful comparison. Rendered as a single fixed "YoY"-labeled
+// badge on both pages (via a plain `deltas={[{label:'YoY', pct: ...}]}`,
+// not `kpiDeltas()`), same single-badge visual convention every other
+// KPI's delta already uses, just without the preset-dependent label
+// switch that only makes sense for a flow quantity. `pctChange`'s own
+// "hide on a zero/missing previous value" rule already covers the "no
+// cohorts yet" case (both sides computing to 0) with no extra guard
+// needed here.
+export function computeBreakageYoyPct(activationRows, cohortRows, period) {
+  if (!period) return null
+  const current = computeBreakage(activationRows, cohortRows, period)
+  const priorPeriod = { start: indexToMonth(monthIndex(period.start) - 12), end: indexToMonth(monthIndex(period.end) - 12) }
+  const prior = computeBreakage(activationRows, cohortRows, priorPeriod)
   return pctChange(current.amount, prior.amount)
 }
 
@@ -248,6 +279,34 @@ export function usePresetWindow() {
     if (isMonthAll) return presets.ytd
     return [...filters.month].filter((m) => fyOf(m) === anchorFY).sort()
   }, [isMonthNoneSelected, isMonthAll, anchorMonth, anchorFY, presets.ytd, filters.month])
+
+  // 2026-10-01 — `breakagePeriod` for computeBreakage()/computeBreakageYoyPct()
+  // above: deliberately NOT `selectedMonths` (narrowed to just the anchor's
+  // own FY, and collapsing a true no-FY/no-Month default down to just the
+  // latest FY's own to-date months) — Breakage's own requirement is that
+  // leaving BOTH FY and Month unrestricted means "the whole dataset," full
+  // stop, so its fully-unfiltered default reproduces the dataset-wide
+  // cumulative figure Breakage always showed before this redefinition, not
+  // just the current FY's slice of it. Built straight from `options.months`
+  // (already FY-narrowed to whichever FY(s) are ticked, or the full dataset
+  // when FY is unrestricted) and `filters.month` directly — ignores Region/
+  // CardType/Source/etc. entirely, on purpose: those narrow which ROWS
+  // count within a month, never which months are "in the selected period,"
+  // and letting them narrow the window too risked a sparse-filter edge case
+  // (e.g. a Region with zero rows in one edge month of an otherwise-wide
+  // selection) silently shrinking the period without the user picking a
+  // narrower one. `null` whenever Month is explicitly set to none-selected
+  // (or the computed month list is somehow empty) — computeBreakage()
+  // treats a `null` period as "nothing selected," matching every other
+  // KPI's own "show nothing when Month explicitly selects nothing"
+  // convention, no special-casing needed beyond this.
+  const breakagePeriod = useMemo(() => {
+    if (isMonthNoneSelected) return null
+    const months = isMonthAll ? options.months : filters.month
+    if (!months.length) return null
+    const sorted = [...months].sort()
+    return { start: sorted[0], end: sorted[sorted.length - 1] }
+  }, [isMonthNoneSelected, isMonthAll, options.months, filters.month])
 
   // QTD as a Q1-Q4 dropdown: `anchorFYMonths` is every month of the
   // anchor's own FY that actually exists in the dataset (`options.months`
@@ -354,6 +413,7 @@ export function usePresetWindow() {
     anchorMonth,
     presets,
     selectedMonths,
+    breakagePeriod,
     quarterOptions,
     activePreset,
     activeQuarter,

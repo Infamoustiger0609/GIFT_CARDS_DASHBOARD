@@ -105,6 +105,7 @@ export default function CardJourney() {
   const {
     anchorMonth,
     selectedMonths,
+    breakagePeriod,
     quarterOptions,
     activePreset,
     activeQuarter,
@@ -279,33 +280,43 @@ export default function CardJourney() {
   }, [cohortRowsForNetting])
 
   // "Breakage" (2026-08-30, replaces the former "Unredeemed Balance" card
-  // in this exact ribbon slot — see Overview.jsx's own matching doc
-  // comment for the full M+13 cumulative rule). Deliberately the SAME
-  // computation as Overview.jsx's own Breakage, via the exact same shared
-  // computeBreakage() (lib/comparisons.js) fed this page's own
-  // activationRowsForComparison/cohortRowsForComparison — Breakage is a
-  // dataset-wide historical concept (every activation cohort past its own
-  // 13-month validity window, cumulatively), not a per-page-scoped one the
-  // way "Cards Activated"/"Of Those, Redeemed" are, so unlike the former
-  // "Unredeemed Balance" (which deliberately differed between the two
-  // pages), this reads identically on both pages under the same filters —
-  // by design, not an oversight.
+  // in this exact ribbon slot; redefined 2026-10-01 from a single
+  // cumulative balance to a windowed figure scoped to the selected FY/
+  // Month period — see Overview.jsx's own matching doc comment, and
+  // computeBreakage()'s in lib/comparisons.js, for the full rule).
+  // Deliberately the SAME computation as Overview.jsx's own Breakage, via
+  // the exact same shared computeBreakage() fed this page's own
+  // activationRowsForComparison/cohortRowsForComparison and the same
+  // `breakagePeriod` (from usePresetWindow()) — unlike "Cards Activated"/
+  // "Of Those, Redeemed" (deliberately page-scoped), Breakage reads
+  // identically on both pages under the same filters, by design.
   const breakage = useMemo(
-    () => computeBreakage(activationRowsForComparison, cohortRowsForComparison, anchorMonth),
-    [activationRowsForComparison, cohortRowsForComparison, anchorMonth]
+    () => computeBreakage(activationRowsForComparison, cohortRowsForComparison, breakagePeriod),
+    [activationRowsForComparison, cohortRowsForComparison, breakagePeriod]
   )
-  const breakageSub = breakage.hasCohorts
-    ? `Cards activated ${monthLabel(breakage.cutoffMonth)} or earlier`
-    : 'No cohorts have reached 13 months yet'
-  // Single fixed "YoY" badge (this anchor's cumulative figure vs. the
-  // identical A−13 calculation one year earlier) — see
+  // See Overview.jsx's own breakageSub for the 3-state rule this mirrors:
+  // blank when breakagePeriod is null (Month explicitly none-selected),
+  // the "no cohorts yet" message when a real window hasn't reached the
+  // dataset, otherwise the real (clamped) window — collapsed to "in
+  // {month}" when it's a single month, "between {start} and {end}"
+  // otherwise.
+  const breakageSub =
+    breakage.windowStart == null
+      ? ''
+      : !breakage.hasCohorts
+        ? 'No cohorts have reached 13 months yet'
+        : breakage.windowStart === breakage.windowEnd
+          ? `Cards activated in ${monthLabel(breakage.windowStart)}`
+          : `Cards activated between ${monthLabel(breakage.windowStart)} and ${monthLabel(breakage.windowEnd)}`
+  // Single fixed "YoY" badge (the same selected period, shifted back 12
+  // months, re-deriving its own expiry window) — see
   // computeBreakageYoyPct()'s own doc comment for why this bypasses
-  // kpiDeltas()'s MTD/QTD/YTD label-switching: Breakage is a point-in-time
-  // cumulative balance, not a flow quantity, so there's no meaningful
+  // kpiDeltas()'s MTD/QTD/YTD label-switching: Breakage is a windowed
+  // point-in-time figure, not a flow quantity, so there's no meaningful
   // "month-to-date"/"quarter-to-date" version of it to switch to.
   const breakageYoyPct = useMemo(
-    () => computeBreakageYoyPct(activationRowsForComparison, cohortRowsForComparison, anchorMonth),
-    [activationRowsForComparison, cohortRowsForComparison, anchorMonth]
+    () => computeBreakageYoyPct(activationRowsForComparison, cohortRowsForComparison, breakagePeriod),
+    [activationRowsForComparison, cohortRowsForComparison, breakagePeriod]
   )
 
   // 2026-08-28 — "custom window" badge for each of the other 4 KPIs above:

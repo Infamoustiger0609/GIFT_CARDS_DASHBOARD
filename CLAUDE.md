@@ -9379,6 +9379,106 @@ against the production build (`vite preview`, not just dev); clean build
 pre-existing 500KB chunk-size notice — a comment-and-one-line-filter
 change, no measurable size difference).
 
+## 2026-10-01 — Breakage redefined: from one cumulative balance (as of an
+anchor month) to a windowed figure scoped to the selected FY/Month period
+
+Full redefinition of what "Breakage" answers, not a tweak — the 2026-08-30
+version was "the cumulative unredeemed remainder across every expired
+cohort, as of the current anchor month" (a running stock, effectively
+ignoring which FY/Month was selected beyond picking the anchor). This
+version answers a narrower question: **"of the cohorts that expired
+DURING the selected period, how much is permanently unredeemed"** — a
+flow scoped to that period, not a running total.
+
+**The windowing rule**: a card activated in month M expires starting
+M+13 (unchanged from the original M+13 validity rule). For a selected
+period `[periodStart, periodEnd]`, the cohorts expiring somewhere inside
+it are exactly those activated in `[periodStart−13, periodEnd−13]` — the
+whole period shifted back 13 months, both ends. Confirmed by hand before
+writing any code: Apr 2022 – Aug 2026 shifts to Mar 2021 – Jul 2025;
+FY2026-27 (FY-to-date, Apr–Aug 2026) shifts to Mar 2025 – Jul 2025 — both
+exact matches to the user's own worked examples.
+
+**This is a strict generalization, not a different metric replacing the
+old one** — when neither FY nor Month is filtered at all, the period is
+the whole dataset, so `periodStart−13` clamps to the dataset's own
+earliest activation month and the computation collapses to exactly the
+old cumulative-since-dataset-start figure. Verified by hand and live:
+unfiltered Breakage is still **₹1,689.48L**, byte-identical to the
+2026-08-30 entry's own figure for the same unfiltered state — confirming
+no regression for the one case the user explicitly required
+("when selected all the period it should show the cumulative breakage").
+
+**What defines "the period"** — a new `breakagePeriod` field added to the
+shared `usePresetWindow()` hook (`lib/comparisons.js`), deliberately
+**not** the hook's existing `selectedMonths` (which narrows a bare "Month
+= All" default down to just the anchor's own FY-to-date, not the whole
+dataset — would have broken the cumulative-when-unfiltered requirement
+above). Built straight from `options.months` (already FY-narrowed to
+whichever FY(s) are ticked, or the full dataset when FY is unrestricted)
+and `filters.month` directly: Month=All → `options.months`' own min/max;
+Month explicit → that literal selection's own min/max. Deliberately
+ignores Region/CardType/Source/Denom/etc. — those narrow which ROWS count
+within a month, never which months are "in the selected period," and
+letting them narrow the window too risked a sparse-filter edge case (a
+thin Region filter leaving zero rows in an edge month) silently shrinking
+the window. `breakagePeriod` is `null` whenever Month is explicitly set
+to none-selected, per the user's own explicit instruction to leave that
+case exactly as every other KPI already handles it ("do not show any data
+... just like how it works now, no changes in that") — `computeBreakage()`
+treats a `null` period as "nothing selected," not a special Breakage-only
+code path.
+
+**YoY badge**: now shifts the entire selected period back 12 months, then
+re-derives its own expiry window the normal way — e.g. period Apr 2026 –
+Aug 2026 compares against Apr 2025 – Aug 2025 (which itself resolves to
+Mar 2024 – Jul 2024), not the old "same single anchor, one year back"
+rule. Still a single fixed "YoY"-labeled badge, not routed through
+`kpiDeltas()`'s MTD/QTD/YTD label-switching — per the user's own
+confirmation, a windowed point-in-time figure still has no meaningful
+"month-to-date" sub-version of itself to switch between.
+
+**Card Journey**: confirmed identical to Overview, no page-specific
+variant — per the user's own instinct, both pages already shared the
+exact same `computeBreakage()`/`computeBreakageYoyPct()` calls fed the
+same `activationRowsForComparison`/`cohortRowsForComparison` pools, so
+swapping the single `anchorMonth` argument for the new `breakagePeriod`
+object in both places was the only change needed; no divergent logic was
+introduced.
+
+**Label**: `computeBreakage()` now returns `windowStart`/`windowEnd` (the
+real, clamped boundaries) instead of a single `cutoffMonth`. The sub-line
+has 3 distinct states, not 2 — `windowStart == null` (no period at all,
+Month explicitly none-selected) renders blank, matching every other KPI's
+own "show nothing" convention in that state, rather than reusing the "no
+cohorts yet" message (which would have been actively misleading — it
+implies a real period exists but is too recent, not "nothing is
+selected"). A real period with `hasCohorts: false` (the whole shifted
+window still predates the dataset) keeps the existing "No cohorts have
+reached 13 months yet" message. Otherwise: "Cards activated between
+{start} and {end}," collapsed to "Cards activated in {month}" when
+`windowStart === windowEnd` (a single Month ticked) — a small polish
+beyond the user's literal "between (anchor months)" wording, since
+"between Jul 25 and Jul 25" reads as a mistake, not a deliberate
+single-month answer.
+
+**Verified against hand-computed targets (raw cubes, independent of the
+app) for every case discussed with the user, then live**:
+| Scenario | Hand-computed | Live in app |
+|---|---|---|
+| Unfiltered (period = whole dataset) | ₹1,689.48L, window Apr 20–Jul 25 | ₹1,689 L, "Cards activated between Apr 20 and Jul 25", ▲41.6% YoY (unchanged from before this redefinition) |
+| FY2026-27 only, Month=All | ₹210.16L, window Mar 25–Jul 25 | ₹210 L, same window, ▼2.7% YoY (hand-checked: −2.68%) |
+| Month=Aug 26 only (single month) | ₹52.23L, window "Jul 25" (single) | ₹52 L, "Cards activated in Jul 25", ▼36.2% YoY (hand-checked exactly) |
+| Month explicitly none-selected | n/a — no period | ₹0 L, no sub-line, no YoY badge — matches every other KPI's own behavior in this state |
+| FY2020-21 only (too early for any cohort to expire) | window end predates dataset start | ₹0 L, "No cohorts have reached 13 months yet", no badge (pctChange's existing 0/0 → null rule) |
+| Card Journey, unfiltered | — | ₹1,689 L, identical window and YoY to Overview, confirming the two pages stayed in lockstep |
+
+Zero console errors across both pages in every scenario above, and across
+a full 9-page sweep in the default state; clean production build
+(1,008.41 kB JS, 322.03 kB gzipped — a ~0.6 kB increase for the new
+`breakagePeriod` derivation and the rewritten windowing logic, no new
+warnings beyond the pre-existing 500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

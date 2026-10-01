@@ -218,6 +218,7 @@ export default function Overview() {
   const {
     anchorMonth,
     selectedMonths,
+    breakagePeriod,
     quarterOptions,
     activePreset,
     activeQuarter,
@@ -409,44 +410,57 @@ export default function Overview() {
 
   // ---- "Breakage" KPI (2026-08-30, replaces the former "Unredeemed
   // Balance" card — itself a same-day replacement of ATV/Universal-ATV —
-  // in this exact ribbon slot) ----
-  // Not "Activation minus Redemption for the current selection" anymore —
-  // a card activated in month M is only valid through M+12 (13 real
-  // calendar months of usable life); Breakage is the CUMULATIVE unredeemed
-  // remainder across every activation cohort that's already past that
-  // window, i.e. every month from this dataset's own start through
-  // (anchor − 13), summed — not just the currently selected month(s).
-  // computeBreakage() (lib/comparisons.js) does the actual month
-  // arithmetic/summation; both pools it's given are Month/FY-unrestricted
-  // (activationRowsForComparison — this KPI is fundamentally about
-  // activation months almost always outside whatever's currently selected
-  // — and cohortRowsForComparison, the one pool on this page that reaches
-  // cohortCube.json, loaded lazily above specifically for this KPI).
+  // in this exact ribbon slot; redefined again 2026-10-01 from a single
+  // cumulative-since-dataset-start balance to a windowed figure scoped to
+  // the currently selected FY/Month period — see computeBreakage()'s own
+  // doc comment in lib/comparisons.js for the full rule and why an
+  // unfiltered default still reproduces the old cumulative figure) ----
+  // Not "Activation minus Redemption for the current selection" — a card
+  // activated in month M is only valid through M+12 (13 real calendar
+  // months of usable life), so this shows "of the cohorts that expired
+  // DURING the selected period, how much is permanently unredeemed" —
+  // every activation month in [periodStart−13, periodEnd−13], summed.
+  // `breakagePeriod` (from usePresetWindow()) is the period; both row
+  // pools given to computeBreakage() are still Month/FY-unrestricted
+  // (activationRowsForComparison/cohortRowsForComparison — the shifted
+  // window sits 13 months behind whatever's selected, so restricting
+  // either pool to the active Month/FY would silently zero this out).
   const breakage = useMemo(
-    () => computeBreakage(activationRowsForComparison, cohortRowsForComparison, anchorMonth),
-    [activationRowsForComparison, cohortRowsForComparison, anchorMonth]
+    () => computeBreakage(activationRowsForComparison, cohortRowsForComparison, breakagePeriod),
+    [activationRowsForComparison, cohortRowsForComparison, breakagePeriod]
   )
-  // Sub-line states the cutoff month in plain terms so the figure doesn't
-  // read as scoped to the current selection's own months (it isn't) — e.g.
-  // "Cards activated Jun 2025 or earlier". `breakage.hasCohorts === false`
-  // means the anchor is too recent for any cohort to have expired yet
-  // (verified: anchor Apr 2025 or earlier → ₹0) — a different, dedicated
-  // message rather than a nonsensical pre-dataset date.
-  const breakageSub = breakage.hasCohorts
-    ? `Cards activated ${monthLabel(breakage.cutoffMonth)} or earlier`
-    : 'No cohorts have reached 13 months yet'
+  // Sub-line states the real (clamped) expiry window in plain terms.
+  // Three distinct states computeBreakage() can return, all handled here:
+  // `windowStart == null` means `breakagePeriod` itself was null (Month
+  // explicitly selects nothing) — blank, same "show nothing" convention
+  // every other KPI already follows in that state, not a misleading
+  // "no cohorts" message. A real window with `hasCohorts: false` means the
+  // whole shifted window falls before the dataset even begins (the
+  // selected period is too recent for any cohort to have expired yet) —
+  // its own dedicated message. Otherwise, state the real window — a
+  // single-month window (`windowStart === windowEnd`, e.g. one Month
+  // ticked) reads "in {month}" rather than the grammatically odd
+  // "between X and X".
+  const breakageSub =
+    breakage.windowStart == null
+      ? ''
+      : !breakage.hasCohorts
+        ? 'No cohorts have reached 13 months yet'
+        : breakage.windowStart === breakage.windowEnd
+          ? `Cards activated in ${monthLabel(breakage.windowStart)}`
+          : `Cards activated between ${monthLabel(breakage.windowStart)} and ${monthLabel(breakage.windowEnd)}`
   // Breakage's own delta — see computeBreakageYoyPct()'s own doc comment
-  // for why this is a single fixed "YoY" badge (comparing this anchor's
-  // cumulative figure against the identical A−13 calculation one year
-  // earlier) rather than routed through kpiDeltas()'s MTD/QTD/YTD
-  // label-switching — a point-in-time cumulative balance has no
-  // meaningful "month-to-date"/"quarter-to-date" sub-window the way a
-  // flow quantity (Activation Amount, Redemption Amount, ...) does, so
-  // there's only ever this one comparison to show, regardless of which
-  // preset button is active elsewhere on the page.
+  // for why this is a single fixed "YoY" badge (the same selected period,
+  // shifted back 12 months, re-deriving its own expiry window the normal
+  // way) rather than routed through kpiDeltas()'s MTD/QTD/YTD
+  // label-switching — a windowed point-in-time figure has no meaningful
+  // "month-to-date"/"quarter-to-date" sub-window the way a flow quantity
+  // (Activation Amount, Redemption Amount, ...) does, so there's only
+  // ever this one comparison to show, regardless of which preset button
+  // is active elsewhere on the page.
   const breakageYoyPct = useMemo(
-    () => computeBreakageYoyPct(activationRowsForComparison, cohortRowsForComparison, anchorMonth),
-    [activationRowsForComparison, cohortRowsForComparison, anchorMonth]
+    () => computeBreakageYoyPct(activationRowsForComparison, cohortRowsForComparison, breakagePeriod),
+    [activationRowsForComparison, cohortRowsForComparison, breakagePeriod]
   )
 
   // 2026-08-25 bug fix: these all used to sum over activationRowsAllMonths/
