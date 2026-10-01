@@ -9653,6 +9653,48 @@ build (1,008.56 kB JS, 322.10 kB gzipped — a ~0.15 kB increase for the new
 computation and sub-line concatenation, no new warnings beyond the
 pre-existing 500KB chunk-size notice).
 
+## 2026-10-02 — Same-day follow-up: moved the Breakage % next to the value
+
+Direct user feedback after the entry above shipped: the percentage was
+genuinely rendering correctly (verified by rebuilding from the exact
+committed code and reproducing the user's own screenshot byte-for-byte —
+"₹502 L ▲ 21.9% YoY / Cards activated between Mar 24 and Feb 25 · 13.2% of
+Activation Amount"), just easy to miss as small gray text at the tail of
+an already-long sub-line sentence. Explicit ask: put it next to the ₹
+value instead.
+
+**Switched from the sub-line sentence to `fmtLacsWithPct(amount, total)`
+as the Kpi's `value` prop** — the exact "₹X L (Y%)" convention this app
+already uses for every `breakdown`-panel figure (Transaction Value/
+Additional Revenue's own Ticket/F&B splits), which is precisely the
+"next to the value" placement requested, not a new display convention.
+`value={fmtLacsWithPct(breakage.amount, totalActivation)}` replaces
+`value={fmtLacs(breakage.amount)}` on both pages; `sub={breakageSub}`
+reverts to just the window-description sentence, with the trailing
+"· NN.N% of Activation Amount" clause removed from it. The separate
+`breakagePct`/`breakageSubWithPct` variables from the entry above are
+gone — `fmtLacsWithPct` computes and formats the ratio itself, so keeping
+a second, parallel computation would have been pure duplication.
+
+**The "can exceed 100%, don't cap it" and "hide when total is 0" rules
+both still hold, for free**: `fmtLacsWithPct`'s own body is `if (!total)
+return fmtLacs(amount); return `${fmtLacs(amount)} (${fmtPct((amount/total)*100)})``
+— no capping anywhere in it, and the falsy-total branch already drops the
+"(Y%)" suffix entirely rather than rendering "(—%)" — exactly the two
+behaviors the original request specified, now inherited from the shared
+formatter instead of hand-rolled a second time.
+
+**Verified live, rebuilt from the committed code, same 3 reference
+scenarios as the entry above, both pages**: unfiltered — "₹1,689 L
+(12.4%)"; FY2025-26 (the user's own screenshot filter) — "₹502 L
+(13.2%)", byte-identical to the prior entry's percentage, just relocated;
+Card Journey reproduced both exactly. Screenshotted at 1600px — the
+combined "₹502 L (13.2%)" string renders on one line at the card's
+existing `text-2xl` value size, no overflow/wrapping, visually consistent
+with every other KPI on the ribbon. Zero console errors; clean production
+build (1,008.42 kB JS, 322.02 kB gzipped — a slight decrease from the
+entry above, net code removed).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

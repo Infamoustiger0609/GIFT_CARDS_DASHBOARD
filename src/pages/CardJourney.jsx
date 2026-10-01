@@ -319,16 +319,14 @@ export default function CardJourney() {
     [activationRowsForComparison, cohortRowsForComparison, breakagePeriod]
   )
   // 2026-10-02 — see Overview.jsx's own identical computation for the full
-  // rationale: Breakage as a % of this period's own Activation Amount
-  // (`totalActivation` above — the currently selected period, NOT the
-  // window 13 months earlier `breakage.amount` itself sums over). Can
+  // rationale: Breakage shown as a % of this period's own Activation
+  // Amount (`totalActivation` above — the currently selected period, NOT
+  // the window 13 months earlier `breakage.amount` itself sums over). Can
   // legitimately exceed 100% since the two figures come from two different,
-  // unrelated windows by construction — not a bug, never capped. Hidden
-  // (not "—%") whenever totalActivation is 0, the same state that already
-  // blanks `breakageSub` itself.
-  const breakagePct = totalActivation > 0 ? (breakage.amount / totalActivation) * 100 : null
-  const breakageSubWithPct =
-    breakageSub && breakagePct != null ? `${breakageSub} · ${fmtPct(breakagePct, 1)} of Activation Amount` : breakageSub
+  // unrelated windows by construction — not a bug, never capped. Rendered
+  // next to the main value via `fmtLacsWithPct()` (not in the sub-line),
+  // which already hides the "(Y%)" suffix whenever `totalActivation` is
+  // falsy — the same state that already blanks `breakageSub` itself.
 
   // 2026-08-28 — "custom window" badge for each of the other 4 KPIs above:
   // the single generic comparison kpiDeltas() falls back to whenever no
@@ -826,8 +824,8 @@ export default function CardJourney() {
         />
         <Kpi
           label="Breakage"
-          value={cohortLoading ? '—' : fmtLacs(breakage.amount)}
-          sub={breakageSubWithPct}
+          value={cohortLoading ? '—' : fmtLacsWithPct(breakage.amount, totalActivation)}
+          sub={breakageSub}
           accent="navy"
           deltas={[{ label: 'YoY', pct: breakageYoyPct }]}
         />

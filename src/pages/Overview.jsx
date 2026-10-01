@@ -462,21 +462,25 @@ export default function Overview() {
     () => computeBreakageYoyPct(activationRowsForComparison, cohortRowsForComparison, breakagePeriod),
     [activationRowsForComparison, cohortRowsForComparison, breakagePeriod]
   )
-  // 2026-10-02: Breakage as a % of this period's own Activation Amount —
-  // `totalActivation` above, the already-displayed headline figure for the
-  // CURRENTLY SELECTED period, not the window 13 months earlier that
-  // `breakage.amount` itself sums cohorts from. This ratio can legitimately
-  // exceed 100%: the numerator (Breakage) and denominator (totalActivation)
-  // come from two different, unrelated windows by construction — a small
-  // recent period's own Activation Amount has no necessary relationship to
-  // the size of the (potentially much larger) expired-cohort window sitting
-  // 13 months behind it. Not a bug — never capped. Hidden (not "—%")
-  // whenever totalActivation is 0 — the same state Month=NONE_SELECTED
-  // already produces for `breakageSub` itself, so this falls out of the
-  // same guard with no extra special-casing.
-  const breakagePct = totalActivation > 0 ? (breakage.amount / totalActivation) * 100 : null
-  const breakageSubWithPct =
-    breakageSub && breakagePct != null ? `${breakageSub} · ${fmtPct(breakagePct, 1)} of Activation Amount` : breakageSub
+  // 2026-10-02: Breakage shown as a % of this period's own Activation
+  // Amount — `totalActivation` above, the already-displayed headline
+  // figure for the CURRENTLY SELECTED period, not the window 13 months
+  // earlier that `breakage.amount` itself sums cohorts from. This ratio
+  // can legitimately exceed 100%: the numerator (Breakage) and denominator
+  // (totalActivation) come from two different, unrelated windows by
+  // construction — a small/recent period's own Activation Amount has no
+  // necessary relationship to the size of the (potentially much larger)
+  // expired-cohort window sitting 13 months behind it. Not a bug — never
+  // capped (`fmtLacsWithPct` just formats the ratio, it doesn't clamp it).
+  // Rendered next to the main value via `fmtLacsWithPct(amount, total)` —
+  // the same "₹X L (Y%)" convention every breakdown figure on this ribbon
+  // already uses (Transaction Value/Additional Revenue's own Ticket/F&B
+  // splits) — rather than in the sub-line sentence, per explicit feedback
+  // that the percentage needed to sit next to the ₹ figure, not buried at
+  // the end of a caption. `fmtLacsWithPct` itself already hides the "(Y%)"
+  // suffix (not "(—%)") whenever `total` is falsy, which is exactly the
+  // state Month=NONE_SELECTED produces for `totalActivation` — no separate
+  // hide-guard needed here.
 
   // 2026-08-25 bug fix: these all used to sum over activationRowsAllMonths/
   // redemptionRowsAllMonths — Month-unrestricted, but still FY-restricted
@@ -970,8 +974,8 @@ export default function Overview() {
         />
         <Kpi
           label="Breakage"
-          value={cohortLoading ? '—' : fmtLacs(breakage.amount)}
-          sub={breakageSubWithPct}
+          value={cohortLoading ? '—' : fmtLacsWithPct(breakage.amount, totalActivation)}
+          sub={breakageSub}
           accent="navy"
           deltas={[{ label: 'YoY', pct: breakageYoyPct }]}
         />
