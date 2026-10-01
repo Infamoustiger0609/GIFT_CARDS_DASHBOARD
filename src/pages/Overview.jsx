@@ -462,6 +462,21 @@ export default function Overview() {
     () => computeBreakageYoyPct(activationRowsForComparison, cohortRowsForComparison, breakagePeriod),
     [activationRowsForComparison, cohortRowsForComparison, breakagePeriod]
   )
+  // 2026-10-02: Breakage as a % of this period's own Activation Amount —
+  // `totalActivation` above, the already-displayed headline figure for the
+  // CURRENTLY SELECTED period, not the window 13 months earlier that
+  // `breakage.amount` itself sums cohorts from. This ratio can legitimately
+  // exceed 100%: the numerator (Breakage) and denominator (totalActivation)
+  // come from two different, unrelated windows by construction — a small
+  // recent period's own Activation Amount has no necessary relationship to
+  // the size of the (potentially much larger) expired-cohort window sitting
+  // 13 months behind it. Not a bug — never capped. Hidden (not "—%")
+  // whenever totalActivation is 0 — the same state Month=NONE_SELECTED
+  // already produces for `breakageSub` itself, so this falls out of the
+  // same guard with no extra special-casing.
+  const breakagePct = totalActivation > 0 ? (breakage.amount / totalActivation) * 100 : null
+  const breakageSubWithPct =
+    breakageSub && breakagePct != null ? `${breakageSub} · ${fmtPct(breakagePct, 1)} of Activation Amount` : breakageSub
 
   // 2026-08-25 bug fix: these all used to sum over activationRowsAllMonths/
   // redemptionRowsAllMonths — Month-unrestricted, but still FY-restricted
@@ -956,7 +971,7 @@ export default function Overview() {
         <Kpi
           label="Breakage"
           value={cohortLoading ? '—' : fmtLacs(breakage.amount)}
-          sub={breakageSub}
+          sub={breakageSubWithPct}
           accent="navy"
           deltas={[{ label: 'YoY', pct: breakageYoyPct }]}
         />

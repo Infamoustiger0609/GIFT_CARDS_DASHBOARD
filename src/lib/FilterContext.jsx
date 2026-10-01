@@ -114,13 +114,19 @@ function filterRedemption(cube, filters, opts) {
 }
 
 
-// Sentinel ActivationModeFinal/ActivationYearMonth value for cohortCube.json
-// rows whose card was activated before this dataset's Apr 2024 start (no
-// real activation month to report). See passesCohortCommon()'s own
-// 2026-08-20 bug-fix comment below for why this needs a hard, unconditional
-// exclusion rather than relying on FY/Month/Activation Source to filter it
-// out incidentally.
-const PRE_EXISTING_ACTIVATION = 'Pre-existing (activated before Apr 2024)'
+// 2026-10-02: the literal sentinel string used to be compared against
+// directly ('Pre-existing (activated before Apr 2024)'), but a data refresh
+// silently changed it to '...before Apr 2020' when the dataset's own start
+// moved — every `=== PRE_EXISTING_ACTIVATION` comparison below went
+// permanently false the moment that happened, with no error, just a
+// silently-reappearing set of rows that were supposed to be excluded (see
+// the real bug this caused, documented at passesCohortCommon() below).
+// Matched structurally instead — "not a real YYYY-MM string" — so a future
+// refresh that rewords the sentinel again can't silently break this a
+// second time.
+function isPreExistingActivationYearMonth(value) {
+  return typeof value !== 'string' || !/^\d{4}-\d{2}$/.test(value)
+}
 
 // ---- Cohort cube (2026-08-13, schema replaced same day) ----
 // A third, differently-shaped cube — `ActivationYearMonth`/
@@ -146,29 +152,45 @@ const PRE_EXISTING_ACTIVATION = 'Pre-existing (activated before Apr 2024)'
 // like the main activation cube's own filter (see filterActivation above) —
 // not a second hand-rolled mapping.
 //
-// 2026-08-20 bug fix: a minority of rows carry ActivationModeFinal (and the
-// matching ActivationYearMonth) equal to PRE_EXISTING_ACTIVATION — cards
-// activated before this dataset's Apr 2024 start, with no real activation
-// month to report. The reasoning used to be "no special-case guard needed"
-// because fyOf() on that sentinel string produces a nonsense 'FYNaN-NaN'
-// that never matches a *specific* FY/Month selection, and sourceOf()
-// returns undefined for it, which a *specific* Activation Source selection
-// also correctly excludes. That reasoning missed the "All" case: matches([],
-// x) is unconditionally true regardless of what x is (empty selection means
-// unrestricted), so with FY/Month/Activation Source all left at "All" — the
-// page's own default state — every one of these checks was a no-op and
-// Pre-existing rows leaked straight into cohortRowsByActivation (inflating
-// the spillover chart's Redemption series and, before RedemptionYearMonth
-// existed on this cube, would have leaked into cohortRows the same way).
-// These cards were never "activated in this period" under any FY/Month
-// selection, so they must never appear on this page at all — fixed with a
-// hard, unconditional exclusion below, independent of any filter's state.
+// 2026-08-20 bug fix: a minority of rows carry an ActivationYearMonth
+// sentinel for "activated before this dataset's own start" with no real
+// activation month to report. The reasoning used to be "no special-case
+// guard needed" because fyOf() on that sentinel string produces a nonsense
+// 'FYNaN-NaN' that never matches a *specific* FY/Month selection, and
+// sourceOf() returns undefined for it, which a *specific* Activation Source
+// selection also correctly excludes. That reasoning missed the "All" case:
+// matches([], x) is unconditionally true regardless of what x is (empty
+// selection means unrestricted), so with FY/Month/Activation Source all
+// left at "All" — the page's own default state — every one of these checks
+// was a no-op and Pre-existing rows leaked straight into
+// cohortRowsByActivation (inflating the spillover chart's Redemption
+// series and, before RedemptionYearMonth existed on this cube, would have
+// leaked into cohortRows the same way). These cards were never "activated
+// in this period" under any FY/Month selection, so they must never appear
+// on this page at all — fixed with a hard, unconditional exclusion below,
+// independent of any filter's state.
+//
+// 2026-10-02 bug fix: this cube's own activation-mode field was silently
+// renamed from `ActivationModeFinal` to `ActivationMode` at some point
+// during a data refresh (confirmed directly against the current file — the
+// field no longer exists under its old name). `sourceOf(row.ActivationModeFinal)`
+// was therefore always `sourceOf(undefined)` → `undefined`, which
+// `matches([x, y], undefined)` always rejects — so the *moment* any
+// Activation Source selection narrowed from "All" to a real subset, 100%
+// of cohortCube rows were silently excluded, not just the ones that
+// should've been. This is what made Breakage (and every other cohort-based
+// figure on Card Journey) appear to go UP when a filter got stricter: the
+// redeemed-to-date side of the subtraction collapsed to zero while the
+// activation side kept narrowing normally. Fixed by reading the cube's
+// real field name. The same rename is why the Pre-existing exclusion above
+// was *also* silently inert (it compared against `ActivationModeFinal`
+// too) — both are fixed together here.
 function passesCohortCommon(row, filters) {
-  if (row.ActivationModeFinal === PRE_EXISTING_ACTIVATION) return false
+  if (isPreExistingActivationYearMonth(row.ActivationYearMonth)) return false
   if (!matches(filters.region, row.Region_Clean)) return false
   if (!matches(filters.redemptionSource, redemptionModeOf(row.RedemptionModeFinal))) return false
   if (!matches(filters.ticketFnb, ticketFnbBucket(row.Head))) return false
-  if (!matches(filters.activationSource, sourceOf(row.ActivationModeFinal))) return false
+  if (!matches(filters.activationSource, sourceOf(row.ActivationMode))) return false
   if (!matches(filters.cardType, row.CardType)) return false
   // Week (Weekend/Weekday binary) also newly supported now that Weekday
   // exists on this cube — same isWeekend()/WEEKEND_DAYS canonical source
@@ -284,7 +306,7 @@ function passesRedemptionRowLevelCommon(row, filters) {
 }
 function filterRedemptionRowLevelCohort(rows, filters, { skipMonth = false, skipFY = false } = {}) {
   return rows.filter((row) => {
-    if (row.ActivationYearMonth === PRE_EXISTING_ACTIVATION) return false
+    if (isPreExistingActivationYearMonth(row.ActivationYearMonth)) return false
     if (!skipFY && !matches(filters.fy, fyOf(row.ActivationYearMonth))) return false
     if (!skipMonth && !matches(filters.month, row.ActivationYearMonth)) return false
     if (!skipFY && !matches(filters.fy, fyOf(row.YearMonth))) return false
@@ -298,7 +320,7 @@ function filterRedemptionRowLevelCohort(rows, filters, { skipMonth = false, skip
 // counts.
 function filterRedemptionRowLevelByActivation(rows, filters) {
   return rows.filter((row) => {
-    if (row.ActivationYearMonth === PRE_EXISTING_ACTIVATION) return false
+    if (isPreExistingActivationYearMonth(row.ActivationYearMonth)) return false
     if (!matches(filters.fy, fyOf(row.ActivationYearMonth))) return false
     if (!matches(filters.month, row.ActivationYearMonth)) return false
     return passesRedemptionRowLevelCommon(row, filters)

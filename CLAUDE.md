@@ -9479,6 +9479,180 @@ a full 9-page sweep in the default state; clean production build
 `breakagePeriod` derivation and the rewritten windowing logic, no new
 warnings beyond the pre-existing 500KB chunk-size notice).
 
+## 2026-10-02 — Bug fix: Breakage went UP when Activation Source narrowed
+(cohortCube.json's own field had been silently renamed); 2 real,
+architectural exceptions found and flagged, not fixed
+
+**Reported symptom**: FY2026-27 + Activation Source narrowed from "All" to
+a 2-source subset took Breakage from ₹210L → ₹1,154L — a filtered subset
+exceeding the unfiltered total, which should be structurally impossible
+for a plain activation-minus-redeemed subtraction over a strict row subset.
+
+**Root cause, confirmed directly against the current `cohortCube.json`
+before touching any code**: the cube's own activation-mode field no longer
+exists under the name `ActivationModeFinal` at all — it's `ActivationMode`
+now, a silent rename that happened during a data refresh sometime after
+the 2026-08-16 entry that originally wired this cube's Activation Source
+filtering (which correctly used `ActivationModeFinal`, the field's name at
+the time). `passesCohortCommon()` (`lib/FilterContext.jsx`, the shared
+predicate behind `cohortRows`/`cohortRowsForComparison`/
+`cohortRowsByActivation`/`cohortRowsAllFY` — every pool Card Journey and
+Breakage read from) never got updated, so `sourceOf(row.ActivationModeFinal)`
+was always `sourceOf(undefined)` → `undefined`. `matches([], undefined)`
+is unconditionally `true` (unrestricted matches everything), which is
+exactly why this was invisible with Activation Source left at "All" — but
+`matches(['Corporate', 'Cinema'], undefined)` is `false`, so the instant
+Activation Source narrowed to ANY real subset, **100% of cohortCube rows
+were silently excluded**, not just the ones that should've been.
+`computeBreakage()`'s `redeemedToDate` term (summed from `cohortRows`)
+collapsed to zero while `activationTotal` (summed from `activationRows`,
+which correctly reads the main cube's own still-valid `ActivationModeFinal`
+field) kept narrowing normally — `activationTotal − 0` reads far higher
+than the real, correctly-netted baseline.
+
+**Found and fixed the same rename's second casualty while in this
+function**: the 2026-08-20 "hard-exclude pre-existing-activation rows"
+guard compared `row.ActivationModeFinal === PRE_EXISTING_ACTIVATION` — same
+stale field, so this exclusion had *also* gone silently inert (confirmed:
+1,358 pre-existing rows, ₹67.76L, were leaking straight through whenever
+Activation Source was left unrestricted). Doubly fragile: the literal
+sentinel STRING had independently drifted too, from `'Pre-existing
+(activated before Apr 2024)'` to `'...before Apr 2020'`, once the
+dataset's own start moved during a later refresh — so even a same-day
+field-name fix alone wouldn't have survived the next refresh. Replaced the
+hardcoded string entirely with a structural check,
+`isPreExistingActivationYearMonth(value)` (`!/^\d{4}-\d{2}$/.test(value)`
+— "not a real YYYY-MM string"), applied uniformly to `passesCohortCommon()`
+(cohortCube.json) and both `redemption_rowlevel.parquet` cohort filters
+(`filterRedemptionRowLevelCohort`/`filterRedemptionRowLevelByActivation`,
+which had the identical stale-string problem, confirmed directly against
+that file too — its own sentinel is also `'...before Apr 2020'`) — so a
+future refresh rewording the sentinel again can't silently break any of
+the three a third time.
+
+**The fix itself**: `passesCohortCommon()` now reads `row.ActivationMode`
+(not `ActivationModeFinal`) for both the Activation Source match and (via
+the new structural check) the pre-existing exclusion. `filterActivation()`
+(the main `activationCube.json` path) was untouched — that cube's own
+field is still genuinely named `ActivationModeFinal`, confirmed directly;
+only the separately-maintained cohort cube's copy of this logic had
+drifted. `passesRedemptionRowLevelCommon()` (the `redemption_rowlevel
+.parquet` path, built 2026-09-16/17) was already correctly using
+`ActivationMode` — only its own two Pre-existing string comparisons needed
+the regex-based fix, not a field-name one.
+
+**Verified live, the exact reported scenario, before and after**:
+FY2026-27 + Activation Source = [Corporate, Cinema] — was ₹1,154L (the
+bug); now **₹175L**, correctly below the FY2026-27-unfiltered baseline of
+₹210L (both baseline and post-fix figure matched independent hand
+computations against the raw cubes using the actual post-fix source logic
+before being confirmed in the browser). Unfiltered (no filters at all)
+Breakage is unchanged at **₹1,689L**, byte-identical to the 2026-10-01
+entry's own baseline — confirming this was a pure filtering-logic fix with
+no effect on the already-correct unfiltered case. Card Journey reproduced
+the identical ₹1,689L → ₹1,444L transition (same two pools, same shared
+function — no page-specific divergence, as expected). Zero console errors
+on either page throughout.
+
+**Full invariant sweep, all 6 named filters, live against the unfiltered
+₹1,689L baseline, after the fix**:
+
+| Filter narrowed to | Breakage | Holds (≤ ₹1,689L)? |
+|---|---|---|
+| Region → NORTH only | ₹877L | ✅ |
+| Card Type → Digital only | ₹885L | ✅ |
+| Weekday → Monday only | ₹211L | ✅ |
+| Denomination → one bucket | ₹0L | ✅ (see caveat below) |
+| Redemption Source → Online only | **₹6,385L** | ❌ |
+| Week → Weekday only | **₹1,975L** | ❌ |
+
+**4 of 6 hold; 2 don't — for a real, separate architectural reason, not a
+coding bug, and not fixed in this pass.** `computeBreakage()` subtracts
+two sums drawn from two different row pools: `activationRows` (narrowed by
+whatever filters apply to `activationCube.json`) and `cohortRows`
+(narrowed by whatever filters apply to `cohortCube.json`). Region,
+CardType, and Activation Source are *card-identity* attributes — fixed at
+activation time, present with the same meaning on both cubes — so
+narrowing them shrinks both sides of the subtraction consistently (the
+same cards disappear from both pools together). Redemption Source and
+Week/Weekday (the latter specifically as it's read off `cohortCube.json`,
+which — confirmed via `CardJourney.jsx`'s own `groupSum(cohortRows,
+'Weekday', ['RedemptionAmount', ...])` call — represents the *redemption
+event's* own weekday, not the activation event's) are properties of a
+*redemption transaction* that doesn't exist yet for an unredeemed/expired
+card. Narrowing either one shrinks only `redeemedToDate` (the subtracted
+term) while `activationTotal` (which has no matching dimension to narrow
+by) stays at its full size — mechanically guaranteed to inflate the
+unredeemed "balance" for any such filter, regardless of how correctly
+every row is otherwise classified. Denomination has the same asymmetry in
+principle (`cohortCube.json` has no `Denom` field at all, confirmed
+directly — narrowing it only shrinks `activationTotal`, which should, if
+anything, bias the result *down* or to a zero-clamp rather than up, which
+is why it happened to hold in this specific test; it is not guaranteed to
+hold for every possible Denomination subset, just not disproven here).
+
+**Flagged, not decided**: whether Redemption Source/Week/Weekday/
+Denomination should even be offered as filters that narrow Breakage's
+`cohortRows` side at all, versus gating them out of this one KPI's
+computation the way `dateRangeAvailable()`/`cardJourneyRowLevelFiltersSupported()`
+already hard-gate other filters that don't translate cleanly to a specific
+data source elsewhere in this app. This is a product definition question
+(which filters a point-in-time "unredeemed balance" KPI should even
+respect), not a bug fix, so it wasn't decided unilaterally here — left for
+a follow-up decision.
+
+Clean production build (1,008.41 kB JS, 322.03 kB gzipped — unchanged,
+this was a pure logic fix, no new code weight); zero console errors across
+every scenario tested on both Overview and Card Journey.
+
+## 2026-10-02 — Breakage KPI gains a "% of this period's Activation Amount"
+
+Added a trailing clause to the Breakage KPI's existing sub-line on both
+Overview.jsx and CardJourney.jsx: `breakage.amount ÷ totalActivation` —
+`totalActivation` being the ribbon's own already-displayed headline
+Activation Amount for the *currently selected* period (`sumBy(activationRows,
+'ActivationAmount')`), deliberately **not** the window shifted 13 months
+earlier that `breakage.amount` itself sums cohorts from internally.
+
+**Display pattern**: matched the plain-sentence "X% of Y" convention
+already used by this exact ribbon's own "Additional Revenue is 50.6% of
+Redemption" sub-line (`fmtPct`), not `fmtLacsWithPct` — Breakage has no
+`breakdown` side-panel for a "₹X L (Y%)" value to live in, so that
+convention didn't fit the layout. Appended via " · " to the existing
+window-description sentence, mirroring the pre-2026-08-28 "`{count}
+redemptions · {pct}% of total activation`" sub-line pattern already on
+record in this file as this app's own established way to combine two
+clauses in one caption line. Result: "Cards activated between Apr 20 and
+Jul 25 · 12.4% of Activation Amount".
+
+**Can legitimately exceed 100%, documented inline at the computation
+site**: the numerator (Breakage) and denominator (this period's Activation
+Amount) come from two different, unrelated windows by construction — a
+small/recent selected period's own Activation Amount has no necessary
+relationship to the size of the (potentially much larger) expired-cohort
+window sitting 13 months behind it. Not capped.
+
+**Hidden, not "—%", when `totalActivation` is 0 or null** — falls out of
+the exact same guard that already blanks `breakageSub` itself whenever
+Month is explicitly set to none-selected (in that state `activationRows`
+is empty too, so `totalActivation` is 0 by the same mechanism), rather
+than needing a second, separate special case.
+
+**Verified against hand-computed targets (raw cubes, independent of the
+app) for 3 scenarios, then live on both pages**:
+
+| Scenario | Hand-computed | Live (Overview & Card Journey, identical) |
+|---|---|---|
+| Unfiltered | 1689.48 / 13629.46 = 12.40% | "12.4% of Activation Amount" |
+| FY2026-27 only | 210.16 / 2751.13 = 7.64% | "7.6% of Activation Amount" |
+| FY2026-27 + Month=Aug 26 | 52.23 / 276.91 = 18.86% | "18.9% of Activation Amount" |
+| Month = NONE_SELECTED | n/a (total=0) | no sub-line at all, no "—%" |
+
+Zero console errors across every scenario on both pages; clean production
+build (1,008.56 kB JS, 322.10 kB gzipped — a ~0.15 kB increase for the new
+computation and sub-line concatenation, no new warnings beyond the
+pre-existing 500KB chunk-size notice).
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA
