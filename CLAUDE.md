@@ -9695,6 +9695,43 @@ with every other KPI on the ribbon. Zero console errors; clean production
 build (1,008.42 kB JS, 322.02 kB gzipped — a slight decrease from the
 entry above, net code removed).
 
+## 2026-10-15 — Data rebuilt to Apr 2020 – Sep 2026 (78 months): removed
+the last hardcoded date range
+
+No data files were touched. Audited `src/` for hardcoded dates, month
+counts, FY lists and the pre-existing sentinel. Almost everything was
+already data-derived (FY list, Month options, default anchor = latest month,
+"N/12 months" labels, the `^\d{4}-\d{2}$` structural pre-existing check in
+`FilterContext.jsx`); the real hardcoding was:
+- **Date Range picker bounds** (`DAILY_CUBE_MIN_DATE`/`MAX_DATE`, pinned to
+  2024-04-01..2026-07-31): deleted from `constants.js`. `options.dateBounds`
+  (`FilterContext.jsx`) now derives min = first day of the earliest month,
+  max = last day of the latest month in the cubes; `FilterBar.jsx` reads it.
+- **`COHORT_ORDER`** carried the literal '...before Apr 2024)' label (and
+  `cohortLabel` matched only exact 'N/A'). Both are now prefix-based via new
+  `isPreExisting()` (`startsWith('Pre-existing')`) and `orderCohorts()`.
+  Both are still unused by any page.
+No code compared ActivationMode/ActivationCohort/ActivationYearMonth to the
+old full string, so nothing else needed changing there.
+
+Schema notes: `activation_rowlevel.parquet` gained `Denom` (unused by the app).
+`CardNumber` is now a bigint from hyparquet; it is only ever added to a `Set`
+(`aggregate.js`), which dedupes bigints by value, so exact distinct counts are
+unaffected.
+
+**Channel Performance**: `channelTransactions.json` is NOT Apr 2024 – Aug 2026
+as briefed; it spans 2020-10 to 2026-09 (72 contiguous months). Its months are
+derived from that file, so the window, tables and charts start at Oct 2020.
+Windows whose prior-year span reaches before Oct 2020 hide growth/contribution
+(`priorWindowComplete`) and months with no row render "—", not 0.
+
+Verified (data read directly, then live in the app): net activation
+₹14,354.14L, net redemption ₹11,474.18L (cohort cube total matches);
+Sep 2026 activation ₹724.69L; Apr 2026 Physical activation ₹47.58L (last two
+from the raw cube only). Live: Overview ₹14,354 L / ₹11,474 L, FY list is
+FY2020-21..FY2026-27, picker bounds 2020-04-01..2026-09-30, zero console
+errors on all 9 pages, clean build.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

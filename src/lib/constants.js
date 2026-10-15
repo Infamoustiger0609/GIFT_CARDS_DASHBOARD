@@ -22,16 +22,31 @@ export const COHORT_ORDER = [
   '4-6 months ago',
   '7-9 months ago',
   '10-12 months ago',
-  '12+ months ago',
-  'Pre-existing (activated before Apr 2024)',
-  'N/A'
+  '12+ months ago'
 ]
+// The never-activated-in-window label embeds the dataset's start date
+// ('Pre-existing (activated before Apr 2020)' as of the 2026-10 rebuild, was
+// '... Apr 2024)'), so it's matched by prefix, never by full string — use
+// this wherever a cohort/ActivationMode/ActivationYearMonth value needs to
+// be recognized as "pre-existing". Also the sort key for orderCohorts().
+export function isPreExisting(value) {
+  return typeof value === 'string' && value.startsWith('Pre-existing')
+}
+// Fixed buckets first, then any pre-existing label, then cancellation ('N/A'
+// or 'N/A (cancellation)') last — independent of the exact label text.
+export function orderCohorts(values) {
+  const fixed = COHORT_ORDER.filter((o) => values.includes(o))
+  const pre = values.filter(isPreExisting).sort()
+  const na = values.filter((v) => typeof v === 'string' && v.startsWith('N/A')).sort()
+  const rest = values.filter((v) => !COHORT_ORDER.includes(v) && !isPreExisting(v) && !(typeof v === 'string' && v.startsWith('N/A'))).sort()
+  return [...fixed, ...pre, ...rest, ...na]
+}
 // Chart-local display label for the 'N/A' cohort bucket — same "raw value
 // stays the data key, only what's drawn changes" pattern as regionLabel()
 // above, kept separate since 'N/A' means something different per field
 // (there it's a real Region_Clean value; here it's cancellation rows).
 export function cohortLabel(key) {
-  return key === 'N/A' ? 'Cancel Redeem' : key
+  return typeof key === 'string' && key.startsWith('N/A') ? 'Cancel Redeem' : key
 }
 // 2026-08-10 data refresh regrouped the Denom tiers again (was ₹300/₹500/
 // ₹1000/₹2000/₹2000+/₹5000+/₹10000+/Other-Custom — the currency-symbol
@@ -103,16 +118,6 @@ const CHANNEL_LABELS = { PVRINOX: 'PVR INOX', PaytmDistrict: 'Paytm/District', B
 export function channelLabel(key) {
   return CHANNEL_LABELS[key] || key
 }
-
-// Bounds of the lighter "daily" cubes (dailyActivationCube.json/
-// dailyRedemptionCube.json, public/data/) that back the Date Range filter —
-// hardcoded rather than derived from the cube contents so the filter
-// control can render its min/max attributes immediately on every page,
-// without waiting for (or forcing) a fetch of those cubes on pages that
-// never read them. Confirmed against the actual files directly (2026-08-21):
-// both span exactly 2024-04-01 to 2026-07-31.
-export const DAILY_CUBE_MIN_DATE = '2024-04-01'
-export const DAILY_CUBE_MAX_DATE = '2026-07-31'
 
 // Sentinel stored as the sole element of a filter's value array to mean
 // "every option explicitly deselected" — distinct from the true empty array

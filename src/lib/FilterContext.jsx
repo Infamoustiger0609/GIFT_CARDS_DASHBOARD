@@ -128,6 +128,14 @@ function isPreExistingActivationYearMonth(value) {
   return typeof value !== 'string' || !/^\d{4}-\d{2}$/.test(value)
 }
 
+// Last calendar day of a 'YYYY-MM' month, as 'YYYY-MM-DD' (day 0 of the
+// following month), for deriving the Date Range picker's max bound.
+function monthEndDate(yearMonth) {
+  const [y, m] = yearMonth.split('-').map(Number)
+  const day = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return `${yearMonth}-${String(day).padStart(2, '0')}`
+}
+
 // ---- Cohort cube (2026-08-13, schema replaced same day) ----
 // A third, differently-shaped cube — `ActivationYearMonth`/
 // `RedemptionYearMonth`/`Region_Clean`/`RedemptionModeFinal`/`Head` dims,
@@ -894,7 +902,7 @@ export function FilterProvider({ children }) {
   // (see below), since "which months exist" genuinely depends on "which
   // fiscal year" once there's more than one FY in the data.
   const options = useMemo(() => {
-    if (!data) return { regions: [], activationSources: [], redemptionSources: [], cardTypes: [], months: [], fys: [], denominations: [], weekdays: [] }
+    if (!data) return { regions: [], activationSources: [], redemptionSources: [], cardTypes: [], months: [], fys: [], denominations: [], weekdays: [], dateBounds: { min: undefined, max: undefined } }
     const { activationCube, redemptionCube } = data
     // 2026-08-25: NO_SITE and "Director's Cut" are both real Region_Clean
     // values (confirmed directly against activationCube.json/
@@ -972,7 +980,15 @@ export function FilterProvider({ children }) {
     // activationSources/redemptionSources/denominations above — a closed
     // 7-value set, not a raw data-derived field list.
     const weekdays = WEEKDAY_ORDER
-    return { regions, activationSources, redemptionSources, cardTypes, months, fys, denominations, weekdays }
+    // Date Range picker bounds, derived from the data's own month span
+    // (first day of the earliest month .. last day of the latest) instead of
+    // hardcoded constants that went stale on every refresh. `allMonths` is
+    // sorted and never narrowed by FY, so this is the full dataset span.
+    const dateBounds =
+      allMonths.length > 0
+        ? { min: `${allMonths[0]}-01`, max: monthEndDate(allMonths[allMonths.length - 1]) }
+        : { min: undefined, max: undefined }
+    return { regions, activationSources, redemptionSources, cardTypes, months, fys, denominations, weekdays, dateBounds }
   }, [data, filters.fy])
 
   // The month(s) comparisons treat as "current". Explicit Month selection

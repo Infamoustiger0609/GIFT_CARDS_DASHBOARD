@@ -4,7 +4,7 @@ import Select from './Select'
 import DateRangeFilter from './DateRangeFilter'
 import { useFilters } from '../lib/FilterContext'
 import { monthLabel } from '../lib/format'
-import { regionLabel, DAILY_CUBE_MIN_DATE, DAILY_CUBE_MAX_DATE } from '../lib/constants'
+import { regionLabel } from '../lib/constants'
 
 const WEEK_OPTIONS = [
   { value: 'Weekday', label: 'Weekday' },
@@ -68,8 +68,8 @@ export default function FilterBar() {
         <DateRangeFilter
           value={filters.dateRange}
           onChange={setDateRange}
-          min={DAILY_CUBE_MIN_DATE}
-          max={DAILY_CUBE_MAX_DATE}
+          min={options.dateBounds.min}
+          max={options.dateBounds.max}
           onOpen={loadDailyCubes}
           disabled={onChannelPage || !dateRangeAvailable}
           disabledReason={

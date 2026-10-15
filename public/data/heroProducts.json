@@ -1,1 +1,62 @@
-[{"name": "LARGE POPCORN SALTED", "amount": 413.13}, {"name": "MEDIUM POPCORN SALTED", "amount": 327.3}, {"name": "POPCORN REGULAR SALTED", "amount": 281.0}, {"name": "LARGE PEPSI", "amount": 149.61}, {"name": "MEDIUM PEPSI", "amount": 145.78}, {"name": "PEPSI REGULAR", "amount": 140.13}, {"name": "CHEESE MEDIUM POPCORN", "amount": 128.29}, {"name": "CHEESE POPCORN REGULAR", "amount": 109.14}, {"name": "COMBO MEDIUM SALTED", "amount": 94.27}, {"name": "CHEESE DIP LARGE NACHOS SALSA WITH", "amount": 82.01}, {"name": "BULL DRINK ENERGY RED", "amount": 80.64}, {"name": "COMBO REGULAR SALTED", "amount": 68.48}, {"name": "PANEER SANDWICH TIKKA", "amount": 64.23}, {"name": "COKE REGULAR", "amount": 60.39}, {"name": "COKE LARGE", "amount": 59.44}]
+[
+  {
+    "name": "LARGE POPCORN SALTED",
+    "amount": 392.01
+  },
+  {
+    "name": "MEDIUM POPCORN SALTED",
+    "amount": 324.41
+  },
+  {
+    "name": "POPCORN REGULAR SALTED",
+    "amount": 264.62
+  },
+  {
+    "name": "LARGE PEPSI",
+    "amount": 152.99
+  },
+  {
+    "name": "MEDIUM PEPSI",
+    "amount": 149.45
+  },
+  {
+    "name": "PEPSI REGULAR",
+    "amount": 144.58
+  },
+  {
+    "name": "CHEESE MEDIUM POPCORN",
+    "amount": 119.85
+  },
+  {
+    "name": "CHEESE POPCORN REGULAR",
+    "amount": 101.67
+  },
+  {
+    "name": "COMBO MEDIUM SALTED",
+    "amount": 98.13
+  },
+  {
+    "name": "CHEESE DIP LARGE NACHOS SALSA WITH",
+    "amount": 84.78
+  },
+  {
+    "name": "BULL DRINK ENERGY RED",
+    "amount": 83.82
+  },
+  {
+    "name": "COMBO REGULAR SALTED",
+    "amount": 71.53
+  },
+  {
+    "name": "PANEER SANDWICH TIKKA",
+    "amount": 66.44
+  },
+  {
+    "name": "COKE REGULAR",
+    "amount": 62.73
+  },
+  {
+    "name": "COKE LARGE",
+    "amount": 61.53
+  }
+]
