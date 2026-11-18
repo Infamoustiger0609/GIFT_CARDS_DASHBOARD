@@ -122,7 +122,35 @@ DIGITAL_PROGRAM_GROUPS = {
     'QC-MGC-PVR-VAR',   # [INFERRED] not literally named "eGift", classified Digital
                         # because it only ever appears under Aggregator source.
     'QC-PVR-VAR',       # [INFERRED] same reasoning as QC-MGC-PVR-VAR above.
+    'PVR Entertainment eGift Card',   # [ADDED 2026-09, Apr24-Mar25 batch handoff]
+                        # explicit "eGift" in the name, same literal pattern as every
+                        # other Digital entry. Found only on redemption-side rows
+                        # (4,855 rows: Redeem/Cancel Redeem/Update Expiry), zero
+                        # in-window Activate rows - see Section 3.1's CardType
+                        # resolution-order note below for why that's fine.
+    'PVR Raksha Bandhan eGift Card',  # [ADDED 2026-09, FY22-23 (Apr22-Mar23) batch]
+                        # explicit "eGift" in the name, same pattern as above. 13 rows,
+                        # redemption-only (Redeem/Cancel Redeem), zero in-window
+                        # Activate rows in this batch - resolved via the redemption-row
+                        # fallback, same mechanism as PVR Entertainment eGift Card.
 }
+# 'PVR Cinemas 6 Months Gift Card' [FOUND, FY22-23 batch] - 183 rows, redemption-only
+# (Redeem/Cancel Redeem/Update Expiry). Confirmed by user: normal Physical cards, same
+# family as 'PVR Cinemas 4 Months Gift Card' (Section on Apr24-Mar25 batch findings).
+# NOT added to the Digital set above - resolves to Physical by default via the
+# redemption-row fallback (no digital marker in the name).
+
+# [DECISION, 2026-09, Apr24-Mar25 batch handoff] Two further new ProgramGroup names
+# found in this batch, both classified Physical (NOT added to the set above) -
+# consistent with the convention that plain "Gift Card"-named products without an
+# explicit digital marker default Physical:
+#   'PVR Cinemas Playhouse Gift Card'  (5 rows, Redeem only) - no digital marker,
+#       same convention as every other plain-named physical product already known.
+#   'PVR Cinemas 4 Months Gift Card'   (1 row, Update Expiry only) - [INFERRED,
+#       flagged specifically] "4 Months" suggests a validity-limited product, a
+#       genuinely new pattern not seen elsewhere. Physical is the
+#       consistent-with-convention default, not a fully confirmed fact the way the
+#       other two names in this batch's finding were.
 
 # Confirmed exception: the ONLY ProgramGroup ever observed under an Aggregator source
 # that is genuinely Physical. All 938 occurrences fall on a single date (2025-05-30).
@@ -143,6 +171,8 @@ def card_type(program_group, merchant, outlet):
 **Why this doesn't retroactively change any previously-correct row:** every ProgramGroup ever seen under a non-excluded Aggregator source, other than Prebuy and the one-off 938-row exception, was already in `DIGITAL_PROGRAM_GROUPS` before this change — so the new default only ever fires for Prebuy (now un-excluded) and would fire identically for any unseen future name. Verified: this rule produces byte-identical classification to the old rule for every row that was already kept in the dataset before this change.
 
 **Applies to** `GIFT CARD ACTIVATE` rows using that row's own `ProgramGroup`/`Merchant`/`Outlet`. **Bug fixed (separately, earlier):** `GIFT CARD CANCEL ACTIVATE` rows must ALSO get this same classification from their own fields (not hardcoded to a placeholder) — an earlier version incorrectly forced `CardType='N/A'` on these rows, causing a spurious negative "Other" bucket in downstream charts (verified: -Rs.80.65 Lacs / 164-165 rows, exactly matching Cancel Activate volume).
+
+**[CLARIFIED 2026-09, Apr24-Mar25 batch handoff] CardType resolution order, for cards with no in-window Activate row:** `CardType` is resolved from `ProgramGroup` on whichever row carries it — Activate preferred, redemption-row fallback when no in-window Activate exists — since product type is stable per card and not exclusive to Activate-type rows, unlike `Denom`. The `Outlet`/`Merchant` parameters in `card_type()` above only matter for the Aggregator-broadened-default branch; the core `Digital if ProgramGroup in DIGITAL_PROGRAM_GROUPS else Physical` rule only ever needed `ProgramGroup`, which is present on every row type. Do **NOT** apply `Denom`'s `'Unknown (pre-existing)'` treatment (Section 3.7) to `CardType` — they are not analogous: `Denom` depends on `NetActivationAmount`, a transactional value genuinely unrecoverable without an Activate-type event; `CardType` depends on `ProgramGroup`, a stable product attribute present on the redemption row itself. In practice `CardType` should almost never need to fall back to "Unknown" at all.
 
 Verified real proportions by source: Aggregator approx 99.7% Digital / 0.3% Physical; Corporate approx 87.5% Digital / 12.5% Physical; Cinema (Physical source) approx 98.1% Physical / 1.9% Digital.
 
@@ -657,6 +687,56 @@ Total Net Redemption has held at Rs.7,353.62 Lacs since Section 8's Prebuy rever
 
 ---
 
+## Section 13: May 2026 row-duplication bug found and fixed — supersedes Section 11's baseline
+
+**[FOUND AND FIXED 2026-09, clean-handoff session]** A from-scratch rebuild of all 29 months from raw source files, run independently in a separate session with no access to any of this document's cached intermediate files, produced totals **Rs.55.66 Lacs lower** on the activation side and **Rs.55.59 Lacs lower** on the redemption side than Section 11's baseline. Rather than assume either build was correct, the discrepancy was isolated month-by-month against a full 28-month reference table (every month matched exactly except one), then confirmed directly against the actual shipped files — not inferred from a cache.
+
+**Root cause, verified directly against `activation_rowlevel.parquet` and `redemption_rowlevel.parquet`:** May 2026 alone carried **10,401 duplicate rows** on the activation side (66,708 rows shipped vs. 56,307 distinct `ApprovalCode`s) and **11,526 duplicate rows** on the redemption side (97,893 shipped vs. 86,367 distinct `ApprovalCode`s). Every `ApprovalCode` in the deduplicated rebuild matched one already present in the shipped files — nothing was missing from source, each of these transactions had simply been counted twice. The duplication was introduced during an earlier processing/merge pass, not present in the raw source file itself (confirmed twice, independently, against `Issuer_Transaction_Detailed_Report_May_26.XLSX` — zero duplicate `ApprovalCode`s in the raw file both times).
+
+**Corrected May 2026 figures:** Rs.321.86 Lacs net activation (was Rs.377.52 Lacs), Rs.329.60 Lacs net redemption (was Rs.385.19 Lacs, raw-sign convention).
+
+**Corrected 29-month (Apr 2024-Aug 2026) totals:**
+
+| | Amount (Lacs) |
+|---|---|
+| Total Net Activation | Rs.8,878.74 (was Rs.8,934.40) |
+| Total Net Redemption | Rs.7,298.03 (was Rs.7,353.62) |
+
+**Full figure history for Total Net Activation, oldest to newest:** Rs.8,266.57 (original 28mo) -> Rs.8,543.50 (28mo+Aug) -> Rs.8,934.40 (+Prebuy reversal, Section 8) -> Rs.8,933.78 (+Jan Cancel-Activate fix, Section 9 — later found imprecise) -> Rs.8,934.40 (Section 11 float32 fix) -> **Rs.8,878.74 (Section 13, current and correct)**.
+
+**All 8 dependent files were regenerated together per Section 12's rule**, with the per-card master lookup (used for `Denom`, `CardType`, `ActivationCohort`, `SourceFlag`) rebuilt fresh across the unified window rather than reused from any stale intermediate — redemption rows with valid in-window Activate history rose from a batch-local 82-96% to a properly cross-batch-joined 95.9% for the 29-month window.
+
+---
+
+## Section 14: Historical extension to Apr 2020 — full dataset now Apr 2020-Aug 2026 (77 months)
+
+**[EXTENDED 2026-09]** Seven pre-existing fiscal-year raw file batches (FY20-21 through FY23-24, Apr 2020-Mar 2024) were sourced, structurally surveyed, and processed with the same exclusion/classification pipeline as the current-era data, extending the dataset backward by 48 months. All merged cleanly: **zero cross-batch `ApprovalCode` collisions** across all 7 fiscal-year batches, both activation and redemption sides (checked explicitly, not assumed — see Section 5.3's collision warning, which did not materialize here).
+
+**New `ProgramGroup` values found and resolved during this extension** (added to the definitions in Sections 2/3.1 above):
+- `'PVR Raksha Bandhan eGift Card'` -> Digital (explicit "eGift" naming, same pattern as every other Digital entry). 13 rows, FY22-23, redemption-only.
+- `'PVR Cinemas 6 Months Gift Card'` -> Physical (no digital marker, same convention as `'PVR Cinemas 4 Months Gift Card'`). 183 rows, FY22-23, redemption-only.
+- `'PVR Cinemas Dummy Swipe'` -> found in both FY20-21 and FY21-22 (1 row each). Confirmed harmless: obviously-fake card number (`1000700140000001`), `Outlet='PVR-Corporate'`, `TransactionType='UPDATE EXPIRY'` — an internal test transaction with zero effect on any total, since `UPDATE EXPIRY` never enters activation or redemption aggregation. Not added to any classification list; left to resolve via the existing default (Physical) if it ever appears on a row type that matters.
+
+**Known pre-2024 data characteristics, for context (not exclusion rules — this is real, verified data):**
+- **Three months with zero redemption rows in the raw source** (not a processing gap, confirmed by direct row-count check both times): April 2020, September 2020, June 2021 — all consistent with India's COVID-era cinema closures (original nationwide lockdown for Apr/Sep 2020; the severe second-wave lockdown for Jun 2021). Activation continued at a low level through these months; redemption was genuinely impossible with cinemas shut.
+- **A bulk `UPDATE EXPIRY` event in July 2021** (70,183 of that month's 71,721 rows) — most likely a mass gift-card validity extension issued during COVID closures. No effect on any total (see above).
+- **`'Online'` activation mode appears normally from Jan-Mar 2024** (111 -> 247 -> 996 rows, a steady ramp) — this predates the Aug 2024 fraud event (Section 2, Rule D) and is unrelated to it; confirms Online was a normal, functioning channel before whatever caused the Aug 2024 incident, consistent with Rule D being scoped as a one-time historical event rather than a standing exclusion on the channel itself.
+
+**The full, current, final reconciled baseline (2026-09) — supersedes every prior figure in this document:**
+
+| | Amount (Lacs) |
+|---|---|
+| **Total Net Activation (Apr 2020-Aug 2026, 77 months)** | **Rs.13,629.46** |
+| **Total Net Redemption (Apr 2020-Aug 2026, 74 months with redemption activity)** | **Rs.10,826.08** |
+
+For reference, the Section 13 figures (Rs.8,878.74 / Rs.7,298.03) remain the correct totals for the Apr 2024-Aug 2026 (29-month) subset specifically — both are correct simultaneously, they describe different windows.
+
+Redemption rows with valid in-window Activate history rose further to **99.4%** once the window reached back to Apr 2020 (only 22,105 rows, 0.6%, remain genuinely pre-existing — activated before Apr 2020, outside all available raw data).
+
+**Not yet resolved, flagged for future work:** `heroProducts.json`/`heroProductsCube.parquet` show item-name fragmentation (e.g. `"PEPSI LARGE"` vs `"LARGE PEPSI"` not merging as the same product) that produces materially lower top-item totals than an earlier build the user had been using. This predates and is unrelated to the Section 13 bug. Not fixed in this pass — needs its own investigation into item-name normalization before these two specific files should be treated as final.
+
+---
+
 ## Section 12: Dependent-File Regeneration Rule (standing rule, effective 2026-09)
 
 **Why this rule exists:** this session caught two separate instances of partial regeneration causing silent staleness between files that are supposed to agree exactly:
@@ -688,73 +768,6 @@ Total Net Redemption has held at Rs.7,353.62 Lacs since Section 8's Prebuy rever
 
 ---
 
-## Section 13: New ProgramGroup names found in Apr'25-Mar'26 batch survey (2026-09)
-
-**Context:** a separate processing session, working from this spec, surveyed the raw Apr'25-Mar'26 files before running the pipeline and found 3 ProgramGroup names never previously seen, appearing only on redemption rows (4,855 rows total, no in-window Activate row for any of the affected cards).
-
-**Resolution, added to `DIGITAL_PROGRAM_GROUPS` (Section 3.1) with this session's date:**
-```python
-DIGITAL_PROGRAM_GROUPS = {
-    ... (existing entries) ...
-    'PVR Entertainment eGift Card',   # [ADDED 2026-09] explicit "eGift" naming, matches
-                                       # the same literal pattern as every other Digital entry.
-}
-# Classified PHYSICAL (i.e., NOT added to the set above), same date, same reasoning
-# (no digital marker in the name, matches the plain "Gift Card" naming convention used
-# by every other Physical-classified product):
-#   'PVR Cinemas Playhouse Gift Card'
-#   'PVR Cinemas 4 Months Gift Card'   # [INFERRED] less certain than the other two below -
-#                                       # "4 Months" suggests a validity-limited product,
-#                                       # a genuinely new pattern not seen elsewhere in this
-#                                       # dataset. Physical is the convention-consistent
-#                                       # default, not a fully confirmed fact.
-```
-
-**New standing clarification added to Section 3.1**, resolving a genuine gap the survey exposed — the documented `card_type()` function had no defined behavior for a card with zero in-window Activate history:
-
-> `CardType` is resolved from `ProgramGroup` on whichever row carries it — an Activate-type row preferred when available, a redemption row's own `ProgramGroup` as fallback when no in-window Activate row exists for that card. This is NOT the same situation as `Denom`'s `'Unknown (pre-existing)'` fallback (Section 3.7): `Denom` depends on the *activation amount*, a transactional value that genuinely only exists on an Activate-type event and is unrecoverable without one. `CardType` depends on `ProgramGroup`, a stable per-card product attribute present on every row type, redemption included — it does not need an Activate-type row to be resolvable, and should essentially never need to fall back to "Unknown" in practice.
-
-## Section 14: Unresolved raw-schema discrepancy — same filename, two different files (2026-09)
-
-**[UNRESOLVED, flagged rather than guessed past]** The same processing session above found `2_Issuer_Transaction_Detailed_Report_Jun_25.XLSX` to have only 32 columns (missing `BookletNumber` and `UNIVERSALPRODUCTCODE`), causing every field from `Merchant` onward to silently shift one position left of where the standard 34-column loader expects it — `TransactionDate` ended up reading raw `TransactionTime` values, producing uniformly bogus dates.
-
-**Cross-checked against this project's own working copy of the same-named file:** all 29 raw files already used throughout this spec — including this exact filename — were re-verified column-by-column and **every one has the standard 34-column layout, Jun'25 included.** This means the 32-column file is a **different physical file that happens to share an identical name**, not a schema variant that also silently affected any of this project's own prior processing. No retroactive corruption risk found in anything already built from this spec.
-
-**Not resolved, because it can't be from data alone:** which file is actually correct/intended for June 2025 wasn't something inspectable from within either processing session — this needs a human decision about which upload is authoritative before any pipeline logic is written around it.
-
-**Separately recommended, regardless of how the file question resolves:** the loader's column-by-fixed-position approach is a real structural risk — any future file with an inserted, deleted, or reordered column would fail exactly this way, silently, with no error thrown. Recommend extending the loader to map columns by header *name* rather than position, as a permanent robustness improvement, not a one-off patch for this single file.
-
----
-
-## Section 15: May 2026 net activation — row-level duplication found in the pre-Prebuy reference figure (2026-09)
-
-**[CONFIRMED, activation side — redemption side pending independent confirmation]** During Apr'26-Aug'26 batch reconciliation, a separate processing session found a Rs.55.66 Lacs shortfall (activation) and a near-identical Rs.55.59 Lacs shortfall (redemption) between its independently-rebuilt 29-month non-Prebuy total and this spec's documented Rs.8,543.50 Lacs "28mo+Aug" checkpoint. Isolated to May 2026 by direct month-by-month diff against a per-month reference table pulled from this project's own cached build state.
-
-**Root cause, confirmed by direct row-count comparison, not inferred from amount alone:**
-| | Row count (Activate-only, non-Prebuy, May 2026) |
-|---|---|
-| Fresh raw source (`Issuer_Transaction_Detailed_Report_May_26.XLSX`), independently verified 3 separate ways: a fresh from-scratch parse, the separately-cached `amtlookup_Issuer_Transaction_Detailed_Report_May_26.pkl` (built later, during the Jan'26/Prebuy work), and the other processing session's own independent rebuild | **56,246** |
-| Cached `activationCube_29mo.pkl` (the source of this spec's Rs.377.49L reference figure) | **66,646** |
-
-**10,400 extra rows in the cached build, zero duplicate `ApprovalCode`s found in the raw source itself** (checked directly) — ruling out source-data duplication and confirming the extra rows were introduced during an earlier processing/merge pass in this project's own pipeline history, not present in the original file. Rs.55.65 Lacs / 10,400 rows is approx Rs.535/row, well within normal gift-card denomination range — consistent with a clean subset of May's real activations being counted twice by whatever merge step introduced this, not anomalous or fabricated data.
-
-**Corrected figure: Rs.321.84 Lacs** (matches the other session's independent verification of Rs.321.86 Lacs to within rounding). The previously-documented Rs.377.49 Lacs for May 2026 does not hold up against the raw source and should not be used as a reference figure going forward.
-
-**Mechanism not fully traced, unlike January's float32 bug (Section 11):** the exact merge/retry step that introduced the 10,400 duplicate rows could not be identified — it predates cached intermediate state still available in this environment. Flagged honestly as an incompletely-diagnosed root cause, unlike Section 11 where the float32 casting line was identified directly.
-
-**Corrected reference table** (supersedes the May 2026 row only; every other month in the original 28mo+Aug table remains valid):
-| Month | Old (spec, pre-correction) | New (verified against raw source) |
-|---|---|---|
-| 2026-05 | Rs.377.49 Lacs | **Rs.321.84 Lacs** |
-
-Corrected 28mo+Aug total: Rs.8,543.50 - Rs.55.65 = **Rs.8,487.85 Lacs** (matches the other session's independently-rebuilt Rs.8,487.84 Lacs almost exactly).
-
-**Downstream figures affected, since Section 8's Prebuy delta and Section 11's January correction were both computed on top of the old, inflated Rs.8,543.50 Lacs base:** every grand total documented in Sections 7, 8, 9, and 11 of this spec that traces back through the "28mo+Aug" checkpoint is now understood to be Rs.55.65-55.66 Lacs too high on the activation side, and by a closely-matching amount on the redemption side pending the confirmation below. **These have NOT yet been corrected in this document** — this section records the finding; a follow-up pass is needed to propagate the fix through every downstream total once the redemption-side mechanism is confirmed (see below), the same way Section 11 waited for full verification before restating the final baseline.
-
-**Outstanding before this can be closed out:** the redemption-side Rs.55.59 Lacs gap has not yet been confirmed to share the same row-duplication mechanism — flagged as a reasonable expectation given the near-identical magnitude and the fact that redemption-side per-card lookups (Denom, ActivationMode) trace back through May 2026's activation data, but not verified directly. Do the same row-count-diff check on the redemption side before treating this as fully resolved.
-
----
-
 ## Explicitly flagged uncertainties (do not treat these as fully confirmed)
 
 1. `QC-MGC-PVR-VAR` and `QC-PVR-VAR` ProgramGroups classified as Digital by inference (Section 3.1), not direct confirmation.
@@ -763,3 +776,49 @@ Corrected 28mo+Aug total: Rs.8,543.50 - Rs.55.65 = **Rs.8,487.85 Lacs** (matches
 4. Category classifier's ~7% "Other" fallback is an accepted approximation, not exhaustive (Section 3.10).
 5. `UniqueCardCount` in the pre-aggregated cubes is exact only for single-bucket queries; treat any multi-period sum of this field with caution pending full migration to the row-level Parquet approach for card-count needs. **[RESOLVED for Card Journey specifically, see Section 8]** — still applies to any other page/chart still summing `UniqueCardCount` from `redemptionCube.json`/`cohortCube.json` across multiple selected periods or dimension values.
 6. Section 8's Checkpoint 2 amount figure (₹2,518.98 Lacs) was computed without excluding Cancellation rows from the SUM — this does not match the previously-established net figure (₹1,727.78 Lacs) for what was described as the "same" FY2026-27 same-period cohort in earlier work. The two queries are answering slightly different questions (this section's check summed signed RedemptionAmount across Head='Cancellation' rows too as part of validating the file mechanically, not as a recommended production query). **Before wiring this into the dashboard, confirm which exact convention (net of cancellations vs. gross) the live Card Journey page is meant to use for its amount display, and use the corresponding WHERE/SUM logic** — the card-count fix in this section is verified solid, but the amount-side query pattern shown is illustrative, not yet confirmed against the established ₹1,727.78L baseline.
+
+## Section 15: September 2026 added; full rebuild (Apr 2020-Sep 2026, 78 months)
+
+**[2026-10]** `Issuer_Transaction_Detailed_Report_Sep_26.XLSX` processed and merged. All 78 raw files were reprocessed from scratch, each checked against its expected month, then all 10 dependent files were regenerated together per Section 12.
+
+**Current reconciled baseline (supersedes Sections 13/14):** Total Net Activation **Rs.14,354.14 Lacs** (78 months); Total Net Redemption **Rs.11,474.18 Lacs** (75 months with redemption activity). September 2026 alone: Rs.724.69 Lacs activation, Rs.648.10 Lacs redemption. Cinema-only (Physical-mode) September activation: Rs.44.34 Lacs; Aggregator is ~88% of September activation.
+
+**New values found in the September file:**
+- `ProgramGroup 'PVR INOX Corp eGift Card'` (3,236 activations, Rs.20.67 Lacs) -> Digital (explicit eGift naming). Activated through new `Merchant`/`Outlet 'PVRINOX Corporate'`; activation mode resolves to Corporate through the existing "Outlet contains Corporate" rule, so no new merchant rule is needed.
+- `TransactionType 'GIFT CARD CANCEL RELOAD'` (1 row, on a Prepaid card) -> already excluded by Rule A. Note Rule C only names `GIFT CARD RELOAD`; a future cancel-reload on a non-excluded product would not be caught.
+
+**Overflow files (known quirk):** monthly exports can contain rows from later months. `Jan_26` holds Jan+Feb+Mar 2026 (467,012 extra rows); `Apr_26` holds 37,452 rows dated 1/3/4 May 2026. Rule: keep only rows of the file's own month; every dropped row was verified to exist in the proper month's file. Excel totals taken straight from an export need a Transaction Date filter. Dates are dd/mm/yyyy (04/05/2026 = 4 May).
+
+**Correction to Section 2's wording on online activation:** online activation appeared in July 2026 (237 rows) but is zero in Aug and Sep 2026. It looks like a short pilot rather than a gradual relaunch.
+
+**Conventions confirmed against the original shipped files (all files now follow these):**
+- `CardNumber` numeric (int64); `TransactionDate` text `YYYY-MM-DD`; plain-text columns, no nulls.
+- `SourceFlag` is `N/A` on every `GIFT CARD CANCEL REDEEM` row (100% of the original file's cancellations; the Section 3.11 text does not say so).
+- `Category` is `N/A` for every non-F&B redemption. The original file mixed conventions (`Other` for Online/Box Office rows through Mar 2026, `N/A` later); this build is uniform `N/A`.
+- Redemption rows on cards with no activation in the data window: `ActivationMode`/`ActivationCohort`/`ActivationYearMonth` = `'Pre-existing (activated before Apr 2020)'`.
+- `redemptionCube` is shipped as parquet. `dailyRedemptionCube` carries no `UniqueCardCount`. `cohortCube` names the field `ActivationModeFinal`. `activation_rowlevel` includes `Denom`.
+- Activation-side `Denom` follows the card's net activation (Section 3.7). The original files used each row's own amount, with an `N/A` bucket of -Rs.5.19 Lacs on cancellations. Totals are unchanged; the 0-299 bucket is ~Rs.3.25 Lacs higher over the same 28 months.
+- Redemption `NO_SITE` -> Director's Cut (Section 3.5): 187 rows in Jan-Apr 2026 that the original file left as `NO_SITE` are now relabelled.
+
+**Hero products (supersedes the open item in Section 14):**
+- The original `heroProductsCube` was inflated from Nov 2025 to Apr 2026 (Mar 2026: Rs.257.1 Lacs vs F&B bills of Rs.231.1 Lacs; rebuilt Rs.233.8 Lacs) on Aggregator-activated cards, at 1.0-2.0x the rebuilt values.
+- Before Apr 2024 the POS item name is truncated to one word at the source ("REGULAR", "LARGE", "SMALL", "SPIC"...); ~Rs.596 Lacs of item lines cannot be mapped to products.
+- In older months an order paid with several cards repeats the full item list on each swipe, so item totals can exceed bills (the original behaves the same way).
+- `heroProducts.json` = top 15 over Apr 2024 onward with words sorted alphabetically and punctuation-only tokens dropped (reproduces the original file's 15 products in the same order; amounts differ by up to ~5%). Item lines on cards with no activation history (Rs.115.8 Lacs) are kept, with `ActivationModeFinal = 'Pre-existing (activated before Apr 2020)'`.
+
+## Section 16: October 2026 added (79 months, Apr 2020-Oct 2026)
+
+**[2026-11]** `Issuer_Transaction_Detailed_Report_Oct26.xlsx` processed and merged. All 79 raw files were reprocessed from scratch and every dashboard file regenerated together (Section 12). Every cell of history through Sep 2026 reproduces the Sep 2026 delivery, with the one exception below.
+
+**Baseline (supersedes Section 15):** Total Net Activation **Rs.15,165.56 Lacs**; Total Net Redemption **Rs.12,173.60 Lacs**. October 2026 alone: activation **Rs.811.41 Lacs** (Aggregator 673.05, Corporate 58.09, Physical/cinema-only 80.27; 113,826 activations), redemption **Rs.699.43 Lacs** (Online 646.69, Box Office 102.14, F&B 103.61, Cancellation -153.01). Hero item lines added: Rs.227.16 Lacs.
+
+**Oct export variants (resolved):** two files were supplied for October 2026. `Issuer_Transaction_Detailed_Report_Oct26.xlsx` is a **67-column variant** (readable headers such as "Card Number", "Program Group", "Approval Code"; sheet `PVR INOX Cinemas Monthly Report`; numeric amounts; newest rows first). `Issuer_Transaction_Detailed_Report_Oct26_1.xlsx` is the **standard 34-column export** (sheet `Issuer`). They were compared row by row on ApprovalCode: 435,455 rows each, all 113,957 activation and 176,294 redemption rows match one-to-one with identical classification, Net Activation Rs.811.41 Lacs and Net Redemption Rs.699.43 Lacs in both, hero item lines identical (49,381 lines, Rs.227.16 Lacs). **The 67-column file was a one-off export variant, not a permanent format change; use the standard 34-column export going forward.** The loader still detects the wide layout and maps the 12 required fields by header name (each must appear exactly once or the run stops), so either variant now processes identically; standard files keep the positional header check.
+- Oct file names vary (`Oct26`, `Oct26_1`); the month parser accepts `_Mon_YY` and `_MonYY`. Only one file per month may sit in the input folder (the driver stops on duplicate months).
+
+**Checks on the October file:** no overflow rows (nothing dated 1 Nov); Rule A removed 144,716 rows (all 46,887 RELOAD rows fall inside Rule A, so Rule C added nothing); Rules B/D/E = 0; online activation (`PVR Inox Online`) = 0 again. `PVR INOX Corp eGift Card` (Digital by assumption, Section 15) is active in volume: 7,051 activations via `PVRINOX Corporate`.
+
+**Expected restatement of history (card-level Denom, Section 3.7):** 30 cards got a different Denom bucket in history because October cancel-activates changed their net activation (e.g. Rs.300 activated in Sep, Rs.5,000 activated and the Rs.300 cancelled on 12 Oct, so net Rs.5,000 -> `5000+`). Rs.0.72 Lacs moved between Denom buckets within Jul/Sep 2026; month totals are unchanged. No redemption-side cell changed.
+
+**Rule restored in the rebuilt scripts:** `SourceFlag = 'N/A'` on every `GIFT CARD CANCEL REDEEM` row (Section 15 convention; it had been missing from the recovered script and was caught by the history diff before shipping).
+
+**Dashboard files (10 in use):** activationCube.json, dailyActivationCube.json, activation_rowlevel.parquet, redemptionCube.json, cohortCube.json, dailyRedemptionCube.json, redemption_rowlevel.parquet, heroProductsCube.parquet, heroProducts.json, and `channelTransactions.json`, which is maintained separately from this pipeline and ends Aug 2026 in the last copy seen. `cardJourneyRowLevel.parquet` and `redemptionCube.parquet` are not used by the dashboard and are no longer generated.

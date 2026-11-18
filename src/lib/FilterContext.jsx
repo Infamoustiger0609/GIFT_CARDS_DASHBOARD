@@ -198,7 +198,13 @@ function passesCohortCommon(row, filters) {
   if (!matches(filters.region, row.Region_Clean)) return false
   if (!matches(filters.redemptionSource, redemptionModeOf(row.RedemptionModeFinal))) return false
   if (!matches(filters.ticketFnb, ticketFnbBucket(row.Head))) return false
-  if (!matches(filters.activationSource, sourceOf(row.ActivationMode))) return false
+  // 2026-11-18: cohortCube.json's field is `ActivationModeFinal` again (the
+  // 2026-10-02 refresh had it as `ActivationMode`, see above). Read by its
+  // real current name only — no fallback to the other spelling, so a future
+  // rename fails loudly in review instead of silently matching nothing.
+  // redemptionCube.json / redemption_rowlevel.parquet still use
+  // `ActivationMode`, which is correct for passesRedemptionRowLevelCommon().
+  if (!matches(filters.activationSource, sourceOf(row.ActivationModeFinal))) return false
   if (!matches(filters.cardType, row.CardType)) return false
   // Week (Weekend/Weekday binary) also newly supported now that Weekday
   // exists on this cube — same isWeekend()/WEEKEND_DAYS canonical source

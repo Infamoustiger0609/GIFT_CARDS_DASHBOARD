@@ -9732,6 +9732,82 @@ from the raw cube only). Live: Overview ₹14,354 L / ₹11,474 L, FY list is
 FY2020-21..FY2026-27, picker bounds 2020-04-01..2026-09-30, zero console
 errors on all 9 pages, clean build.
 
+## 2026-11-18 — Data refresh through Oct 2026 (79 months); cohortCube
+field name flipped back to `ActivationModeFinal`
+
+No data files were touched; `heroProducts.json` is retired and
+`cardJourneyRowLevel.parquet` stays deleted (neither is referenced by code,
+only by history comments).
+
+**New baseline (computed from the files first, then confirmed live)**: net
+activation ₹15,165.56L (`activationCube`, `dailyActivationCube`,
+`activation_rowlevel` all identical), net redemption ₹12,173.60L
+(`redemptionCube`, `cohortCube`, `dailyRedemptionCube`,
+`redemption_rowlevel` all identical; the parquet's `Amount_num` sums to
+−12,173.60 because of its documented inverted sign, which the app never
+reads). Oct 2026 alone: activation ₹811.41L (Aggregator 673.05 / Corporate
+58.09 / Physical 80.27, 113,826 activations), redemption ₹699.43L (Online
+646.69 / Box Office 102.14 / F&B 103.61 / Cancellation −153.01; cancel by
+mode Online −123.57 / Physical −29.44). Live: Overview and Summary show
+₹15,166L / ₹12,174L. Ranges: activation 2020-04..2026-10 (79 months),
+redemption/cohort 2020-05..2026-10 (76 months, 2 genuine gaps), daily cubes
+through 2026-10-31, `channelTransactions.json` 2020-10..2026-10 (73 rows).
+
+**The one code fix**: `passesCohortCommon()` (`FilterContext.jsx`) read
+`row.ActivationMode`, but `cohortCube.json` carries `ActivationModeFinal`
+again (the 2026-10-02 refresh had it as `ActivationMode`). Same silent
+failure as 2026-10-02: `sourceOf(undefined)` is `undefined`, so any narrowed
+Activation Source dropped every cohort row. Now reads `ActivationModeFinal`
+only, with no fallback to the other spelling. `redemptionCube.json` and
+`redemption_rowlevel.parquet` still use `ActivationMode`, so
+`passesRedemptionRowLevelCommon()` is correctly unchanged. The pre-existing
+guard keys off `ActivationYearMonth` structurally, so it is unaffected by
+the field name. A scan of every capitalised row field read in `src/`
+against the real schemas found no other mismatch. Upstream has now flipped
+this field name twice in two refreshes: re-check it on every refresh.
+
+**Verified live (production build via `vite preview`, Edge/Playwright)**:
+default period "Apr 26 – Oct 26"; Date Range bounds 2020-04-01..2026-10-31;
+FY list FY2020-21..FY2026-27; Month dropdown 79 months Apr 20..Oct 26; no
+stale figures (14,354 / 11,474 / 13,629 / 10,826 / 8,878 / 7,298) anywhere in
+`src/`; Channel Performance Oct 26 vs Oct 25 matches the raw file (Total
+59.29 L → 64.18 L, +8.3%). Zero console errors on all 9 routes; clean build
+(1,008.69 kB JS, 322.09 kB gzipped).
+
+**Breakage baseline (the ₹1,689L figure is stale)**: unfiltered ₹1,779L
+(11.7% of Activation Amount, ▲40.3% YoY, window Apr 20–Sept 25, matches a
+raw-file calculation of ₹1,779.13L). Narrowing from All, one filter at a
+time, never raises it: Activation Source Corporate+Cinema ₹1,496L, Cinema
+only ₹701L, Region NORTH ₹669L. **It does rise in one combination**:
+Source = Corporate+Cinema (₹1,496L) then Region = NORTH gives ₹1,667L.
+Root cause, confirmed against the data: `Region_Clean` means the card's
+activation region on `activationCube` (Corporate/Online cards are 100%
+NORTH there) but the redemption outlet's region on `cohortCube` (the same
+cards' redemptions spread across NORTH ₹2,578L / SOUTH ₹182L / WEST ₹139L
+...), so a Region filter shrinks the subtracted redemption side more than
+the activation side. This is the pre-existing asymmetry from 2026-08-20 and
+2026-10-02, not new and not fixed here: whether Region should narrow
+Breakage's cohort side at all is a product decision.
+
+**Cold-cache load, one isolated fetch per file** (localhost
+`vite preview`, no gzip, each file fetched alone with the cache disabled, so
+these are loopback figures; Vercel gzips, as noted in 2026-07-31). Download /
+`JSON.parse`: `redemptionCube.json` 125.3 MB 2,493 ms / 421 ms,
+`cohortCube.json` 37.7 MB 730 / 126 ms, `activationCube.json` 4.1 MB
+344 / 16 ms, `dailyRedemptionCube.json` 4.3 MB 182 / 24 ms,
+`dailyActivationCube.json` 1.9 MB 74 / 10 ms, `channelTransactions.json`
+7 ms; parquet downloads (no parse step): `redemption_rowlevel.parquet`
+62.6 MB 6,199 ms, `heroProductsCube.parquet` 2.2 MB 507 ms. In the app,
+parquet is read as many concurrent range requests, so its per-request times
+overlap and are not a single figure. `activation_rowlevel.parquet` (31.6 MB,
+4,559 ms to fetch) is not loaded by any page.
+
+**Noticed, not changed**: Summary's "Partial — N/12 months (YTD)" label
+also appears for historic FYs with data gaps (FY2020-21 redemption 10/12,
+FY2021-22 redemption 11/12) and those get a "vs LY (same months)" delta; a
+gap is not a YTD, so the wording is misleading for them. `monthLabel()` uses
+`en-IN`, which abbreviates September as "Sept" everywhere.
+
 ## Deployment
 
 GitHub → Vercel, auto-deploy on push to `main`. `vercel.json` has the SPA

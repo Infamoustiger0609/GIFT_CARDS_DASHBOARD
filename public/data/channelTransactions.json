@@ -70,5 +70,6 @@
   {"YearMonth": "2026-06", "BMS": 2740180, "PVRINOX": 331534, "PaytmDistrict": 855303, "BoxOffice": 1634917, "Total": 5561934},
   {"YearMonth": "2026-07", "BMS": 2940510, "PVRINOX": 405727, "PaytmDistrict": 992363, "BoxOffice": 1620366, "Total": 5958966},
   {"YearMonth": "2026-08", "BMS": 4002981, "PVRINOX": 496548, "PaytmDistrict": 1302504, "BoxOffice": 1768489, "Total": 7570522},
-  {"YearMonth": "2026-09", "BMS": 3130000, "PVRINOX": 462000, "PaytmDistrict": 1053000, "BoxOffice": 3593000, "Total": 8238000}
+  {"YearMonth": "2026-09", "BMS": 3130000, "PVRINOX": 462000, "PaytmDistrict": 1053000, "BoxOffice": 3593000, "Total": 8238000},
+  {"YearMonth": "2026-10", "BMS": 3378000, "PVRINOX": 415000, "PaytmDistrict": 889000, "BoxOffice": 1736000, "Total": 6418000}
 ]
